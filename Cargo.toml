@@ -3,6 +3,17 @@ name = "hypomnema"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+# src/lib.rs — shared code for both binaries
+
+[[bin]]
+name = "hmnd"
+path = "src/bin/hmnd.rs"
+
+[[bin]]
+name = "hmn"
+path = "src/bin/hmn.rs"
+
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }

@@ -15,6 +15,7 @@ See [`_adr-policy.md`](./_adr-policy.md) for the amend / supersede / extend poli
 | [0005](./0005-local-everything.md) | Local Everything — No Required Cloud Dependencies | accepted |
 | [0006](./0006-outbox-outside-watched-directory.md) | Outbox (and All Daemon State) Lives Outside the Watched Directory | accepted |
 | [0007](./0007-sqlite-vec-over-alternatives.md) | sqlite-vec over Lance, qdrant, and Other Vector Stores | accepted |
+| [0008](./0008-two-binary-daemon-plus-cli.md) | Two Binaries (hmnd + hmn) in One Crate | accepted |
 
 ## Creating a new ADR
 

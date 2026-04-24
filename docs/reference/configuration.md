@@ -7,6 +7,8 @@
 
 > **Status**: This reference is a **draft**. The handoff's "Open questions for early implementation" section confirms config format and location are not yet pinned — "TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during step 1." Revise this doc once the config module lands.
 
+> **Scope**: Every option on this page is daemon-side — it affects the behavior of `hmnd`. The CLI client (`hmn`) reads only the daemon URL (derived from `[http].bind`) to know where to send requests; override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL`. See [cli.md](./cli.md) and [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md).
+
 ---
 
 ## Configuration Files
@@ -89,6 +91,8 @@ The directory Hypomnema watches and indexes. Must exist. Must be readable. Hypom
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
 | `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; v0 does not implement auth. |
+
+> **Client note**: `hmn` derives its default daemon URL from this binding (e.g. `http://127.0.0.1:7777`). Override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL` — useful when the daemon runs on a different host or port than the local default.
 
 ---
 

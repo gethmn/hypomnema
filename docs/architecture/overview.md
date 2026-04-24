@@ -181,7 +181,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Crash safety | Restart must re-reconcile the index without corruption | Content-hash-based reconciliation on startup; SQLite's built-in durability; outbox is append-only |
 | Sync-tool resilience | Running on a Syncthing / Dropbox / Obsidian Sync vault must not cause spurious reindexes or sync loops | Content-hash check before any reindex; all state outside the watched dir ([ADR-0006](../decisions/0006-outbox-outside-watched-directory.md)); conflict-filename filter |
 | Local-only | No required outbound network traffic beyond the (possibly-local) embedding service | All components local-first ([ADR-0005](../decisions/0005-local-everything.md)) |
-| Deployability | Single binary plus one extension file | Rust single-binary build ([ADR-0002](../decisions/0002-rust-over-python.md)); sqlite-vec as a `.so`/`.dylib`/`.dll` ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
+| Deployability | Two self-contained binaries plus one extension file | Rust statically-linked build ([ADR-0002](../decisions/0002-rust-over-python.md)); daemon (`hmnd`) and CLI client (`hmn`) ship together ([ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)); sqlite-vec as a `.so`/`.dylib`/`.dll` ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Agent ergonomics | An agent can compose filesystem → content → semantic searches naturally | All three as peer MCP operations ([ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) |
 
 ---
@@ -201,6 +201,6 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 ## Related Documents
 
 - [Vision](../product/vision.md)
-- [Decisions](../decisions/) — all seven ADRs are cross-referenced above
+- [Decisions](../decisions/) — all eight ADRs are cross-referenced above
 - [Specifications](../specs/) — per-search-mode and outbox specs
 - [Implementation: Tech Stack](../implementation/tech-stack.md)

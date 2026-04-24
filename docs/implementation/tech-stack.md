@@ -18,14 +18,30 @@ This document defines the technology stack for Hypomnema and orders the v0 imple
 
 ## Stack Overview
 
-Hypomnema is a single-binary Rust daemon. The runtime is Tokio; the HTTP server is Axum; the MCP transport is the official `rmcp` crate; persistence is `rusqlite` with the `sqlite-vec` extension loaded at runtime. Filesystem watching is `notify` + `notify-debouncer-full`. Markdown parsing is `pulldown-cmark`.
+Hypomnema is a Rust project that ships two binaries from one crate: `hmnd` (the long-running daemon) and `hmn` (a thin CLI client that talks to a running `hmnd`). Both are built from the single `hypomnema` crate with shared code in `src/lib.rs`. The runtime is Tokio; the HTTP server is Axum; the MCP transport is the official `rmcp` crate; persistence is `rusqlite` with the `sqlite-vec` extension loaded at runtime. Filesystem watching is `notify` + `notify-debouncer-full`. Markdown parsing is `pulldown-cmark`.
 
-See [ADR-0002: Rust over Python](../decisions/0002-rust-over-python.md) for the language choice, and the ADRs it references for the major library choices.
+See [ADR-0002: Rust over Python](../decisions/0002-rust-over-python.md) for the language choice, [ADR-0008: Two Binaries (hmnd + hmn) in One Crate](../decisions/0008-two-binary-daemon-plus-cli.md) for the binary shape, and the ADRs they reference for the major library choices.
 
 ### Core Dependencies
 
 ```toml
 # Cargo.toml (representative — actual versions pinned at step 1)
+
+[package]
+name = "hypomnema"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# src/lib.rs — shared code for both binaries
+
+[[bin]]
+name = "hmnd"                 # daemon: watcher, HTTP + MCP servers, indexing
+path = "src/bin/hmnd.rs"
+
+[[bin]]
+name = "hmn"                  # CLI client: speaks HTTP to a running hmnd
+path = "src/bin/hmn.rs"
 
 [dependencies]
 # async runtime
@@ -118,7 +134,7 @@ clap = { version = "4", features = ["derive"] }
 | **serde** / **serde_json** / **toml** | Config file + outbox JSONL + wire formats |
 | **tracing** + **tracing-subscriber** | Structured logging with per-module level filters |
 | **anyhow** | Error handling. No `thiserror` until there's a public library API to stabilize errors for. |
-| **clap** (`derive`) | CLI parsing for the `hmn` binary |
+| **clap** (`derive`) | Argument parsing for both binaries — `hmnd`'s daemon flags and `hmn`'s client subcommands |
 
 ### Intentionally Excluded
 
@@ -126,7 +142,7 @@ clap = { version = "4", features = ["derive"] }
 |---------|--------|
 | **thiserror** | Until there's a public library API, `anyhow::Result` everywhere is fine. |
 | **async-trait / tower abstractions over embedding, vector store, transport** | Pick one of each concretely, build against it, refactor when a *second* real use case demands an abstraction. Premature abstraction in a v0 daemon is a trap. |
-| **Workspace split into multiple crates** | Single crate with `lib` + `bin` targets. Split when a second consumer demands reuse of the library. |
+| **Workspace split into multiple crates** | Single crate with `lib` + two `bin` targets (`hmnd` and `hmn`). Two binaries in one crate is not a workspace — it keeps the shared library next to both consumers. Split into a workspace only when a second consumer demands reuse of the library as its own crate. See [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md). |
 
 These exclusions are explicit v0 scope boundaries, not permanent prohibitions. See the "Out of scope" section of [hypomnema-handoff.md](../hypomnema-handoff.md) for the full list.
 
@@ -159,24 +175,29 @@ hypomnema/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── src/
-│   ├── main.rs          # hmn binary entry point (clap dispatch)
-│   ├── lib.rs           # library entry — re-exports for internal use only in v0
+│   ├── lib.rs           # shared library: config, types, HTTP client, server machinery
+│   ├── bin/
+│   │   ├── hmnd.rs      # daemon entry: watcher, HTTP + MCP servers, indexing workers
+│   │   └── hmn.rs       # CLI client entry: speaks HTTP to a running hmnd
 │   ├── config.rs        # TOML config load + validation
-│   ├── store/           # rusqlite + sqlite-vec
+│   ├── store/           # rusqlite + sqlite-vec (hmnd only)
 │   │   ├── mod.rs
 │   │   ├── schema.rs    # migrations; vec0 dimension baked in
 │   │   └── pool.rs      # r2d2 pool, load_extension hook
-│   ├── watcher/         # notify + debouncer + conflict filter
-│   ├── indexer/         # scan, hash, chunk, embed, persist
-│   ├── search/          # filesystem / content / semantic query impls
+│   ├── watcher/         # notify + debouncer + conflict filter (hmnd only)
+│   ├── indexer/         # scan, hash, chunk, embed, persist (hmnd only)
+│   ├── search/          # filesystem / content / semantic query impls (hmnd only)
 │   ├── api/
-│   │   ├── http.rs      # axum routes
-│   │   └── mcp.rs       # rmcp server
-│   ├── outbox.rs        # JSONL writer
-│   └── embedding.rs     # reqwest client to the embedding service
+│   │   ├── http.rs      # axum routes (hmnd)
+│   │   └── mcp.rs       # rmcp server (hmnd)
+│   ├── client.rs        # typed reqwest client against the daemon (used by hmn)
+│   ├── outbox.rs        # JSONL writer (hmnd only)
+│   └── embedding.rs     # reqwest client to the embedding service (hmnd only)
 ├── tests/               # integration tests
 └── docs/                # this documentation
 ```
+
+No `src/main.rs` — both entry points live under `src/bin/`. Modules tagged "hmnd only" above are linked into the `hmnd` binary via `lib.rs` but are unreachable at runtime from `hmn`; the distinction is organizational, not a build-time boundary (both binaries link the full library — see [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)).
 
 ---
 
@@ -238,7 +259,7 @@ The handoff names eight pitfalls that agents writing Hypomnema code need to know
 
 - [Vision](../product/vision.md)
 - [Architecture Overview](../architecture/overview.md)
-- [Decisions](../decisions/) — all seven ADRs inform this tech stack
+- [Decisions](../decisions/) — all eight ADRs inform this tech stack
 - [Specifications](../specs/) — what the phases above are implementing
 
 ---

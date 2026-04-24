@@ -9,7 +9,7 @@ Agent guide for the Hypomnema project. Read this before touching code.
 
 Hypomnema is a local daemon that indexes a Markdown directory and exposes search (filesystem, content, semantic) and change events to any consumer — most commonly an AI agent connected via MCP. It’s deliberately agnostic: the vault it watches doesn’t have to be Obsidian, and the consumer doesn’t have to be any specific agent.
 
-The name comes from the ancient Greek *hypomnema* — a personal notebook of gathered external material kept for rereading. The fit is near-literal: this daemon makes a directory of notes reachable as an accumulated substrate you return to. The CLI binary is `hmn`; the crate is `hypomnema`. During early design the project was carried under the working name `mdkb`, which may still appear in older notes.
+The name comes from the ancient Greek *hypomnema* — a personal notebook of gathered external material kept for rereading. The fit is near-literal: this daemon makes a directory of notes reachable as an accumulated substrate you return to. The crate is `hypomnema`; it ships two binaries — `hmnd` (the daemon) and `hmn` (a thin CLI client that speaks to a running `hmnd`). See [ADR-0008](docs/decisions/0008-two-binary-daemon-plus-cli.md). During early design the project was carried under the working name `mdkb`, which may still appear in older notes.
 
 The project is in **v0** scope. v0 is read-only: watch a directory, index what’s there, serve search queries, emit change events. No writes to the vault. No ownership model enforcement. No bidirectional sync. No format spec for bridge-managed files.
 
@@ -77,12 +77,13 @@ Before declaring a feature done: `cargo test` and `cargo clippy -- -D warnings`.
 ## Workflow commands
 
 ```
-cargo check                    # during iteration
-cargo watch -x check           # continuous check on save
-cargo test                     # unit + integration tests
-cargo clippy -- -D warnings    # lint, warnings as errors
-cargo fmt                      # format
-cargo run -- <subcommand>      # run the daemon/CLI
+cargo check                          # during iteration
+cargo watch -x check                 # continuous check on save
+cargo test                           # unit + integration tests
+cargo clippy -- -D warnings          # lint, warnings as errors
+cargo fmt                            # format
+cargo run --bin hmnd -- [args]       # run the daemon in the foreground
+cargo run --bin hmn  -- <subcommand> # run the CLI client against a running hmnd
 ```
 
 ## The v0 step order

@@ -11,7 +11,7 @@ Layer 7 of the Layered Documentation System. Implementation guides describe *how
 
 ## Related
 
-- [Decisions](../decisions/) — all seven ADRs inform the tech stack
+- [Decisions](../decisions/) — all eight ADRs inform the tech stack
 - [Architecture Overview](../architecture/overview.md)
 - [Specifications](../specs/) — what's being implemented
 - `.claude/skills/` — loadable operational guidance for Claude Code agents editing Hypomnema

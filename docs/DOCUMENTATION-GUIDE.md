@@ -57,7 +57,7 @@ This guide documents the Hypomnema project's installed Layered Documentation Sys
 
 | # | Canonical Name | Directory | Status in this repo |
 |---|---------------|-----------|---------------------|
-| 1 | **Decisions** | `decisions/` | Installed (MADR Minimal template, 7 ADRs) |
+| 1 | **Decisions** | `decisions/` | Installed (MADR Minimal template, 8 ADRs) |
 | 2 | **Vision** | `product/` | Installed (Lean PRD template) |
 | 3 | **Architecture** | `architecture/` | Installed (C4-Lite template) |
 | 4 | **Specifications** | `specs/` | Installed (Feature Spec template, 4 specs) |
