@@ -25,7 +25,7 @@ Criteria:
 
 Use `sqlite-vec` as the vector store.
 
-The vector column dimension is baked into the schema at creation time (`768` for `nomic-embed-text`). Model-switching is not a v0 concern; if it ever becomes real, the path is a re-index (drop + rebuild the vec table with a new dimension), not a runtime switch.
+The vector column dimension is baked into the schema at creation time (`768` for `nomic-embed-text-v1.5`). Model-switching is not a v0 concern; if it ever becomes real, the path is a re-index (drop + rebuild the vec table with a new dimension), not a runtime switch.
 
 Ship as: the Hypomnema binary, plus the sqlite-vec extension (`.so` / `.dylib` / `.dll`). Two files. No service architecture.
 

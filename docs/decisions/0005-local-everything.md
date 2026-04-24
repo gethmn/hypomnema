@@ -21,7 +21,7 @@ Each of these has a natural cloud-first default; each has local alternatives of 
 
 Every component Hypomnema requires to run is local. Specifically:
 
-- **Embedding model**: Local, via a sidecar process — `nomic-embed-text` served by TEI (Text Embeddings Inference) is the reference configuration. Any OpenAI-API-shaped endpoint is configurable, so pointing at a hosted model is possible but not required.
+- **Embedding model**: Local, via a sidecar process — `nomic-embed-text-v1.5` served by TEI (Text Embeddings Inference) is the reference configuration. Any OpenAI-API-shaped endpoint is configurable, so pointing at a hosted model is possible but not required.
 - **Vector store**: `sqlite-vec`, one file on disk, loaded as a SQLite extension into the daemon's existing connection pool. No separate process, no network port.
 - **Event outbox**: A JSONL file in the daemon's data directory.
 - **Logs and metrics**: Local only; no crash reporting or usage telemetry is sent anywhere.
@@ -39,7 +39,7 @@ Running Hypomnema produces no outbound network traffic except to the configured 
 
 ### Negative
 
-- Embedding quality is bounded by what a locally-servable model provides (nomic-embed-text is strong, but not at the frontier)
+- Embedding quality is bounded by what a locally-servable model provides (nomic-embed-text-v1.5 is strong, but not at the frontier)
 - Users who want a hosted embedding model have to configure it explicitly; no "just works with OpenAI" default
 - Local inference has a memory/CPU cost the host has to absorb — TEI with a ~100MB model is modest but not free
 
@@ -52,7 +52,7 @@ Running Hypomnema produces no outbound network traffic except to the configured 
 ## Notes
 
 - Related to [ADR-0003](./0003-indexing-in-the-daemon.md) (indexing in the daemon) and [ADR-0007](./0007-sqlite-vec-over-alternatives.md) (sqlite-vec specifically)
-- The embedding dimension (768 for nomic-embed-text) is baked into the schema at creation time; model-switching is a re-index, not a runtime switch (see [ADR-0007](./0007-sqlite-vec-over-alternatives.md))
+- The embedding dimension (768 for nomic-embed-text-v1.5) is baked into the schema at creation time; model-switching is a re-index, not a runtime switch (see [ADR-0007](./0007-sqlite-vec-over-alternatives.md))
 
 ## Amendments
 

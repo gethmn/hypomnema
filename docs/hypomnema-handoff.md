@@ -95,7 +95,7 @@ Filesystem, content, and semantic search answer different question shapes. Agent
 
 ### Local everything
 
-Local embedding model (nomic-embed-text via TEI or vLLM sidecar, configurable to anything OpenAI-API-shaped). Local vector store (sqlite-vec, one file on disk). Local outbox (JSONL in the daemon’s data directory). No cloud dependencies, no required external services. This is non-negotiable for the office case where data leaving the box may be a hard restriction, and it’s also just operationally simpler.
+Local embedding model (nomic-embed-text-v1.5 via TEI or vLLM sidecar, configurable to anything OpenAI-API-shaped). Local vector store (sqlite-vec, one file on disk). Local outbox (JSONL in the daemon’s data directory). No cloud dependencies, no required external services. This is non-negotiable for the office case where data leaving the box may be a hard restriction, and it’s also just operationally simpler.
 
 ### Outbox lives outside the watched directory
 
@@ -105,7 +105,7 @@ The daemon’s append-only event log lives in `~/.local/share/hypomnema/` (or pl
 
 One file on disk. No separate process. No network port. Loaded as a SQLite extension into the daemon’s existing connection pool. The daemon ships as the binary plus the extension `.so`/`.dylib`/`.dll` — two files, not a service architecture.
 
-The dimension of the vector column is baked into the schema (768 for nomic-embed-text). Model-switching isn’t a v0 concern; if it ever becomes real, it’s a re-index, not a runtime switch.
+The dimension of the vector column is baked into the schema (768 for nomic-embed-text-v1.5). Model-switching isn’t a v0 concern; if it ever becomes real, it’s a re-index, not a runtime switch.
 
 ## The v0 step plan
 

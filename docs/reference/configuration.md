@@ -43,6 +43,7 @@ socket = "~/.local/share/hypomnema/mcp.sock"  # only if transport = "socket"
 # Embedding service (OpenAI-compatible)
 [embedding]
 endpoint = "http://127.0.0.1:8080/v1/embeddings"
+# The exact model identifier is the string TEI's /v1/embeddings endpoint expects.
 model = "nomic-embed-text-v1.5"
 dimension = 768
 api_key = ""   # empty for local services that don't require one

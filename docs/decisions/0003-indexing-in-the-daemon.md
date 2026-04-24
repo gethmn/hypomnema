@@ -21,7 +21,7 @@ Do the indexing (scanning, chunking, embedding, storing) inside Hypomnema itself
 
 This means Hypomnema:
 - Picks a concrete chunking strategy (pulldown-cmark heading-aware chunks)
-- Picks a concrete embedding shape (nomic-embed-text via local TEI or vLLM, 768 dims)
+- Picks a concrete embedding shape (nomic-embed-text-v1.5 via local TEI or vLLM, 768 dims)
 - Picks a concrete vector store (sqlite-vec)
 - Maintains the chunk → vector → source-file mapping persistently
 

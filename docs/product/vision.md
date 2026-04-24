@@ -57,14 +57,14 @@ From the ancient Greek ὑπόμνημα (plural *hypomnemata*) — a personal n
 
 ### Watched Directory (the Vault)
 
-The user's directory of Markdown files. Hypomnema reads from it recursively but never writes to it. Frontmatter is read but not interpreted. Wikilinks are not parsed in v0. Obsidian is a supported vault format by accident — any directory of `.md` files works.
+The user's directory of Markdown files. Hypomnema reads from it recursively but never writes to it. Frontmatter is read but not interpreted. Wikilinks are not parsed in v0. Obsidian vaults are implicitly supported since any directory of `.md` files works.
 
 ### Indexes
 
 Hypomnema maintains three indexes over the vault:
 - **Filesystem index**: paths, sizes, mtimes
 - **Content index**: the file text itself
-- **Semantic index**: heading-aware chunks, embedded via a local model (nomic-embed-text / 768 dims), stored in sqlite-vec
+- **Semantic index**: heading-aware chunks, embedded via a local model (nomic-embed-text-v1.5 / 768 dims), stored in sqlite-vec
 
 ### Outbox
 

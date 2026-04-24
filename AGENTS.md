@@ -42,26 +42,7 @@ If a change feels like it needs one of these, flag it and ask rather than introd
 
 ## Project layout
 
-Single crate, `lib + bin`. No workspace split until a second consumer demands it.
-
-```
-src/
-├── lib.rs          # pub modules
-├── config.rs       # config file loading
-├── scan.rs         # filesystem walk + hashing
-├── watcher.rs      # notify wrapper
-├── outbox.rs       # append-only JSONL log
-├── index.rs        # sqlite-vec wrapper
-├── chunk.rs        # markdown-aware chunking
-├── embed.rs        # HTTP client for TEI/Ollama
-├── search.rs       # three search modes
-├── http.rs         # axum handlers
-├── mcp.rs          # rmcp handlers
-└── bin/
-    └── hmn.rs      # daemon + CLI entry
-```
-
-New modules need justification. If a file grows past ~500 lines, split by responsibility, not by ceremony.
+The canonical layout lives in [docs/implementation/tech-stack.md#project-structure](docs/implementation/tech-stack.md#project-structure).
 
 ## Core crate stack
 
