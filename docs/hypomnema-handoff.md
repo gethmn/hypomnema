@@ -67,18 +67,7 @@ That’s the whole v0. Single directory, single user, single machine, read-only.
 
 ## Out of scope (deferred)
 
-These are real, planned, and live in the sibling docs as design groundwork. None are in v0:
-
-- **Writes to the vault.** No file creation, no modification, no atomic-write logic. The daemon doesn’t write under the watched path at all.
-- **The ownership model** (`vault_root` / `vault_path` distinction). Not needed when there’s no write path to enforce boundaries on.
-- **Format spec for bridge-managed files.** No `iris_id` / `hmn_id` frontmatter convention, no recognition of “bridge-owned” files.
-- **Conflict resolution.** No three-way merge, no last-known-synced tracking, no `TruthConflict`-style escalation. Read-only systems don’t have conflicts.
-- **Multi-consumer event delivery beyond outbox tailing.** No webhooks, no in-process callbacks, no fan-out beyond “consumers tail the JSONL file.”
-- **Multi-directory support.** One watched directory per daemon instance.
-- **Multi-instance coordination.** Each daemon is independent.
-- **Workspace split into multiple crates.** Single crate with `lib` + `bin` targets.
-- **Custom error types via `thiserror`.** `anyhow::Result` everywhere.
-- **Abstraction layers** for swappable embedding providers, vector stores, transports. Pick one of each, build against it concretely, refactor when a second use case demands it.
+Canonical list lives in [`product/vision.md` → Non-Goals](product/vision.md#non-goals). Implementation-shaped deferrals specific to this handoff (no workspace split, no `thiserror`, no abstraction layers) are documented below under [Crate stack](#crate-stack).
 
 ## Load-bearing decisions
 
@@ -185,24 +174,11 @@ The deferred work — ownership model, conflict resolution, format spec, atomic 
 
 ## Open questions for early implementation
 
-Things deliberately not decided yet, to be settled in early code:
-
-- Exact event envelope schema for the outbox. Start minimal (`{event_type, path, content_hash, detected_at}`), grow as features land.
-- Configuration file format and location. TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during step 1.
-- Logging verbosity defaults. Probably `info` at the daemon level, `warn` for `notify`, `error` for `tokio`.
-- Health and metrics endpoint shape. Out of scope for v0 but worth pre-allocating a `/health` route in step 5 for easy expansion.
-- CLI subcommand naming. `hmn start`, `hmn scan`, `hmn search`, `hmn status` is one obvious shape; could change.
-- Whether the daemon should auto-rescan on startup or trust the existing index. Probably: rescan and reconcile, but make it skippable for fast restarts.
+Canonical list lives in [`product/vision.md` → Open Questions](product/vision.md#open-questions).
 
 ## Done when
 
-v0 is done when:
-
-- A fresh install can index a vault, serve all three search types over HTTP and MCP, and emit change events to an outbox.
-- The watcher correctly handles editor saves and sync-tool writes without re-indexing unchanged files.
-- A consumer (Iris or any other) can subscribe to changes by tailing the outbox and get a clean stream of real changes.
-- The daemon survives a crash without corrupting its index or outbox; restart re-reconciles cleanly.
-- An agent connected via MCP can perform “do I have notes on X” → “show me the directory” → “which file mentions Y” without surprises.
+Canonical list lives in [`product/vision.md` → Success Criteria](product/vision.md#success-criteria).
 
 ## Reference material
 

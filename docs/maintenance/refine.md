@@ -57,6 +57,8 @@ Store as `REFINEMENT_SCOPE`.
 
 ### Step 2: Layer Placement Review
 
+> **Note:** Layer 6 (Behaviors) is not installed in this project — the "concrete verifiable scenario → Layer 6" branch of the decision tree below is N/A. If content looks like a Gherkin scenario, either document it inside its parent specification (Layer 4) or leave it out until Layer 6 is installed.
+
 For each document (or scoped subset), verify content is in the correct layer.
 
 #### 2a: Read Each Document
@@ -171,7 +173,7 @@ Check for information that appears in multiple places (SSOT violations).
 | Decision rationale in specs | "We chose X because Y" in spec | Move to ADR, link from spec |
 | Config details in specs | Full schema in specification | Move to reference, link from spec |
 | Behavior details in reference | "When X happens" in CLI docs | Keep in spec, simplify reference |
-| Repeated glossary | Terms defined in multiple docs | Centralize in `product/concepts.md` |
+| Repeated glossary | Terms defined in multiple docs | Centralize in `product/vision.md#glossary` |
 
 #### 4b: Find Duplicates
 
@@ -293,6 +295,8 @@ For each missing ADR:
 
 ### Step 7: Completeness Review
 
+> **Note:** Layer 6 (Behaviors) is not installed in this project — skip the Gherkin behavior-test coverage check below. Critical-feature verification lives in Rust tests under each crate until Layer 6 is installed.
+
 Check that documentation coverage is complete.
 
 #### 7a: Feature Coverage
@@ -329,6 +333,8 @@ For configuration reference:
 ---
 
 ### Step 8: Template Compliance Review
+
+> **Note:** Layer 6 (Behaviors) is not installed in this project — ignore the `Behaviors | Gherkin | …` row in the table below. It is preserved in case LDS ever re-runs to install Layer 6.
 
 Verify documents follow their layer templates.
 

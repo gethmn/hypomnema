@@ -104,6 +104,8 @@ If API documentation exists (`docs/reference/api.md` and `appendices/api/`):
 
 ### Step 2: Run Behavior Tests
 
+> **Note:** Layer 6 (Behaviors) is not installed in this project — skip this step. Hypomnema has no `features/` directory, no Gherkin specs, and no Cucumber runner. The step is preserved verbatim below in case LDS ever re-installs Layer 6.
+
 Execute Gherkin specifications to verify they match implementation:
 
 ```bash
