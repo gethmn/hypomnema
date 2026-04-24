@@ -46,20 +46,7 @@ The canonical layout lives in [docs/implementation/tech-stack.md#project-structu
 
 ## Core crate stack
 
-- `tokio` — async runtime
-- `axum` — HTTP server
-- `rmcp` — MCP protocol (official SDK)
-- `rusqlite` with `bundled` + `load_extension` features
-- `r2d2` + `r2d2_sqlite` — blocking connection pool
-- `notify` + `notify-debouncer-full` — filesystem watching
-- `pulldown-cmark` — Markdown parsing
-- `reqwest` — HTTP client for the embedding service
-- `serde`, `serde_json`, `toml` — serialization
-- `tracing`, `tracing-subscriber` — logging
-- `anyhow` — error handling (not `thiserror` yet)
-- `clap` with `derive` — CLI parsing
-
-Before adding a new dependency: does it pull in >10 transitive deps? Is there a zero-dep or stdlib alternative that’s good enough for v0? Compile-time budget matters.
+The canonical crate list lives in [docs/implementation/tech-stack.md#core-dependencies](docs/implementation/tech-stack.md#core-dependencies).
 
 ## Error handling
 
@@ -100,18 +87,7 @@ cargo run -- <subcommand>      # run the daemon/CLI
 
 ## The v0 step order
 
-v0 is broken into steps with a deliberate dependency order. Don’t skip ahead.
-
-1. Skeleton: config loading, logging, graceful shutdown
-2. Scan + hash: walk the vault, compute content hashes, store in SQLite
-3. Watcher: notify + debouncer, update hashes on change
-4. Outbox: persist change events to JSONL
-5. Filesystem + content search: list/glob + grep, over HTTP
-6. Chunking + embedding: pulldown-cmark chunks, embed via TEI, store in sqlite-vec
-7. Semantic search: embed query, vector search, return chunks
-8. MCP wrapper: same operations, MCP transport
-
-If a PR touches step N, it must not start building step N+1 opportunistically.
+The canonical v0 step order lives in [docs/implementation/tech-stack.md#implementation-priority](docs/implementation/tech-stack.md#implementation-priority). If a PR touches step N, it must not start building step N+1 opportunistically.
 
 ## When to ask vs when to proceed
 

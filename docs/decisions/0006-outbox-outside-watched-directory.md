@@ -20,7 +20,9 @@ A vault of Markdown notes is the kind of directory users very commonly sync via 
 
 ## Decision
 
-All state Hypomnema maintains — the SQLite index (`index.sqlite`), the outbox (`outbox.jsonl`), the daemon logs, and the configuration file — lives in the daemon's own data directory (`~/.local/share/hypomnema/` on Linux, `~/Library/Application Support/hypomnema/` on macOS, equivalent on Windows), or in XDG-standard config/log directories. **Nothing mutable is written under the watched directory.**
+All state Hypomnema maintains — the SQLite index (`index.sqlite`), the outbox (`outbox.jsonl`), the daemon logs, and the configuration file — lives in the daemon's own data directory (`~/.local/share/hypomnema/` on Linux and macOS, `%APPDATA%\hypomnema\` on Windows), or in XDG-standard config/log directories. **Nothing mutable is written under the watched directory.**
+
+macOS deliberately uses XDG paths rather than `~/Library/Application Support/` — keeping one layout across Unix avoids branching in daemon code and in docs.
 
 The daemon reads from the watched directory; it never writes there.
 
@@ -51,4 +53,4 @@ The daemon reads from the watched directory; it never writes there.
 
 ## Amendments
 
-<!-- None yet -->
+- **2026-04-23** — Tightened the data-directory rule: macOS uses the same XDG-style path as Linux (`~/.local/share/hypomnema/`) rather than `~/Library/Application Support/hypomnema/`. The original decision was silent between the two on macOS; this amendment picks the Unix-uniform layout so daemon code and docs do not branch per-OS. No behavioral change for Linux or Windows; no reversal of the "state lives outside the watched vault" rule.

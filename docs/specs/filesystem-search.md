@@ -82,7 +82,7 @@ Path matching honors the host filesystem's case sensitivity. On macOS's default 
 
 ### Hidden files
 
-Dotfiles (`.obsidian/`, `.trash/`, etc.) are skipped at the scanner, never indexed.
+Dotfiles are not filtered unconditionally. Common dotfile directories (`.obsidian/`, `.trash/`, etc.) are matched by the default `ignore_patterns` list and so are not indexed, but they are skipped via config, not hard-coded. See [reference/configuration.md](../reference/configuration.md#watcher) for the defaults.
 
 ---
 

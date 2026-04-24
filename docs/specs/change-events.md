@@ -67,7 +67,7 @@ Future fields (additive, optional) will be added as the daemon learns to notice 
 
 - One JSON object per line (JSONL)
 - UTF-8
-- Location: `~/.local/share/hypomnema/outbox.jsonl` (or platform equivalent; see [reference/configuration.md](../reference/configuration.md))
+- Location: `~/.local/share/hypomnema/outbox.jsonl` on Linux and macOS; `%APPDATA%\hypomnema\outbox.jsonl` on Windows (see [reference/configuration.md](../reference/configuration.md) for XDG/env overrides)
 - Never rotated by Hypomnema in v0 (rotation is an open question)
 
 ---

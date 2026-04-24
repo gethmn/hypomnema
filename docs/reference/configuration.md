@@ -121,7 +121,9 @@ See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-00
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
 | `debounce_ms` | integer | no | `400` | Coalescing window for `notify-debouncer-full`. Too short → event storms slip through; too long → user-visible indexing lag |
-| `ignore_patterns` | list of glob strings | no | (sensible defaults for Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search |
+| `ignore_patterns` | list of glob strings | no | (sensible defaults for Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search. Defaults cover common dotfile directories (`.obsidian/**`, `.trash/**`), sync-tool conflict files (Obsidian / Dropbox / Syncthing), and tmp-file extensions. No paths are filtered outside `ignore_patterns`; edit the list to change behavior. |
+
+> **Future direction (not v0):** honor `.gitignore` / `.dockerignore` when present; add a Mutagen-style `ignore_vcs_files` flag. See [product/vision.md#open-questions](../product/vision.md#open-questions).
 
 ---
 
@@ -129,7 +131,7 @@ See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-00
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `data_dir` | path | no | `~/.local/share/hypomnema` (XDG-respecting) | Root for daemon-owned state. **Never inside the vault** — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) |
+| `data_dir` | path | no | `~/.local/share/hypomnema` on Linux and macOS; `%APPDATA%\hypomnema` on Windows. Respects `XDG_DATA_HOME`. | Root for daemon-owned state. **Never inside the vault** — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) |
 | `index_file` | relative path | no | `index.sqlite` | SQLite file containing all three indexes |
 | `outbox_file` | relative path | no | `outbox.jsonl` | JSONL event log |
 

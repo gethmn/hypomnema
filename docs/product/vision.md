@@ -114,6 +114,7 @@ Things deliberately not decided yet, to be settled in early code:
 - [ ] Health and metrics endpoint shape. Out of scope for v0 but worth pre-allocating a `/health` route for easy expansion.
 - [ ] CLI subcommand naming. `hmn start`, `hmn scan`, `hmn search`, `hmn status` is one obvious shape; could change.
 - [ ] Whether the daemon should auto-rescan on startup or trust the existing index. Probably: rescan and reconcile, but make it skippable for fast restarts.
+- [ ] How should the watcher handle VCS-aware ignores? Options to consider: honor `.gitignore` / `.dockerignore` when present; add a Mutagen-inspired `ignore_vcs_files` config. v0 does not commit to any of these — `ignore_patterns` is the only filtering mechanism.
 
 ---
 
