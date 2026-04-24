@@ -122,13 +122,13 @@ cargo run -- <subcommand>      # run the daemon/CLI
 v0 is broken into steps with a deliberate dependency order. Don’t skip ahead.
 
 1. Skeleton: config loading, logging, graceful shutdown
-1. Scan + hash: walk the vault, compute content hashes, store in SQLite
-1. Watcher: notify + debouncer, update hashes on change
-1. Outbox: persist change events to JSONL
-1. Filesystem + content search: list/glob + grep, over HTTP
-1. Chunking + embedding: pulldown-cmark chunks, embed via TEI, store in sqlite-vec
-1. Semantic search: embed query, vector search, return chunks
-1. MCP wrapper: same operations, MCP transport
+2. Scan + hash: walk the vault, compute content hashes, store in SQLite
+3. Watcher: notify + debouncer, update hashes on change
+4. Outbox: persist change events to JSONL
+5. Filesystem + content search: list/glob + grep, over HTTP
+6. Chunking + embedding: pulldown-cmark chunks, embed via TEI, store in sqlite-vec
+7. Semantic search: embed query, vector search, return chunks
+8. MCP wrapper: same operations, MCP transport
 
 If a PR touches step N, it must not start building step N+1 opportunistically.
 
@@ -147,9 +147,4 @@ Ask: scope changes (adding a dependency, splitting a module, introducing an abst
 
 ## Related design docs
 
-- `docs/hypomnema-handoff.md` — consolidated orientation and scope
-- `docs/iris-vault-bridge-handoff.md` — original bridge scope (historical)
-- `docs/iris-vault-bridge-ownership-model.md` — the `vault_path` boundary (future phase)
-- `docs/iris-vault-bridge-conflict-resolution.md` — three-way merge (future phase)
-- `docs/iris-vault-bridge-atomic-writes.md` — read before any write path lands
-- `docs/iris-vault-bridge-off-the-shelf-experiment.md` — the failure modes this project avoids
+- `docs/hypomnema-handoff.md` — consolidated orientation and scope; lists the historical `iris-vault-bridge-*` documents that live in the Iris project as design groundwork.

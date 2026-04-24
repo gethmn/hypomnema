@@ -123,13 +123,13 @@ The dimension of the vector column is baked into the schema (768 for nomic-embed
 Eight steps, dependency-ordered, each independently useful as a stopping point:
 
 1. **Skeleton.** Daemon starts, reads config, logs what it’s watching, exits cleanly on SIGINT.
-1. **Scan + hash.** Walk the directory, compute content hashes, store in SQLite. Re-runs are deterministic.
-1. **Watcher.** `notify` + `notify-debouncer-full`, filtered to `.md` files, with the content-hash check that distinguishes “OS noticed a write” from “content changed.”
-1. **Outbox.** Persist real change events to JSONL in the daemon’s data directory.
-1. **Filesystem and content search over HTTP.** List/glob and grep, exposed via Axum. CLI built against these. Useful enough to dogfood for ordinary find/grep work.
-1. **Chunking and embedding.** pulldown-cmark heading-aware chunking, embed via TEI, store in sqlite-vec. The step most likely to surprise you.
-1. **Semantic search.** Query → embed → vector search → return chunks with metadata.
-1. **MCP wrapper.** Same operations, MCP transport via `rmcp`. Test against an actual agent (Claude Code, Iris).
+2. **Scan + hash.** Walk the directory, compute content hashes, store in SQLite. Re-runs are deterministic.
+3. **Watcher.** `notify` + `notify-debouncer-full`, filtered to `.md` files, with the content-hash check that distinguishes “OS noticed a write” from “content changed.”
+4. **Outbox.** Persist real change events to JSONL in the daemon’s data directory.
+5. **Filesystem and content search over HTTP.** List/glob and grep, exposed via Axum. CLI built against these. Useful enough to dogfood for ordinary find/grep work.
+6. **Chunking and embedding.** pulldown-cmark heading-aware chunking, embed via TEI, store in sqlite-vec. The step most likely to surprise you.
+7. **Semantic search.** Query → embed → vector search → return chunks with metadata.
+8. **MCP wrapper.** Same operations, MCP transport via `rmcp`. Test against an actual agent (Claude Code, Iris).
 
 If a step is hard, ship the previous one and keep using it. Step 5 is genuinely valuable on its own.
 

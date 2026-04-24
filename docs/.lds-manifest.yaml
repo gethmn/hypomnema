@@ -1,0 +1,86 @@
+# LDS Installation Manifest
+# Generated during installation - used by upgrade workflow
+# Do not edit manually
+
+schema_version: "1.0"
+lds_version: "unknown"  # LDS distribution does not carry a version stamp
+installed_at: "2026-04-23"
+install_type: "fresh"
+
+# Source distribution path (for reference only)
+source_dist: "/Users/beausimensen/.config/weftlo/profiles/simensen/layered-documentation-system/content/simensen/layered-documentation-system"
+
+# Installed files and their sources
+files:
+  # Maintenance workflows (static - copied directly)
+  - path: "maintenance/refine.md"
+    type: "static"
+    source: "maintenance/refine.md"
+
+  - path: "maintenance/sync.md"
+    type: "static"
+    source: "maintenance/sync.md"
+
+  - path: "maintenance/update.md"
+    type: "static"
+    source: "maintenance/update.md"
+
+  # Audit workflow (generated from templates)
+  - path: "maintenance/audit.md"
+    type: "generated"
+    source_templates:
+      - "maintenance/audit/common-audit.md"
+      - "maintenance/audit/audit-ongoing.md"
+
+  # Documentation guide (customized during install)
+  - path: "DOCUMENTATION-GUIDE.md"
+    type: "customized"
+    source_template: "LAYERED-DOCUMENTATION-SYSTEM.md"
+    customization_sections:
+      - "Content Thresholds"
+      - "Glossary"
+      - "Layer Overview"
+      - "Directory Structure"
+      - "Tooling Section"
+
+  # Templates installed
+  - path: "decisions/0000-template.md"
+    type: "template"
+    source: "templates/adr-madr-minimal.md"
+    installed: true
+
+  - path: "decisions/_adr-policy.md"
+    type: "template"
+    source: "templates/adr-policy.md"
+    installed: true
+
+  - path: "specs/_template.md"
+    type: "template"
+    source: "templates/spec-feature.md"
+    installed: true
+
+# Layer selections made during installation
+layer_selections:
+  decisions: "adr-madr-minimal"
+  vision: "prd-lean"
+  architecture: "architecture-c4-lite"
+  specs: "spec-feature"
+  reference: "both"   # reference-cli + reference-config
+  behaviors: "skip"
+  implementation: "implementation-tech-stack"
+
+# Content thresholds (for customization detection)
+thresholds:
+  CODE_BLOCK_LINES: 50
+  STEP_LIST_ITEMS: 10
+  TABLE_ROWS: 20
+  EXAMPLE_FILE_ALWAYS_APPENDIX: true
+  ERROR_CATALOG_ALWAYS_APPENDIX: true
+  SHELL_SCRIPT_ALWAYS_APPENDIX: true
+
+# Tooling tier selected
+tooling_tier: "2"
+
+# Seeded from
+seeded_from:
+  - "docs/hypomnema-handoff.md"

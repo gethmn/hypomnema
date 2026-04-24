@@ -1,0 +1,177 @@
+# Hypomnema Configuration Reference
+
+**Version**: 0.1.0 (draft — format not finalized)
+**Generated**: 2026-04-23
+
+---
+
+> **Status**: This reference is a **draft**. The handoff's "Open questions for early implementation" section confirms config format and location are not yet pinned — "TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during step 1." Revise this doc once the config module lands.
+
+---
+
+## Configuration Files
+
+| File | Purpose | Location |
+|------|---------|----------|
+| `config.toml` | Main daemon configuration | `~/.config/hypomnema/config.toml` (Linux/macOS); `%APPDATA%\hypomnema\config.toml` (Windows). Respects `XDG_CONFIG_HOME`. |
+
+**Precedence** (highest to lowest):
+1. Command-line flags (`--config`, `--rescan`, etc.)
+2. Environment variables (`HYPOMNEMA_*`)
+3. Configuration file
+4. Built-in defaults
+
+---
+
+## Configuration Schema
+
+### Top-Level Structure
+
+```toml
+# Path to the vault Hypomnema watches (required)
+vault = "/home/user/Documents/vault"
+
+# HTTP server binding (defaults to localhost:7777; port TBD)
+[http]
+bind = "127.0.0.1:7777"
+
+# MCP transport (stdio for agent embedding, socket for detached)
+[mcp]
+transport = "stdio"   # or "socket"
+socket = "~/.local/share/hypomnema/mcp.sock"  # only if transport = "socket"
+
+# Embedding service (OpenAI-compatible)
+[embedding]
+endpoint = "http://127.0.0.1:8080/v1/embeddings"
+model = "nomic-embed-text-v1.5"
+dimension = 768
+api_key = ""   # empty for local services that don't require one
+
+# Watcher tuning
+# The watcher only considers .md files; ignore_patterns further excludes matches within that set.
+[watcher]
+debounce_ms = 400
+ignore_patterns = [
+  ".obsidian/**",
+  ".trash/**",
+  "*.sync-conflict-*",
+  "**/*.tmp",
+]
+
+# Storage locations (defaults shown)
+[storage]
+data_dir = "~/.local/share/hypomnema"      # index + outbox + logs
+index_file = "index.sqlite"                 # relative to data_dir
+outbox_file = "outbox.jsonl"                # relative to data_dir
+
+# Logging
+[logging]
+level = "info"
+notify_level = "warn"
+tokio_level = "error"
+```
+
+---
+
+## `vault`
+
+The directory Hypomnema watches and indexes. Must exist. Must be readable. Hypomnema never writes here.
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `vault` | path | yes | — | Absolute or `~`-expanded path to the vault |
+
+---
+
+## `[http]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; v0 does not implement auth. |
+
+---
+
+## `[mcp]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | How MCP clients connect |
+| `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path |
+
+---
+
+## `[embedding]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `endpoint` | URL | yes | — | OpenAI-compatible embeddings endpoint |
+| `model` | string | yes | — | Model name sent in the API request |
+| `dimension` | integer | yes | `768` | Must match the dimension baked into the schema. Mismatch → daemon fails at startup. |
+| `api_key` | string | no | `""` | Sent as `Authorization: Bearer` if non-empty |
+
+Changing `dimension` after the index is built is not supported — the vec0 virtual table's dimension is fixed at creation time. A different embedding model with a different dimension requires a re-index (drop + rebuild).
+
+See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-0007: sqlite-vec over Alternatives](../decisions/0007-sqlite-vec-over-alternatives.md).
+
+---
+
+## `[watcher]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `debounce_ms` | integer | no | `400` | Coalescing window for `notify-debouncer-full`. Too short → event storms slip through; too long → user-visible indexing lag |
+| `ignore_patterns` | list of glob strings | no | (sensible defaults for Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search |
+
+---
+
+## `[storage]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `data_dir` | path | no | `~/.local/share/hypomnema` (XDG-respecting) | Root for daemon-owned state. **Never inside the vault** — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) |
+| `index_file` | relative path | no | `index.sqlite` | SQLite file containing all three indexes |
+| `outbox_file` | relative path | no | `outbox.jsonl` | JSONL event log |
+
+---
+
+## `[logging]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `level` | tracing level | no | `info` | Daemon-level filter |
+| `notify_level` | tracing level | no | `warn` | `notify` crate is chatty; quieter by default |
+| `tokio_level` | tracing level | no | `error` | Suppress routine tokio traffic |
+
+Levels: `trace`, `debug`, `info`, `warn`, `error`.
+
+---
+
+## Environment Variable Mapping
+
+| Config Path | Environment Variable |
+|-------------|---------------------|
+| `vault` | `HYPOMNEMA_VAULT` |
+| `http.bind` | `HYPOMNEMA_HTTP_BIND` |
+| `embedding.endpoint` | `HYPOMNEMA_EMBEDDING_ENDPOINT` |
+| `embedding.api_key` | `HYPOMNEMA_EMBEDDING_API_KEY` |
+| `storage.data_dir` | `HYPOMNEMA_DATA_DIR` |
+| `logging.level` | `HYPOMNEMA_LOG_LEVEL` |
+
+(Exact mapping syntax TBD — flag-style `HYPOMNEMA__EMBEDDING__ENDPOINT` double-underscore convention is also plausible.)
+
+---
+
+## Validation Rules
+
+- `vault` must exist and be readable
+- `embedding.dimension` must match the schema; mismatch fails the daemon at startup with a message pointing at this reference
+- `storage.data_dir` must not be under `vault` — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md)
+- `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
+
+---
+
+## See Also
+
+- [CLI Reference](./cli.md)
+- [Architecture Overview](../architecture/overview.md)
+- [ADR-0006: Outbox Lives Outside the Watched Directory](../decisions/0006-outbox-outside-watched-directory.md)
