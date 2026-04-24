@@ -86,6 +86,26 @@ These hazards were predicted during design before any code was written. Each has
 
 ---
 
+## 9. Ungraceful shutdown and torn writes
+
+**What goes wrong**: The daemon runs several long-lived tasks — watcher, indexer worker, outbox writer, HTTP server, and (later) MCP server. A naive `std::process::exit` or an unhandled SIGINT tears through them mid-flight: a partial outbox append leaves an invalid JSONL line, an in-flight SQLite transaction is dropped without `commit()`, an HTTP client sees a truncated response. Consumers tailing the outbox then see garbage; a restart must reconcile avoidable damage.
+
+**Mitigation**: Every long-running task accepts a cancellation signal (`tokio::sync::watch` or `CancellationToken`) and responds by finishing its current unit of work, then exiting. Shutdown drains in order: stop accepting new work (watcher stops emitting, HTTP server stops accepting), flush the outbox, commit any open transactions, then exit. Never call `std::process::exit` from inside task code.
+
+**Captured in**: `AGENTS.md` §"Async patterns" (cancellation paragraph)
+
+---
+
+## 10. Embedding service unavailable or slow at index time
+
+**What goes wrong**: The embedding service (TEI, vLLM, OpenAI-compatible endpoint) is a separate process. During first-scan or after a network blip it can be down, slow, or returning errors. A naive `reqwest` call with no timeout blocks the indexer task indefinitely; a tight retry loop against a failing endpoint hammers the service and stalls progress on other files. A silent fallback to zero vectors would poison the vector index.
+
+**Mitigation**: Set an explicit timeout on the embedding HTTP client. On repeated failure, surface the error and skip the chunk for later retry — never insert a zero or placeholder vector. At daemon startup, probe the embedding endpoint for its advertised dimension and fail loudly if it disagrees with the schema (see pitfall #6). The daemon should remain responsive to search queries even while the embedding service is unreachable.
+
+**Captured in**: `.claude/skills/sqlite-vec-extension/SKILL.md` (dimension validation), `docs/architecture/overview.md` §"Known Risks"
+
+---
+
 ## Meta: why these are named before any code is written
 
 Each of the above is a hazard that was identified during design — before implementation. Naming them this way serves two purposes:

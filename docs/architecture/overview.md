@@ -191,6 +191,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Risk/Debt | Impact | Mitigation |
 |-----------|--------|------------|
 | Embedding model dimension mismatch between config and existing schema | Daemon starts on a stale index with wrong vector width; queries silently degrade or error | Bake dimension in at schema creation; fail loudly at startup if config disagrees (see `.claude/skills/sqlite-vec-extension/`) |
+| Embedding service unavailable or slow at index time | Indexer stalls; naive retry hammers the service; risk of zero-vector poisoning | Explicit reqwest timeout; skip-and-retry on failure (never insert placeholder vectors); daemon remains responsive to search queries while embedding is unreachable (see [Pitfalls](../implementation/appendices/tech-stack/pitfalls.md) #10) |
 | Watcher event storms during sync-tool operations | Spurious reindexes; wasted CPU; sync-loop feedback | Debouncer + content-hash check + conflict-filename filter (see `.claude/skills/filesystem-watching/`) |
 | Blocking the async runtime with rusqlite calls | Daemon deadlocks; search requests hang | All SQL via `spawn_blocking` without exception (see `.claude/skills/rusqlite-in-async/`) |
 | Single-consumer event delivery (outbox tail) | Doesn't scale to remote consumers or push notifications | Deferred from v0; noted in handoff "Out of scope" |

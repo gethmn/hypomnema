@@ -60,7 +60,7 @@ Any SQLite operation goes in `spawn_blocking`. No exceptions. See the `rusqlite-
 
 Network calls (reqwest to the embedding service, axum handlers) run directly on the runtime.
 
-If you hit a trait-bound error involving async that doesn’t make sense, reach for `#[async_trait]` on that one trait. Don’t spend an hour fighting the raw language feature.
+If you hit a trait-bound error involving async on a trait that already exists for non-abstraction reasons (framework traits like `axum::FromRequest`, `rmcp` handler traits, etc.), reach for `#[async_trait]` on that one trait. Don’t spend an hour fighting the raw language feature. This is an escape hatch for existing traits — not permission to design trait-based abstractions (see "What not to build").
 
 Cancellation: every long-running task (watcher loop, outbox writer, indexer worker) responds to a shutdown signal. Pass a `tokio::sync::watch` or `CancellationToken` through; don’t `std::process::exit`.
 
@@ -102,6 +102,10 @@ Ask: scope changes (adding a dependency, splitting a module, introducing an abst
 - `.claude/skills/sqlite-vec-extension/` — loading the extension and vector table patterns
 - `.claude/skills/filesystem-watching/` — notify + debouncer + sync-tool gotchas
 - `.claude/skills/markdown-chunking/` — pulldown-cmark event-driven chunking
+
+## Related pitfalls
+
+- `docs/implementation/appendices/tech-stack/pitfalls.md` — catalog of named hazards; each entry maps to a skill or to a rule in this file.
 
 ## Related design docs
 
