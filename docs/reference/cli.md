@@ -1,11 +1,11 @@
 # CLI Reference: `hmnd` and `hmn`
 
-**Version**: 0.1.0 (draft — subcommand names not finalized)
+**Version**: 0.1.0
 **Generated**: 2026-04-23
 
 ---
 
-> **Status**: This reference is a **draft**. The handoff's "Open questions for early implementation" section flags CLI subcommand naming as not yet decided — "`hmn start`, `hmn scan`, `hmn search`, `hmn status` is one obvious shape; could change." Hypomnema ships two binaries per [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md): the daemon (`hmnd`) and the CLI client (`hmn`). Revise this doc once the CLI is pinned down.
+> **Status**: Subcommand surface pinned in step 1 — see [step-01 workplan § CLI subcommand naming](../roadmap/step-01-workplan.md#1-cli-subcommand-naming). Hypomnema ships two binaries per [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md): the daemon (`hmnd`) and the CLI client (`hmn`).
 
 ---
 
@@ -82,7 +82,7 @@ hmnd scan [--config PATH]
 
 #### `config-validate`
 
-Parse the configuration file, run validation rules (vault exists, `data_dir` not under `vault`, embedding dimension matches the schema, etc.), and exit with a zero status on success. Final subcommand name TBD.
+Parse the configuration file, run validation rules (vault exists, `data_dir` not under `vault`, embedding dimension matches the schema, etc.), and exit with a zero status on success.
 
 **Usage**:
 ```
@@ -170,6 +170,7 @@ hmn status [--json]
 | `0` | Success |
 | `1` | General error |
 | `2` | Invalid arguments |
+| `3` | Configuration error |
 | `4` | Daemon not reachable |
 
 ---

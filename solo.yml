@@ -1,0 +1,10 @@
+name: Hypomnema
+icon: null
+processes:
+  bacon:
+    command: direnv exec . just watch
+    working_dir: null
+    auto_start: false
+    auto_restart: false
+    restart_when_changed: []
+    env: {}

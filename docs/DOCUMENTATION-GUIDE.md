@@ -326,3 +326,14 @@ Workflows in `maintenance/` are installed to be executed by AI agents. Each is a
 - **`.claude/skills/`** contains pattern-specific guidance (rusqlite-in-async, sqlite-vec-extension, filesystem-watching, markdown-chunking) that is loaded automatically when relevant. Those skills are the technical specifics that back the claims made in the ADRs and the implementation layer.
 
 This guide documents the *documentation system*. `AGENTS.md` documents the *project*. `.claude/skills/` documents the *subsystems*. All three are complementary.
+
+---
+
+## Notes & Proposals (outside LDS)
+
+Long-lived process artifacts and in-flight planning material live in [`../notes/`](../notes/), not under `docs/`. LDS is built for steady-state documentation of what the system *is*; the front of the planning funnel is intentionally outside it. The current `notes/` contents:
+
+- [`../notes/project-planning-workflow-notes.md`](../notes/project-planning-workflow-notes.md) — the planning-workflow description (roadmap → workplan → build cadence)
+- [`../notes/lds-evaluation.md`](../notes/lds-evaluation.md) — gaps observed in LDS for forward-looking planning
+- [`../notes/proposals/`](../notes/proposals/) — in-progress proposals (concept notes, draft specs, working drafts under review)
+- [`../notes/proposals/archive/`](../notes/proposals/archive/) — frozen records of approved-and-decomposed proposals; LDS layers are canonical after decomposition

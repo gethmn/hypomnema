@@ -1,11 +1,11 @@
 # Hypomnema Configuration Reference
 
-**Version**: 0.1.0 (draft — format not finalized)
+**Version**: 0.1.0
 **Generated**: 2026-04-23
 
 ---
 
-> **Status**: This reference is a **draft**. The handoff's "Open questions for early implementation" section confirms config format and location are not yet pinned — "TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during step 1." Revise this doc once the config module lands.
+> **Status**: Schema pinned in step 1 — see [step-01 workplan § TOML config schema](../roadmap/step-01-workplan.md#2-toml-config-schema). Format is TOML; default location is `~/.config/hypomnema/config.toml` (respects `XDG_CONFIG_HOME`).
 
 > **Scope**: Every option on this page is daemon-side — it affects the behavior of `hmnd`. The CLI client (`hmn`) reads only the daemon URL (derived from `[http].bind`) to know where to send requests; override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL`. See [cli.md](./cli.md) and [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md).
 

@@ -3,4 +3,7 @@
 //
 // See AGENTS.md for orientation and docs/hypomnema-handoff.md for scope.
 
-// Modules will be added as v0 steps land.
+pub mod cli;
+pub mod config;
+pub mod logging;
+pub mod shutdown;
