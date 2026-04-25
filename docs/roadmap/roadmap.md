@@ -33,6 +33,8 @@
 
 ## Step 2 — Scan + hash
 
+**Status**: shipped 2026-04-25
+
 **Goal**: On startup, `hmnd` walks the configured vault, SHA256-hashes each `.md` file, persists `{path, size, mtime, content_hash}` rows to `index.sqlite` at `~/.local/share/hypomnema/`.
 
 **Shipping criteria**:
@@ -47,7 +49,7 @@
 - Symlink handling ([`specs/filesystem-search.md` line 91](../specs/filesystem-search.md))
 - SQLite schema migration strategy
 
-**New deps**: `rusqlite`, `r2d2`, `r2d2_sqlite`, `walkdir` (or `ignore`), `sha2`.
+**New deps**: `rusqlite`, `r2d2`, `r2d2_sqlite`, `walkdir`, `sha2`, `chrono`, `globset` (pulled forward from step 5).
 
 **Risk**: medium. First exercise of the `spawn_blocking` pattern. Schema design lands here and constrains everything downstream.
 
@@ -121,7 +123,7 @@
 - Frontmatter summaries in filesystem results ([`specs/filesystem-search.md` line 93](../specs/filesystem-search.md))
 - Health metrics beyond basic reachability
 
-**New deps**: `axum`, `tower`, `tower-http`, `reqwest` (for `hmn`), `globset`, `regex`.
+**New deps**: `axum`, `tower`, `tower-http`, `reqwest` (for `hmn`), `regex`. (`globset` already landed in step 2.)
 
 **Risk**: medium. First external surface. JSON shapes become a contract once agents wire up to them.
 

@@ -191,9 +191,49 @@ Every per-step retro follows this shape so the structured data accumulates compa
 - *"Soft flag" pattern.* Tasks 2 and 5 both flagged judgment calls for coordinator review without escalating. Tasks shipped cleanly, coordinator accepted, zero human round-trips. This is a useful third state the playbook should name explicitly: "Decision flagged for coordinator review — proceeded with X, see results comment for trade-off." Could go in the TASK AGENT § Reporting section as an option alongside escalation. Worth adding before step 2.
 - *Pilot risk assessment.* Step 1 was a low-risk skeleton. The coordinator pattern handled it cleanly with no pressure on the failure-handling, retry, or escalation paths. Step 2 (Scan + hash, medium risk, schema-design lock-in) and step 3 (Watcher, medium-high risk, the project's biggest landmines per the roadmap) will test the parts of the playbook that didn't fire here.
 
-### Step 2
+#### Step 2 (shipped 2026-04-25)
 
-_Not yet started._
+**Structured Eval**
+
+*Batching outcomes:*
+- No batches. All 7 workplan tasks ran as solo task agents (default-not-batch carried forward from step 1's clean pilot).
+- Solo task 1 (Compose-filter binary-target lift): scope = 3 files (`src/logging.rs`, `src/bin/hmnd.rs`, `src/bin/hmn.rs`), result comment ~3 paragraphs. Adjacent (task 2): no file overlap. Assessment: appropriate solo — surgical cleanup with its own test surface.
+- Solo task 2 (Globset matcher + `.git/**` default): scope = 3 files (`Cargo.toml`, `src/config.rs`, `tests/config.rs`), comment ~6 sentences. Adjacent (task 3): both touched `Cargo.toml` only. Assessment: appropriate solo — globset is a config-side concern, store deps are a separate concern.
+- Solo task 3 (Store module): scope = 6 files (`Cargo.toml`, `Cargo.lock`, `src/lib.rs`, three new under `src/store/`), comment ~12 paragraphs incl. soft flag. Workplan-flagged medium risk (schema lock-in). Assessment: appropriate solo — soft flag pulled forward `tempfile = "3.10"` to dev-deps to allow a real-FS WAL test.
+- Solo task 4 (Indexer module): scope = 6 files (`Cargo.toml`, `Cargo.lock`, `src/lib.rs`, three new under `src/indexer/`), comment ~14 paragraphs incl. soft flag. Workplan-flagged medium-high risk. Assessment: appropriate solo — task-flagged-risky rule held; the soft flag (5 extra scanner-level unit tests beyond the workplan ask) tightened the next task's debug loop.
+- Solo task 5 (Wire `hmnd` binary): scope = 1 file (`src/bin/hmnd.rs`), comment ~6 paragraphs incl. manual smoke verification. Adjacent (task 6): no file overlap. Assessment: appropriate solo — even a 1-file task carries integration concerns (log-line shape verification end-to-end).
+- Solo task 6 (Integration tests): scope = 3 files (1 new `tests/scan.rs`, 2 extended), comment ~10 paragraphs incl. soft flag. Adjacent (task 7): no overlap. Assessment: appropriate solo.
+- Solo task 7 (Doc updates): scope = 3 doc files, comment ~5 paragraphs incl. soft flag. Assessment: appropriate solo.
+
+*Escalations:*
+- Count: 0.
+- By type: ambiguity=0, test-failure=0, scope-question=0, surprise-decision=0, other=0.
+- *Soft flag count: 4* (tasks 2.3 / 2.4 / 2.6 / 2.7), vs. step 1's 2. The pattern step 1 named ("decision flagged for coordinator review without escalating") proved load-bearing across a higher-complexity step. Coordinator accepted all 4 with zero human round-trips. Worth promoting to a first-class entry in the playbook's TASK AGENT § Reporting before step 3 — it currently lives only in the step-1 retro.
+
+*Retries:*
+- Tasks with retries: none.
+- Per task: all 7 succeeded on first attempt.
+- 2-retry ceiling hit without success: none.
+
+*Time and overhead:*
+- Total wall-clock: ~30m (todo creation 21:58:46 → last task completed 22:27:44, 2026-04-25).
+- Per-task wall-clock from todo `created_at` to `completed_at`: task 1 = 3m 22s, task 2 = 5m 58s, task 3 = 10m 40s, task 4 = 17m 16s, task 5 = 20m 21s, task 6 = 25m 26s, task 7 = 27m 57s. (As in step 1, these include queue-behind-blocker time. Net agent-time ranged ~2m–7m per task; total summed agent-time ≈ 26m.)
+- Coordinator wake-up count: 7 (one per task; all genuine completions; zero false-positive idle wake-ups).
+- Context drift symptoms: none observed. Rolling-context scratchpad's § Per-task outcomes was actively used to forward soft-flag downstream impact between tasks (notably 2.3→2.4 and 2.4→2.6).
+
+**Notes**
+
+- *Net wall-clock dropped vs. step 1 despite higher complexity.* Step 1: 34m for low-risk skeleton. Step 2: 30m for medium / medium-high tasks (schema design + first spawn_blocking workload). Two contributing factors visible from the data: (a) every task agent went idle exactly once (vs. step 1's occasional re-prompts), suggesting tighter workplan task descriptions reduced agent decision fanout; (b) more forward-notes flowed task→task via the scratchpad, pre-empting questions that would have surfaced as soft flags or re-reads. The roadmap→workplan→build cadence is paying off as the team (one agent + one coordinator) gains shared vocabulary.
+- *Soft flags are now load-bearing.* The pattern step 1 surfaced and named got exercised 4× in step 2. Two were forwarded as guidance to the next task agent via the rolling-context scratchpad (2.3's tempfile-pulled-forward → 2.6 skipped Cargo.toml edit; 2.4's 5-extra-unit-tests → 2.6 chose scope-not-mirror). One was post-hoc accepted (2.7's prose-and-example consistency). One was a defensible scope-creep flag (2.6's scope-not-mirror, which the agent had also been pre-flagged about by 2.4's forward note). All zero round-trips to the human. Recommend promoting "Soft flag" from the step-1 retro mention to a first-class subsection under the playbook's TASK AGENT § Reporting before step 3.
+- *Forward-note pattern in the scratchpad's § Per-task outcomes is the load-bearing channel.* Step 1's retro called this out as a "context-passing baton" worth naming. Step 2 ran on it — every per-task outcome ended with a `Forward note for Task X.Y` paragraph addressing the next agent (sometimes two). The next task's bootstrap prompt referenced "forward notes are at the end of Task X entry" by line, and agents read them. This is now a deliberate pattern the playbook should describe in COORDINATOR § Per-task execution loop step 6 (currently says only "append a one-paragraph summary"; bump to "and write a `Forward note for Task M+1` paragraph if anything material applies").
+- *Idle-detection reliability remains 100%.* 7/7 fires were genuine completions in step 2 (and 7/7 in step 1). Two clean steps is signal enough to retire the playbook open question "Idle-detection false positives" — `timer_fire_when_idle_any` is reliable as a "task agent done" signal in this workflow shape. Will keep an eye on it as task complexity grows (step 3's watcher work will spawn longer-running tests).
+- *Workplan TBDs handled cleanly.* All four step-2 deferred decisions (auto-rescan default, ignore-pattern set incl. VCS, symlink handling, schema-migration strategy) resolved at workplan time and held through the build with zero in-build revision. None warranted ADR promotion. Confirms the step-1 instinct that "if the resolution fits in 1–3 paragraphs of workplan prose with a 'Why', it does not need to be an ADR." Holding that rubric.
+- *Cross-task `Cargo.toml` ordering didn't bite.* Five of seven tasks edited `Cargo.toml`. They ran sequentially (blockers preserved), so no merge friction. If a future step batches Cargo.toml-touching tasks (e.g., a step that adds 2-3 unrelated small deps in one PR), this is the file most likely to surface a coordination question. Worth noting; not a current problem.
+- *Step-boundary roadmap revision worked as a side-effect of the workplan.* The workplan's "pulled `globset` forward from step 5" call became a one-line edit in roadmap step 5's deps list at boundary. Open question 3 from this file ("Mid-step roadmap revision: revise immediately or wait?") is partially answered: small revisions that fall out of a step's scope are cheap to apply at boundary; we don't need a separate "revise the roadmap mid-step" ritual for them.
+- *No structural fixes needed before step 3.* Step 1 retro left one structural fix (the binary-target tracing lift) which became Task 2.1. Step 2 leaves no analogous step-3-blocker. Step 3 (watcher) can start its workplan immediately on the human's signal.
+- *Coordinator process-context has not drifted at 7 wake-ups.* The playbook open question on context drift remains unresolved at small scale. Step 5 will be the stress test (more tasks, more forward notes).
+
+### Step 3
 
 ### Step 3
 
