@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Deserializer};
 use tracing::Level;
 
@@ -167,11 +168,27 @@ fn default_debounce_ms() -> u64 {
 
 fn default_ignore_patterns() -> Vec<String> {
     vec![
+        ".git/**".to_string(),
         ".obsidian/**".to_string(),
         ".trash/**".to_string(),
         "*.sync-conflict-*".to_string(),
         "**/*.tmp".to_string(),
     ]
+}
+
+impl WatcherConfig {
+    pub fn compiled_ignores(&self) -> Result<GlobSet> {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in &self.ignore_patterns {
+            let glob = Glob::new(pattern).with_context(|| {
+                format!("invalid ignore pattern in watcher.ignore_patterns: {pattern:?}")
+            })?;
+            builder.add(glob);
+        }
+        builder
+            .build()
+            .context("compiling watcher.ignore_patterns into GlobSet")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

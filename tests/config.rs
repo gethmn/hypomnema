@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hypomnema::config::Config;
+use hypomnema::config::{Config, WatcherConfig};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -210,6 +210,59 @@ fn rejects_missing_vault() {
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection for missing vault");
     let msg = format!("{:#}", err);
     assert!(msg.contains("vault"), "{msg}");
+}
+
+#[test]
+fn default_ignore_patterns_include_dot_git() {
+    let cfg = WatcherConfig::default();
+    assert!(
+        cfg.ignore_patterns.iter().any(|p| p == ".git/**"),
+        "default ignore_patterns must include .git/**: {:?}",
+        cfg.ignore_patterns
+    );
+}
+
+#[test]
+fn compiled_ignores_matches_defaults() {
+    let set = WatcherConfig::default()
+        .compiled_ignores()
+        .expect("default ignore patterns must compile");
+
+    assert!(set.is_match(".git/objects/abc"), ".git/** should match");
+    assert!(
+        set.is_match(".obsidian/workspace.json"),
+        ".obsidian/** should match"
+    );
+    assert!(
+        set.is_match("notes/foo.md.tmp"),
+        "**/*.tmp should match nested .tmp files"
+    );
+    assert!(
+        set.is_match("My Note .sync-conflict-202604.md"),
+        "*.sync-conflict-* should match a top-level sync-conflict file"
+    );
+
+    assert!(
+        !set.is_match("notes/foo.md"),
+        "ordinary note must not match any default ignore"
+    );
+}
+
+#[test]
+fn compiled_ignores_reports_offending_pattern() {
+    let cfg = WatcherConfig {
+        debounce_ms: 400,
+        ignore_patterns: vec!["valid/**".to_string(), "[".to_string()],
+    };
+
+    let err = cfg
+        .compiled_ignores()
+        .expect_err("invalid pattern must error");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("\"[\""),
+        "error must quote the offending pattern: {msg}"
+    );
 }
 
 #[test]
