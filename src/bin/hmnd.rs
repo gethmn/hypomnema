@@ -65,24 +65,18 @@ async fn dispatch(command: Option<Command>, config: Config) -> Result<()> {
 
 async fn run_daemon(config: Config) -> Result<()> {
     let pid = std::process::id();
-    // Binary crate's default tracing target is `hmnd`, but the configured
-    // EnvFilter only knows about `hypomnema=*`. Tag the binary's events so
-    // they ride the same filter as lib events ("everything we write").
     tracing::info!(
-        target: "hypomnema::hmnd",
         vault = %config.vault.0.display(),
         data_dir = %config.storage.data_dir.0.display(),
         http_bind = %config.http.bind,
         pid,
         "hmnd: starting daemon"
     );
-    tracing::debug!(target: "hypomnema::hmnd", ?config, "hmnd: full configuration");
+    tracing::debug!(?config, "hmnd: full configuration");
 
     let mut shutdown_rx = shutdown::install();
     let _ = shutdown_rx.wait_for(|v| *v).await;
 
-    // shutdown::install logs signal receipt; this confirms the daemon body
-    // finished draining and is about to return cleanly.
-    tracing::info!(target: "hypomnema::hmnd", "hmnd: drain complete, exiting cleanly");
+    tracing::info!("hmnd: drain complete, exiting cleanly");
     Ok(())
 }

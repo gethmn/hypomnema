@@ -22,11 +22,7 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // Binary crate's default tracing target is `hmn`, but the configured
-    // EnvFilter only knows about `hypomnema=*`. Tag the binary's events so
-    // they ride the same filter as lib events.
     tracing::debug!(
-        target: "hypomnema::hmn",
         daemon_url = ?cli.daemon_url,
         json = cli.json,
         "hmn: parsed CLI"

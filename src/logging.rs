@@ -53,17 +53,16 @@ pub(crate) fn compose_filter(
     match binary {
         BinaryKind::Hmnd => {
             let base = config.level.parse::<Level>().unwrap_or(Level::INFO);
-            let bumped = bump(base, verbose);
+            let bumped = level_str(bump(base, verbose));
             format!(
-                "hypomnema={},notify={},tokio={}",
-                level_str(bumped),
-                config.notify_level,
-                config.tokio_level,
+                "hypomnema={bumped},hmnd={bumped},notify={notify},tokio={tokio}",
+                notify = config.notify_level,
+                tokio = config.tokio_level,
             )
         }
         BinaryKind::Hmn => {
-            let bumped = bump(Level::WARN, verbose);
-            format!("error,hypomnema={}", level_str(bumped))
+            let bumped = level_str(bump(Level::WARN, verbose));
+            format!("error,hypomnema={bumped},hmn={bumped}")
         }
     }
 }
@@ -102,31 +101,31 @@ mod tests {
     #[test]
     fn hmnd_default_filter() {
         let s = compose_filter(&default_cfg(), 0, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=info,notify=warn,tokio=error");
+        assert_eq!(s, "hypomnema=info,hmnd=info,notify=warn,tokio=error");
     }
 
     #[test]
     fn hmn_default_filter() {
         let s = compose_filter(&default_cfg(), 0, BinaryKind::Hmn, None);
-        assert_eq!(s, "error,hypomnema=warn");
+        assert_eq!(s, "error,hypomnema=warn,hmn=warn");
     }
 
     #[test]
-    fn hmnd_v_bumps_only_hypomnema() {
+    fn hmnd_v_bumps_hypomnema_and_hmnd_targets() {
         let s = compose_filter(&default_cfg(), 1, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=debug,notify=warn,tokio=error");
+        assert_eq!(s, "hypomnema=debug,hmnd=debug,notify=warn,tokio=error");
     }
 
     #[test]
-    fn hmnd_vv_promotes_hypomnema_to_trace() {
+    fn hmnd_vv_promotes_both_targets_to_trace() {
         let s = compose_filter(&default_cfg(), 2, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=trace,notify=warn,tokio=error");
+        assert_eq!(s, "hypomnema=trace,hmnd=trace,notify=warn,tokio=error");
     }
 
     #[test]
     fn hmnd_vvv_caps_at_trace() {
         let s = compose_filter(&default_cfg(), 3, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=trace,notify=warn,tokio=error");
+        assert_eq!(s, "hypomnema=trace,hmnd=trace,notify=warn,tokio=error");
     }
 
     #[test]
@@ -134,19 +133,19 @@ mod tests {
         let cfg = default_cfg();
         assert_eq!(
             compose_filter(&cfg, 0, BinaryKind::Hmn, None),
-            "error,hypomnema=warn"
+            "error,hypomnema=warn,hmn=warn"
         );
         assert_eq!(
             compose_filter(&cfg, 1, BinaryKind::Hmn, None),
-            "error,hypomnema=info"
+            "error,hypomnema=info,hmn=info"
         );
         assert_eq!(
             compose_filter(&cfg, 2, BinaryKind::Hmn, None),
-            "error,hypomnema=debug"
+            "error,hypomnema=debug,hmn=debug"
         );
         assert_eq!(
             compose_filter(&cfg, 3, BinaryKind::Hmn, None),
-            "error,hypomnema=trace"
+            "error,hypomnema=trace,hmn=trace"
         );
     }
 
@@ -169,7 +168,7 @@ mod tests {
             tokio_level: "warn".to_string(),
         };
         let s = compose_filter(&cfg, 0, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=warn,notify=info,tokio=warn");
+        assert_eq!(s, "hypomnema=warn,hmnd=warn,notify=info,tokio=warn");
     }
 
     #[test]
@@ -179,7 +178,7 @@ mod tests {
             ..LoggingConfig::default()
         };
         let s = compose_filter(&cfg, 1, BinaryKind::Hmnd, None);
-        assert_eq!(s, "hypomnema=info,notify=warn,tokio=error");
+        assert_eq!(s, "hypomnema=info,hmnd=info,notify=warn,tokio=error");
     }
 
     #[test]
@@ -187,6 +186,22 @@ mod tests {
         for binary in [BinaryKind::Hmnd, BinaryKind::Hmn] {
             for v in 0u8..=3 {
                 let directive = compose_filter(&default_cfg(), v, binary, None);
+                EnvFilter::try_new(&directive)
+                    .unwrap_or_else(|e| panic!("directive {directive:?} failed to parse: {e}"));
+            }
+        }
+    }
+
+    #[test]
+    fn bumped_directive_parses_as_envfilter() {
+        let cfg = LoggingConfig {
+            level: "warn".to_string(),
+            notify_level: "info".to_string(),
+            tokio_level: "debug".to_string(),
+        };
+        for binary in [BinaryKind::Hmnd, BinaryKind::Hmn] {
+            for v in 0u8..=3 {
+                let directive = compose_filter(&cfg, v, binary, None);
                 EnvFilter::try_new(&directive)
                     .unwrap_or_else(|e| panic!("directive {directive:?} failed to parse: {e}"));
             }
