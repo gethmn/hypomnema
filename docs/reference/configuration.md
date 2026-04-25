@@ -55,6 +55,7 @@ api_key = ""   # empty for local services that don't require one
 [watcher]
 debounce_ms = 400
 ignore_patterns = [
+  ".git/**",
   ".obsidian/**",
   ".trash/**",
   "*.sync-conflict-*",
@@ -125,7 +126,7 @@ See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-00
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
 | `debounce_ms` | integer | no | `400` | Coalescing window for `notify-debouncer-full`. Too short → event storms slip through; too long → user-visible indexing lag |
-| `ignore_patterns` | list of glob strings | no | (sensible defaults for Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search. Defaults cover common dotfile directories (`.obsidian/**`, `.trash/**`), sync-tool conflict files (Obsidian / Dropbox / Syncthing), and tmp-file extensions. No paths are filtered outside `ignore_patterns`; edit the list to change behavior. |
+| `ignore_patterns` | list of glob strings | no | (sensible defaults for Git, Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search. Defaults cover common dotfile directories (`.git/**`, `.obsidian/**`, `.trash/**`), sync-tool conflict files (Obsidian / Dropbox / Syncthing), and tmp-file extensions. No paths are filtered outside `ignore_patterns`; edit the list to change behavior. |
 
 > **Future direction (not v0):** honor `.gitignore` / `.dockerignore` when present; add a Mutagen-style `ignore_vcs_files` flag. See [product/vision.md#open-questions](../product/vision.md#open-questions).
 
@@ -174,6 +175,7 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 - `embedding.dimension` must match the schema; mismatch fails the daemon at startup with a message pointing at this reference
 - `storage.data_dir` must not be under `vault` — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md)
 - `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
+- The daemon scans + reconciles on every startup; this is the only mode in v0.
 
 ---
 

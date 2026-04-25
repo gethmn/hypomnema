@@ -52,7 +52,7 @@ hmnd [--config PATH] [--rescan] [--mcp-stdio]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rescan` | Force a full rescan and reconciliation of the vault on startup instead of trusting the existing index | TBD. Handoff suggested on-by-default (auto-rescan + reconcile); current lean is off-by-default for fast restarts. See open questions. |
+| `--rescan` | Force a full rescan and reconciliation of the vault on startup instead of trusting the existing index | deferred (forces re-hashing every file regardless of stat; not implemented in v0). |
 | `--mcp-stdio` | Serve the MCP surface over stdio instead of starting the HTTP server. Intended for agent hosts (Claude Code, Iris) that launch the daemon as a child process. Final flag shape TBD. | `false` |
 
 **Examples**:
@@ -74,6 +74,8 @@ hmnd --mcp-stdio
 #### `scan`
 
 Walk the vault and reconcile the index without starting the HTTP / MCP servers. Useful for one-shot reindexing or verifying the index from a cron job.
+
+Implemented in step 2; reconciles the index against the vault, prints a one-line summary, exits 0.
 
 **Usage**:
 ```

@@ -74,7 +74,7 @@ truncated: false
 
 ### Symlinks
 
-v0: symlinks within the vault are followed. Symlinks pointing outside the vault are *not* followed (defensive). Open question: should symlinks be indexed at all? See Open Questions.
+v0: symlinks within the vault are followed. Symlinks pointing outside the vault are *not* followed (defensive). The walker rejects any entry whose `fs::canonicalize`'d real path is not under the canonicalized vault root. Open question: should symlinks be indexed at all? See Open Questions.
 
 ### Case-sensitivity
 
