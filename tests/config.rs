@@ -229,6 +229,7 @@ fn compiled_ignores_matches_defaults() {
         .expect("default ignore patterns must compile");
 
     assert!(set.is_match(".git/objects/abc"), ".git/** should match");
+    assert!(set.is_match(".git/HEAD"), ".git/** should match .git/HEAD");
     assert!(
         set.is_match(".obsidian/workspace.json"),
         ".obsidian/** should match"

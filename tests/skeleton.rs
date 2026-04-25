@@ -168,6 +168,65 @@ fn hmnd_config_validate_exits_3_when_vault_missing() {
 }
 
 #[test]
+fn hmnd_scan_succeeds_against_one_file_vault() {
+    let root = ScopedTmp(unique_tmp("scan-one-file"));
+    let vault = root.0.join("vault");
+    let data_dir = root.0.join("data");
+    fs::create_dir_all(&vault).unwrap();
+    fs::write(vault.join("hello.md"), b"# hello").unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n[storage]\ndata_dir = \"{}\"\n",
+            vault.display(),
+            data_dir.display(),
+        ),
+    );
+
+    let out = hmnd()
+        .args(["scan", "--config"])
+        .arg(&cfg_path)
+        .output()
+        .expect("run hmnd scan");
+
+    assert!(
+        out.status.success(),
+        "hmnd scan against one-file vault should exit 0: status={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn hmnd_scan_succeeds_against_empty_vault() {
+    let root = ScopedTmp(unique_tmp("scan-empty"));
+    let vault = root.0.join("vault");
+    let data_dir = root.0.join("data");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n[storage]\ndata_dir = \"{}\"\n",
+            vault.display(),
+            data_dir.display(),
+        ),
+    );
+
+    let out = hmnd()
+        .args(["scan", "--config"])
+        .arg(&cfg_path)
+        .output()
+        .expect("run hmnd scan");
+
+    assert!(
+        out.status.success(),
+        "hmnd scan against empty vault should exit 0: status={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn hmnd_config_validate_exits_3_when_data_dir_under_vault() {
     let root = ScopedTmp(unique_tmp("cfgvalid-dd-under-vault"));
     let vault = root.0.join("vault");
