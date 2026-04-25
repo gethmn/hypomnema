@@ -1,33 +1,87 @@
 # Coordinator Playbook
 
-Operational playbook for the **step coordinator** pattern in Hypomnema's build workflow. Two roles:
+Operational playbook for the orchestrator, step coordinator, and task agent roles in Hypomnema's build workflow. Three roles:
 
-- **Coordinator** — drives a single roadmap step end-to-end. The agent that wrote the step's workplan is promoted to coordinator on "build."
+- **Orchestrator** — top-level agent (Solo agent or Claude Code terminal session) that talks directly to the human, spawns the per-step coordinator, and surfaces escalations. Never writes code; never becomes the coordinator.
+- **Coordinator** — drives a single roadmap step end-to-end. Freshly spawned by the orchestrator at "start step N" as the workplan-writer; promoted in place to coordinator on "build."
 - **Task agent** — ephemeral worker spawned by the coordinator to execute one (or a small batch) of workplan tasks.
 
-This playbook is read by both roles. It is *not* canonical project documentation — it is a working description of the orchestration pattern, expected to evolve after each step.
+This playbook is read by all three roles. It is *not* canonical project documentation — it is a working description of the orchestration pattern, expected to evolve after each step.
 
 ---
 
 ## Overall shape
 
 ```
-Human  ⇅  Outer orchestrator (Claude Code session in user's terminal)
+Human  ⇅  Orchestrator     (Solo agent OR Claude Code terminal session — talks
+                            directly to the human; never writes code itself)
               ⇅
-         Step coordinator  (Solo agent: step-NN-coordinator)
+         Step coordinator  (Solo agent: step-NN-coordinator, freshly spawned
+                            per step; promoted from workplan-writer on "build")
               ↓ spawns
          Task agents       (Solo agents: step-NN-task-MM, ephemeral)
 ```
 
-- The outer orchestrator and the coordinator communicate through Solo todos, scratchpads, and (for "wake the coordinator after escalation") timer-driven PTY injections.
+> **Invariant**: the orchestrator and the coordinator are never the same Solo process. The coordinator is always a fresh spawn at "start step N", regardless of whether the orchestrator is itself a Solo agent or a terminal session.
+
+- The orchestrator and the coordinator communicate through Solo todos, scratchpads, and (for "wake the coordinator after escalation") timer-driven PTY injections.
 - The coordinator and task agents communicate through Solo todos (per task), todo comments (per task report), and the step's rolling-context scratchpad (shared mutable state).
-- Bubble-up to the human is **pull-based**: the coordinator creates `needs-human`-tagged todos; the outer orchestrator surfaces them when the user asks for status.
+- Bubble-up to the human is **pull-based**: the coordinator creates `needs-human`-tagged todos; the orchestrator surfaces them when the user asks for status.
+
+---
+
+## ORCHESTRATOR section
+
+> **Audience**: the top-level agent that talks directly to the human. Could be a Solo agent or a Claude Code terminal session. If you are a coordinator or task agent, skip this section.
+
+### Identity & setup (run once, on becoming the orchestrator)
+
+A fresh agent that finds itself at the top of the hierarchy — talking directly to the human, no parent agent — is the orchestrator. Recognition triggers: human says "start step N", "build", "status"; or human references roadmap / workplan / coordinator concepts. On recognition:
+
+1. `whoami()` to confirm process identity.
+2. Read this ORCHESTRATOR section in full. Do **not** read the COORDINATOR or TASK AGENT sections — those are for agents you'll spawn, not for you.
+3. Optionally rename your process to `orchestrator` (or `<project>-orchestrator`) for clarity in `list_processes` output. Not required.
+4. Confirm to the human you're set up and (if you don't already know) ask which step they want to start.
+
+### Per-step kickoff (on "start step N")
+
+1. Read the step N todo (from the original 17–21 set) and the relevant section of `docs/roadmap/roadmap.md`.
+2. **Spawn a fresh coordinator-to-be**: `spawn_process(kind="agent", agent_tool_id=<id>, name="step-NN-coordinator")`. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
+3. Send the workplan-writing prompt to the new coordinator-to-be (template in [§ Workplan-writing prompt](#workplan-writing-prompt)).
+4. Set an idle timer to wake when the coordinator-to-be finishes the workplan: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator-to-be went idle, check workplan>")`.
+5. On wake-up: read the workplan output, surface its path to the human for review. Do not modify it.
+6. On the human's "build" / "go" / "approved": forward "build" to the same coordinator-to-be process (don't spawn a new one — this is the moment of the in-place coordinator promotion). The coordinator takes it from there per the COORDINATOR section.
+
+### Per-step ongoing
+
+While the coordinator runs:
+
+- The orchestrator handles human-facing surfacing only (status checks, escalation routing per [§ Orchestrator surfacing rules](#orchestrator-surfacing-rules)).
+- The orchestrator **never** spawns task agents directly. If you find yourself wanting to spawn a `step-NN-task-MM`, stop — you are not the coordinator. Re-read this section.
+
+### Step boundary
+
+When the coordinator reports the step shipped:
+
+- Acknowledge to the human.
+- Close the coordinator process (`close_process(process_id=<coordinator-pid>)`).
+- Wait for the next "start step N+1".
+
+### Response style for ambiguous start questions
+
+When the human asks "what do I do to start step N?" / "how do I kick off step N?" / similar (a *meta* question, not a command):
+
+- Do **not** answer with "just type 'start step N'." That answer hides the spawn the orchestrator is about to perform and invites the orchestrator to silently skip it.
+- Instead, describe the spawn you would perform: "I'll spawn `step-NN-coordinator` as a fresh Solo agent and send it the workplan-writing prompt for step N. The coordinator-to-be writes the workplan, you review, then on 'build' it gets promoted in place. Want me to go ahead now?"
+- This both confirms the architecture is intact and gives the human a chance to redirect before the spawn happens.
 
 ---
 
 ## COORDINATOR section
 
 ### Identity & promotion
+
+> **Audience**: the Solo agent that wrote the workplan and is being promoted to coordinator. The orchestrator should not act on this section — it spawned you, but it is not you.
 
 You become the step N coordinator the moment the human says "build" on the workplan you wrote. From that point on:
 
@@ -252,7 +306,7 @@ Apply the project's standing rules from `AGENTS.md` and `CLAUDE.md` (if present)
 - `needs-human` — currently waiting on human input
 - `coordinator-context` — the rolling-context scratchpad
 
-### Outer-orchestrator surfacing rules
+### Orchestrator surfacing rules
 
 When the human asks for status, anything related, or just a vague "what's going on":
 
@@ -296,6 +350,14 @@ When the human asks for status, anything related, or just a vague "what's going 
 
 ---
 
+## Workplan-writing prompt
+
+Used by the orchestrator at "start step N" when spawning the coordinator-to-be. Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
+
+> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as the STEP \<NN\> COORDINATOR-TO-BE. Solo process ID: \<coordinator-pid\>, name: step-\<NN\>-coordinator, project: Hypomnema, project ID: 4. Your orchestrator is Solo process \<orchestrator-pid\>. [END SOLO ORCHESTRATION CONTEXT] Your job right now is to write the workplan for step \<NN\> at docs/roadmap/step-\<NN\>-workplan.md. Read in this order: (1) docs/roadmap/roadmap.md § Step \<NN\>; (2) the relevant ADRs in docs/decisions/ for this step's deferred decisions; (3) the relevant specs in docs/specs/; (4) any skills surfaced by the step's scope; (5) notes/project-planning-workflow-notes.md for the workplan format expectations. Then write the workplan and post a short summary back to the human; stop and wait for review. When the human says "build" / "go" / "approved", you will be promoted in place to the step \<NN\> coordinator — at that point read notes/coordinator-playbook.md § COORDINATOR section in full (the TASK AGENT section can wait until you're spawning task agents). Do NOT read the ORCHESTRATOR section — that's the role of the agent that spawned you, not yours.
+
+---
+
 ## Task agent bootstrap prompt
 
 Use this template when sending the first prompt to a freshly-spawned task agent. Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
@@ -314,14 +376,15 @@ The full routing logic lives in COORDINATOR § Wake-up routing — don't restate
 
 ---
 
-## Outer-orchestrator (human-facing) cheat sheet
+## Orchestrator (human-facing) cheat sheet
 
 When the human says…
 
-| User says… | Outer orchestrator does |
+| User says… | Orchestrator does |
 |---|---|
-| "Start step N" | Read todo for step N. Send the workplan prompt to the existing or freshly-spawned coordinator-to-be. |
-| "Build" / "Approved, build it" / "Go" (after workplan review) | Send the build prompt (from the step's todo) to the coordinator. The coordinator takes it from there. |
+| "What do I do to start step N?" / "How do I kick off step N?" (a *meta* question) | Per ORCHESTRATOR § Response style for ambiguous start questions: describe the spawn you'd perform ("I'll spawn `step-NN-coordinator` and send it the workplan-writing prompt — want me to go ahead?"). Do **not** answer "just type 'start step N'" — that hides the spawn and invites silently skipping it. |
+| "Start step N" | Per ORCHESTRATOR § Per-step kickoff: read the step N todo and `docs/roadmap/roadmap.md` § Step N; **spawn a fresh** `step-NN-coordinator` Solo agent (never reuse an existing process — the orchestrator never becomes the coordinator); send the workplan-writing prompt; set an idle timer to wake on workplan completion. |
+| "Build" / "Approved, build it" / "Go" (after workplan review) | Forward "build" to the same coordinator-to-be process you spawned at "start step N" (don't spawn a new one — this is the in-place promotion). The coordinator takes it from there. |
 | "Status" / "Any updates?" / "What's going on?" | `todo_list(tags=["needs-human"], completed=false)` first. Also `get_process_status` on the active coordinator. Surface both. |
 | "Approve option A" (in response to an escalation) | `todo_comment_create` on the escalation todo with the resolution. `todo_remove_tag(needs-human)` on both the escalation todo and the task todo it references. The coordinator's escalation poll picks it up. |
 | "Pause step N" | Send to the coordinator: `"Pause: do not start a new task after the current one finishes. Set a timer to wake on resume."` |
@@ -334,6 +397,7 @@ When the human says…
 
 These are unresolved and worth noting during the pilot run:
 
+- **Orchestrator–coordinator separation.** Step 3 will be the first build to actually run the 3-tier architecture (steps 1 and 2 collapsed orchestrator and coordinator into one process). Does the separation pay for itself? Does the orchestrator have enough to do, or does the extra spawn add latency without value?
 - **Coordinator context drift.** The coordinator's session context grows across many task wake-ups. After ~10 wake-ups, does it still behave correctly, or does it need to compact / re-read scratchpad more aggressively?
 - **Idle-detection false positives.** Is `timer_fire_when_idle_any` reliable as a "task agent done" signal, or do we get false wake-ups from intermediate idle states (waiting for a tool result, etc.)?
 - **Status-check interruption.** When the coordinator interrupts an agent via `send_input` for a status check, does that derail an in-flight task? May need a less intrusive signal.
