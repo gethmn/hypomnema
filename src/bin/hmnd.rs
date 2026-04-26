@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+use hypomnema::api;
 use hypomnema::config::Config;
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::logging::{self, BinaryKind};
@@ -123,6 +124,28 @@ async fn run_daemon(config: Config) -> Result<()> {
         shutdown_rx.clone(),
     ));
 
+    let api_state = api::ApiState {
+        pool: store.pool(),
+        vault: config.vault.0.clone(),
+        outbox_path: outbox_path.clone(),
+    };
+    let app = api::router(api_state);
+
+    let listener = tokio::net::TcpListener::bind(&config.http.bind)
+        .await
+        .with_context(|| format!("binding HTTP server to {}", config.http.bind))?;
+    tracing::info!(bind = %config.http.bind, "hmnd: http server listening");
+
+    let mut http_shutdown = shutdown_rx.clone();
+    let http_handle = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+            let _ = http_shutdown.wait_for(|v| *v).await;
+        });
+        if let Err(e) = server.await {
+            tracing::warn!(error = ?e, "hmnd: http server task ended with error");
+        }
+    });
+
     let _ = shutdown_rx.wait_for(|v| *v).await;
     // Wait for the consumer to finish its drain window before tearing the
     // watcher down so any in-flight events sitting in the channel are still
@@ -132,6 +155,8 @@ async fn run_daemon(config: Config) -> Result<()> {
     // consumer drains. Dropping the debouncer earlier would stop the notify
     // thread mid-drain and leave queued events unprocessed.
     drop(watcher_handle);
+
+    let _ = http_handle.await;
 
     tracing::info!("hmnd: drain complete, exiting cleanly");
     Ok(())
