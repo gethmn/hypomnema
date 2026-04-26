@@ -86,9 +86,13 @@ async fn run_daemon(config: Config) -> Result<()> {
     );
     tracing::debug!(?config, "hmnd: full configuration");
 
-    let store = Store::open(&config.storage.data_dir.0, &config.storage.index_file)
-        .await
-        .context("opening store")?;
+    let store = Store::open(
+        &config.storage.data_dir.0,
+        &config.storage.index_file,
+        &config.embedding,
+    )
+    .await
+    .context("opening store")?;
     let scanner = Scanner::new(&config, &store).context("constructing scanner")?;
     let report = scanner.run().await.context("running initial scan")?;
     tracing::info!(
@@ -163,9 +167,13 @@ async fn run_daemon(config: Config) -> Result<()> {
 }
 
 async fn do_scan(config: &Config) -> Result<ScanReport> {
-    let store = Store::open(&config.storage.data_dir.0, &config.storage.index_file)
-        .await
-        .context("opening store")?;
+    let store = Store::open(
+        &config.storage.data_dir.0,
+        &config.storage.index_file,
+        &config.embedding,
+    )
+    .await
+    .context("opening store")?;
     let scanner = Scanner::new(config, &store).context("constructing scanner")?;
     let report = scanner.run().await.context("running scan")?;
     tracing::info!(

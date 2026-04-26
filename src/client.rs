@@ -102,6 +102,7 @@ mod tests {
 
     use super::*;
     use crate::api::{ApiState, router};
+    use crate::config::EmbeddingConfig;
     use crate::store::Store;
 
     struct TestDaemon {
@@ -124,7 +125,9 @@ mod tests {
     async fn spawn_test_daemon() -> TestDaemon {
         let dir = TempDir::new().unwrap();
         let vault = TempDir::new().unwrap();
-        let store = Store::open(dir.path(), "index.sqlite").await.unwrap();
+        let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
+            .await
+            .unwrap();
         let state = ApiState {
             pool: store.pool(),
             vault: vault.path().to_path_buf(),

@@ -7,6 +7,7 @@ use tokio::task;
 use tower::ServiceExt;
 
 use super::{ApiState, router};
+use crate::config::EmbeddingConfig;
 use crate::store::Store;
 
 // 4 MB is plenty for these test bodies; we set a finite cap to satisfy
@@ -22,7 +23,9 @@ struct Harness {
 async fn harness() -> Harness {
     let dir = TempDir::new().unwrap();
     let vault = TempDir::new().unwrap();
-    let store = Store::open(dir.path(), "index.sqlite").await.unwrap();
+    let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
+        .await
+        .unwrap();
     let state = ApiState {
         pool: store.pool(),
         vault: vault.path().to_path_buf(),

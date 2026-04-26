@@ -196,6 +196,7 @@ fn run_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<ContentResult>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::EmbeddingConfig;
     use crate::store::Store;
     use rusqlite::params;
     use tempfile::tempdir;
@@ -214,7 +215,9 @@ mod tests {
 
     async fn open_store() -> (tempfile::TempDir, Store) {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path(), "index.sqlite").await.unwrap();
+        let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
+            .await
+            .unwrap();
         (dir, store)
     }
 

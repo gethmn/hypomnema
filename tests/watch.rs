@@ -71,9 +71,13 @@ impl Live {
 }
 
 async fn start(fx: &Fixture) -> Live {
-    let store = Store::open(&fx.data_dir, &fx.config.storage.index_file)
-        .await
-        .expect("open store");
+    let store = Store::open(
+        &fx.data_dir,
+        &fx.config.storage.index_file,
+        &fx.config.embedding,
+    )
+    .await
+    .expect("open store");
     let scanner = Scanner::new(&fx.config, &store).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
