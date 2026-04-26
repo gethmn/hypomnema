@@ -107,6 +107,8 @@
 
 ## Step 5 — HTTP filesystem + content search (shipping gate)
 
+**Status**: shipped 2026-04-26 — the v0 shipping gate.
+
 **Goal**: Axum server on `127.0.0.1:7777` exposes `/search/filesystem`, `/search/content`, and `/health`. `hmn search filesystem <glob>` and `hmn search content <query>` hit the daemon and print results. `hmn status` reports daemon reachability and basic index stats.
 
 **Shipping criteria**:
