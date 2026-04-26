@@ -70,6 +70,17 @@ results:
     text: "mtime alone is not enough; compare content hashes…"
 ```
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `score` | float | yes | Cosine similarity in `[0.0, 1.0]` |
+| `file_path` | string | yes | Vault-relative path of the file the chunk came from |
+| `chunk_index` | integer | yes | Ordinal of the chunk within the file |
+| `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
+| `text` | string | yes | The chunk content |
+| `vault` | string | no | Reserved; always absent in v0. Will carry the source vault identifier when multi-vault ships. |
+
+The `vault` field is present in the response shape from step 5 onwards (added when the HTTP filesystem and content endpoints lit up); see [step-5 workplan § Deferred decision 1](../roadmap/step-05-workplan.md#1-multi-vault-forward-compat-vault-field). Semantic search itself ships in step 7; the field is forward-compat scaffolding, always omitted in v0.
+
 ---
 
 ## Edge Cases

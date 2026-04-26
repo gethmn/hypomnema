@@ -45,6 +45,8 @@ max_depth: 3                     # optional
 limit: 100                       # optional, default: 100
 ```
 
+The HTTP endpoint accepts the same fields as a JSON body via `POST /search/filesystem`.
+
 ### Response
 
 ```yaml
@@ -66,6 +68,7 @@ truncated: false
 | `size` | integer | yes | File size in bytes |
 | `mtime` | ISO-8601 string | yes | Last modification time (from filesystem) |
 | `content_hash` | string | yes | `sha256:` hash of file content; primary change-detection signal |
+| `vault` | string | no | Reserved; always absent in v0. Will carry the source vault identifier when multi-vault ships. |
 | `truncated` | boolean | yes | True if results exceeded `limit` |
 
 ---
@@ -84,12 +87,16 @@ Path matching honors the host filesystem's case sensitivity. On macOS's default 
 
 Dotfiles are not filtered unconditionally. Common dotfile directories (`.obsidian/`, `.trash/`, etc.) are matched by the default `ignore_patterns` list and so are not indexed, but they are skipped via config, not hard-coded. See [reference/configuration.md](../reference/configuration.md#watcher) for the defaults.
 
+### Prefix semantics
+
+`prefix` is a path-prefix string match, not a glob. Trailing `/` is normalized — `notes` and `notes/` both match `notes/...` and exclude `notesarchive/...`. Empty `prefix` matches everything. Absolute paths and `..` segments are rejected with `invalid_prefix`. Resolved in step 5; see [step-5 workplan § Deferred decision 4](../roadmap/step-05-workplan.md#4-regex-vs-glob-behavior-boundaries).
+
 ---
 
 ## Open Questions
 
 - [ ] Should symlinks inside the vault be indexed, or just followed for reads?
-- [ ] Do we need a `regex` alternative to `glob`?
+- [ ] Do we need a `regex` alternative to `glob`? — v0 ships glob-only; see [step-5 workplan § Deferred decision 5](../roadmap/step-05-workplan.md#5-regex-alternative-to-glob) — no field added, additive when needed.
 - [ ] Should results include a `frontmatter` summary (title, tags) for quick triage?
 
 ---

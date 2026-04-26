@@ -91,7 +91,7 @@ The directory Hypomnema watches and indexes. Must exist. Must be readable. Hypom
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; v0 does not implement auth. |
+| `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; v0 does not implement auth. Step 5 binds the Axum router on this address; failure to bind is fatal at daemon startup. |
 
 > **Client note**: `hmn` derives its default daemon URL from this binding (e.g. `http://127.0.0.1:7777`). Override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL` — useful when the daemon runs on a different host or port than the local default.
 

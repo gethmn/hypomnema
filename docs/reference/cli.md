@@ -47,6 +47,8 @@ Implemented in step 3; the watcher runs for the daemon's lifetime, debounces fil
 
 After the watcher applies an indexer outcome, the outbox writer appends a JSONL line for each real change. Tail `~/.local/share/hypomnema/outbox.jsonl` to subscribe; see [the change-events spec](../specs/change-events.md) for envelope shape.
 
+Step 5 ships the HTTP server alongside the watcher. `/health` returns 200 OK; `/status` returns a JSON snapshot; `/search/filesystem` and `/search/content` accept POST with a JSON body. See the search specs for shapes.
+
 **Usage**:
 ```
 hmnd [--config PATH] [--rescan] [--mcp-stdio]
@@ -160,6 +162,8 @@ hmn search content "pgvector"
 hmn search semantic "how do we prevent spurious reindexes"
 ```
 
+As of step 5, `hmn search filesystem` and `hmn search content` are functional. `hmn search semantic` continues to print "lands in step 7." Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results.
+
 #### `status`
 
 Report daemon health: is `hmnd` reachable, index size, vault path, last indexed file, outbox size.
@@ -168,6 +172,8 @@ Report daemon health: is `hmnd` reachable, index size, vault path, last indexed 
 ```
 hmn status [--json]
 ```
+
+The output shows the daemon's vault path, indexed file count, last-indexed timestamp (or `—` when the index is empty), and outbox file size. Exit code 4 if the daemon is not reachable.
 
 ### Exit Codes (client)
 

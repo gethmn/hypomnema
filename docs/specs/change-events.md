@@ -60,6 +60,7 @@ Hypomnema offers no push, no webhook, no in-process callback in v0. See the hand
 | `path` | string | yes | Vault-relative path |
 | `content_hash` | string | yes when known (always for create/modify; for delete, the last known hash from the index) | `sha256:` hex of file content |
 | `detected_at` | ISO-8601 string (µs precision, UTC) | yes | When Hypomnema confirmed the change |
+| `vault` | string | no | Reserved; always absent in v0. Will carry the source vault identifier when multi-vault ships. Consumers must accept its absence and tolerate any string value. |
 
 When the daemon has no prior record for a deleted path — a rare race where the watcher reports a delete on a path that was never indexed — the outbox emits no event for it; the schema therefore never expresses delete-without-hash in practice.
 

@@ -28,10 +28,11 @@ File text is stored inside the SQLite store as part of the indexer's work — co
 
 ### Semantics
 
-- Default: case-insensitive substring match
+- Default: case-insensitive substring match (ASCII-folded; Unicode case folding is not applied in v0).
 - Optional: case-sensitive mode
-- Optional: regex mode (syntax TBD; likely Rust's `regex` crate flavor)
+- Optional: regex mode using the Rust `regex` crate's default Unicode flavor. The request's `case_sensitive` flag is ignored when `regex: true`; case-sensitivity is a property of the pattern (`(?i)foo`).
 - A file matches if it contains at least one occurrence of the query
+- Phrase searches span line boundaries — the matcher operates over the file's full byte content, not per-line. See [step-5 workplan § Deferred decision 3](../roadmap/step-05-workplan.md#3-phrase-search-across-line-boundaries).
 
 ---
 
@@ -63,6 +64,14 @@ results:
 truncated: false
 ```
 
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | string | yes | Vault-relative path |
+| `match_count` | integer | yes | Total matches in the file (may exceed `matches.len()` when `max_matches_per_file` truncates) |
+| `matches` | array | no | Per-line match details when `include_matches: true`; omitted otherwise |
+| `vault` | string | no | Reserved; always absent in v0. Will carry the source vault identifier when multi-vault ships. |
+| `truncated` | boolean | yes | True if results exceeded `limit` |
+
 ---
 
 ## Edge Cases
@@ -79,11 +88,15 @@ If `limit` is exceeded, results are truncated and `truncated: true` is set. No p
 
 Rust's `regex` crate does not support backreferences and has linear-time matching, so pathological patterns are not a v0 DoS concern.
 
+### Lossy UTF-8
+
+Invalid UTF-8 byte sequences in file bodies are decoded with `String::from_utf8_lossy` before storage (replacement char `U+FFFD` substituted in). Matches against the lossy form are still surfaced — vault hygiene problems become searchable-but-noisy rather than indexer crashes. The `content_hash` continues to be computed over the raw bytes; lossy decode is a storage-side concern only.
+
 ---
 
 ## Open Questions
 
-- [ ] Should we support phrase search across line boundaries? (Probably yes — Markdown prose wraps.)
+- [x] Should we support phrase search across line boundaries? (Probably yes — Markdown prose wraps.) — Resolved in step 5 as line-agnostic matching. See [step-5 workplan § Deferred decision 3](../roadmap/step-05-workplan.md#3-phrase-search-across-line-boundaries).
 - [ ] Should frontmatter-only matches be distinguishable from body matches?
 
 ---

@@ -130,6 +130,8 @@ All three operations are exposed identically over HTTP (Axum) and MCP (rmcp). Th
 
 The same SQL/vector query code backs both transports — transport is a thin layer over operations, not a fork.
 
+Step 5 ships the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). The two search responses and the outbox envelope each carry an optional `vault` field, omitted in v0, reserved for forward-compat with multi-vault; `/health` and `/status` are daemon-scoped and do not.
+
 ### Outbox Writer
 
 Each real change (file created, modified, deleted) produces one JSONL line in the outbox. Minimum envelope: `{event_type, path, content_hash, detected_at}`. The outbox lives in the daemon's data directory, never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md).
@@ -155,7 +157,7 @@ Consumers subscribe by tailing the file. There is no push notification mechanism
 
 | Direction | Endpoint | Purpose |
 |-----------|----------|---------|
-| Inbound | HTTP `/search/*` endpoints (default `127.0.0.1:7777`) | Human and script consumers |
+| Inbound | HTTP `/health`, `/status`, `/search/filesystem`, `/search/content` (default `127.0.0.1:7777`) | Human and script consumers |
 | Inbound | MCP transport (stdio or socket, TBD) | Agent consumers |
 | Outbound | Embedding service HTTP | Produce vectors for chunks and queries |
 | Outbound | Outbox file (local filesystem) | Publish change events |
