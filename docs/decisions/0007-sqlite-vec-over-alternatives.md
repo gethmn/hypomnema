@@ -57,4 +57,10 @@ Ship as: the Hypomnema binary, plus the sqlite-vec extension (`.so` / `.dylib` /
 
 ## Amendments
 
-<!-- None yet -->
+### 2026-04-26 — distance metric is also schema-baked (additive)
+
+The original Decision pinned the *vector dimension* (`768` for `nomic-embed-text-v1.5`) at schema-creation time. Step 7's migration 0004 extends the same shape to the **distance metric**: `chunks_vec` is created with the explicit `distance_metric=cosine` clause, so the metric the kNN MATCH operator uses is fixed by the schema rather than inherited from upstream defaults or implied by an external embedding-service configuration. This is additive to — not in tension with — the original "dimension is schema-level" claim.
+
+The motivation: sqlite-vec's vec0 default distance metric is L2. L2 distance and cosine similarity coincide *only* for unit-normalized vectors, and whether the embedding service returns unit-normalized vectors depends on its pooling/normalization configuration, which is outside the daemon's control. Schema-baking `cosine` makes the contract correct regardless of how the embedding service is configured. Score conversion at query time pins to `score = 1.0 - (vec0_distance / 2.0)`, clamped to `[0.0, 1.0]` (see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Response).
+
+The cost — re-indexing existing populated DBs at next daemon start — is covered by clearing `files.content_hash` in the same migration, which causes the watcher's existing rebuild path to re-read, re-chunk, and re-embed every file with no operator action. See [step-7 workplan § Resolution F](../roadmap/step-07-workplan.md#f-cosine-distance-metric-for-chunks_vec-migration-0004) for the full rationale and the alternative (query-time L2-to-cosine conversion) that was rejected.

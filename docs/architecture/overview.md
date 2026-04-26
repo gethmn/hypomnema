@@ -170,7 +170,7 @@ Three responsibilities, run on each changed file:
 
 Vec0 virtual tables do not update gracefully — the indexer *deletes and reinserts* all chunks for a file when the content hash changes.
 
-Step 6 shipped this path. The vec0 dimension is baked at schema-creation time (currently `768`); a config↔schema mismatch fails the daemon at startup with a structured error. At index time, embedding-service unavailability — transport error, HTTP `5xx`, or a wrong-dimension response — skips that file's chunks, logs an `ERROR`, and leaves `files.content_hash` unadvanced so the next watcher event or rescan retries; the daemon stays responsive throughout. See [`docs/reference/configuration.md`](../reference/configuration.md#embedding) for the embedding knobs and [`docs/specs/semantic-search.md`](../specs/semantic-search.md) for the query-time surface (lands in step 7).
+Step 6 shipped this path. The vec0 dimension is baked at schema-creation time (currently `768`); the *distance metric* is also schema-baked as `cosine` (migration 0004 in step 7; see [ADR-0007 § Amendments](../decisions/0007-sqlite-vec-over-alternatives.md#amendments)). A config↔schema mismatch fails the daemon at startup with a structured error. At index time, embedding-service unavailability — transport error, HTTP `5xx`, or a wrong-dimension response — skips that file's chunks, logs an `ERROR`, and leaves `files.content_hash` unadvanced so the next watcher event or rescan retries; the daemon stays responsive throughout. See [`docs/reference/configuration.md`](../reference/configuration.md#embedding) for the embedding knobs and [`docs/specs/semantic-search.md`](../specs/semantic-search.md) for the query-time surface.
 
 ### Search API
 
@@ -179,6 +179,8 @@ All three operations are exposed identically over HTTP (Axum) and MCP (rmcp). Th
 The same SQL/vector query code backs both transports — transport is a thin layer over operations, not a fork.
 
 Step 5 shipped the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). The two search responses each carry an optional per-result `vault` field — populated with the surrogate vault ID once multi-vault implementation lands (round 3); v0 omits. Search responses additionally carry an optional per-result `vault_name?: string` for display ergonomics; this field is point-in-time and never appears in the outbox (outbox events carry `vault` ID only — names rot, the durable log doesn't). `/health` is daemon-scoped; `/status` returns a `vaults: [{...}]` array under the multi-vault model. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md).
+
+Step 7 shipped the third route: `POST /search/semantic`. The handler embeds the natural-language query via the same local embedding client the indexer uses, runs a kNN MATCH against `chunks_vec`, and returns a top-level envelope of `{ results, hint? }` per [`docs/specs/semantic-search.md`](../specs/semantic-search.md). Embedding-service failures at query time (transport error, HTTP 5xx, or a vector whose dimension disagrees with the schema) are mapped to a new error envelope code `embedding_unavailable` (HTTP 503) — the daemon never crashes due to embedding-service issues, anywhere in the runtime. See [step-6 workplan § Build-time amendment 3](../roadmap/step-06-workplan.md) for the load-bearing precedent at index time and [step-7 workplan § Resolution E](../roadmap/step-07-workplan.md#e-error-envelope-code-for-embedding-service-unavailable) for the query-time complement.
 
 ### Outbox Writer
 
@@ -205,7 +207,7 @@ Consumers subscribe by tailing the per-vault file. The outbox `vault` field carr
 
 | Direction | Endpoint | Purpose |
 |-----------|----------|---------|
-| Inbound | HTTP `/health`, `/status`, `/search/filesystem`, `/search/content` (default `127.0.0.1:7777`) | Human and script consumers |
+| Inbound | HTTP `/health`, `/status`, `/search/filesystem`, `/search/content`, `/search/semantic` (default `127.0.0.1:7777`) | Human and script consumers |
 | Inbound | HTTP `POST /vaults`, `GET /vaults`, `GET /vaults/{id}`, `POST /vaults/{id}/{op}`, `DELETE /vaults/{id}` | Vault lifecycle control plane |
 | Inbound | MCP transport (stdio or socket, TBD) | Agent consumers (search + vault management) |
 | Outbound | Embedding service HTTP | Produce vectors for chunks and queries |

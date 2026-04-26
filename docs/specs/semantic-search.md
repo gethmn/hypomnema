@@ -56,6 +56,10 @@ prefix: "notes/"                # optional; restrict to a subdirectory
 min_similarity: 0.3             # optional; default 0.0
 ```
 
+**Request validation**:
+
+- `min_similarity`: clamped to `[0.0, 1.0]` after deserialization. Negative values are clamped to `0.0`; values greater than `1.0` to `1.0`. Filtering happens *after* the kNN match — consumers see at most `limit` results, possibly fewer if `min_similarity` removes some.
+
 ### Response
 
 ```yaml
@@ -70,11 +74,21 @@ results:
     chunk_index: 2
     heading_path: ["Change detection"]
     text: "mtime alone is not enough; compare content hashes…"
+# `hint` omitted when results are populated; see § Edge Cases — Empty index.
 ```
+
+**Top-level envelope**:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `score` | float | yes | Cosine similarity in `[0.0, 1.0]` |
+| `results` | array | yes | Per-result objects (shape below). Empty array if no matches or if the index has no chunks yet. |
+| `hint` | string | no | Diagnostic hint about index state. Present as `"semantic index is building"` when `chunks_vec` has zero rows but `files` has at least one row — see [§ Edge Cases — Empty index](#empty-index). Omitted in every other case (no false signal of in-progress indexing for honest "no matches" results). |
+
+**Per-result fields**:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `score` | float | yes | Cosine similarity in `[0.0, 1.0]`. Conversion formula below. |
 | `file_path` | string | yes | Vault-relative path of the file the chunk came from |
 | `chunk_index` | integer | yes | Ordinal of the chunk within the file |
 | `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
@@ -83,13 +97,21 @@ results:
 
 The `vault` field is present in the response shape from step 5 onwards (added when the HTTP filesystem and content endpoints lit up); see [step-5 workplan § Deferred decision 1](../roadmap/step-05-workplan.md#1-multi-vault-forward-compat-vault-field). Semantic search itself ships in step 7; the field is forward-compat scaffolding, always omitted in v0.
 
+**Score conversion**: `score = 1.0 - (vec0_distance / 2.0)`, clamped to `[0.0, 1.0]`. The `chunks_vec` virtual table is created with `distance_metric=cosine` (schema-baked at migration 0004; see [ADR-0007 § Amendments](../decisions/0007-sqlite-vec-over-alternatives.md#amendments)), so `vec0_distance` is `1 − cos_sim` and ranges over `[0, 2]`. Identical vectors yield `score = 1.0` (distance `0`); orthogonal vectors yield `0.5` (distance `1`, `cos_sim = 0`); opposite vectors yield `0.0` (distance `2`, `cos_sim = −1`). The clamp is a defensive guard against floating-point edge cases at the endpoints.
+
 ---
 
 ## Edge Cases
 
 ### Empty index
 
-If no chunks have been embedded yet (fresh start), return empty results and a hint that the semantic index is building.
+The hint discriminates "indexing in progress" from "no matches" by counting `chunks_vec` rows against `files` rows after a kNN that returns zero results:
+
+| `chunks_vec` rows | `files` rows | Response |
+|-------------------|--------------|----------|
+| `0` | `≥ 1` | Empty `results` + `hint: "semantic index is building"` (chunks haven't been embedded for the existing files yet — fresh boot before scan, in-progress indexer, or an embedding-service outage during the initial scan). |
+| `0` | `0` | Empty `results`, no `hint` (empty vault — no progress signal is meaningful when there's nothing to index). |
+| `≥ 1` | any | Empty `results`, no `hint` (honest "your query had no matches" — would be misleading to suggest indexing is incomplete). |
 
 ### Embedding service unavailable
 

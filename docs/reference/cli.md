@@ -155,7 +155,21 @@ hmn search semantic "how do we prevent spurious reindexes"
 hmn search content "pgvector" --vaults personal,work
 ```
 
-As of step 5, `hmn search filesystem` and `hmn search content` are functional. `hmn search semantic` continues to print "lands in step 7." Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
+As of step 7, all three modes — `hmn search filesystem`, `hmn search content`, and `hmn search semantic` — are functional. Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each filesystem/content result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
+
+`hmn search semantic` text-mode output renders one block per result: a leading `<file_path>  (score: N.NN)` line (cosine similarity in `[0.0, 1.0]`, two decimals), the slash-joined heading path on its own indented `> …` line (omitted when every heading segment is empty), and the chunk text on a final indented line. Example:
+
+```
+notes/tools/hypomnema.md  (score: 0.82)
+  > Pitfalls / Sync conflicts
+  Syncthing and Dropbox write files in bursts…
+
+notes/design/watchers.md  (score: 0.71)
+  > Change detection
+  mtime alone is not enough; compare content hashes…
+```
+
+When the daemon's response carries a top-level `hint` (e.g. `"semantic index is building"` — see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Empty index), the CLI prints it on its own line, parenthesized: `(semantic index is building)`. The hint appears after the result blocks if both are present; in the empty-index case the hint stands alone. When the embedding service is unreachable or returns an unexpected dimension at query time, the daemon returns HTTP 503 with envelope code `embedding_unavailable`; the CLI surfaces the message and exits non-zero.
 
 > **Note**: Detailed cross-vault search semantics — result ordering across vaults, pagination across N independent indexes, fan-out execution model, partial-failure handling, treatment of paused/errored vaults — are deferred to the round-3 workplan. See [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions). The wire shapes (per-result `vault` + `vault_name`, request-side `vaults` filter) are forward-compat with any resolution.
 
