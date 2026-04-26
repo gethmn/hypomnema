@@ -42,6 +42,8 @@
 
 ## Step 7 — Semantic search
 
+**Status**: shipped 2026-04-26. See [`step-07-workplan.md`](./step-07-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 7 for the retrospective.
+
 **Goal**: Axum exposes `/search/semantic` with the response shape from [`docs/specs/semantic-search.md`](../specs/semantic-search.md). The handler embeds the query via the same embedding service, runs a `chunks_vec` nearest-neighbor query (cosine similarity), joins back to `chunks` for path / heading / text metadata, and returns the top-N results. `hmn search semantic <query>` lights up.
 
 **Shipping criteria**:
