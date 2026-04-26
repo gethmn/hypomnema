@@ -1,0 +1,111 @@
+use chrono::{SecondsFormat, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChangeEvent {
+    pub event_type: EventType,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    pub detected_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EventType {
+    Created,
+    Modified,
+    Deleted,
+}
+
+impl ChangeEvent {
+    pub fn now(event_type: EventType, path: String, content_hash: Option<String>) -> Self {
+        Self {
+            event_type,
+            path,
+            content_hash,
+            detected_at: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::DateTime;
+
+    #[test]
+    fn event_type_serializes_with_lowercase_discriminants() {
+        assert_eq!(
+            serde_json::to_string(&EventType::Created).unwrap(),
+            "\"created\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EventType::Modified).unwrap(),
+            "\"modified\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EventType::Deleted).unwrap(),
+            "\"deleted\""
+        );
+    }
+
+    #[test]
+    fn event_type_round_trips_through_serde_json() {
+        for variant in [EventType::Created, EventType::Modified, EventType::Deleted] {
+            let s = serde_json::to_string(&variant).unwrap();
+            let back: EventType = serde_json::from_str(&s).unwrap();
+            assert_eq!(variant, back);
+        }
+    }
+
+    #[test]
+    fn content_hash_some_serializes_field() {
+        let ev = ChangeEvent {
+            event_type: EventType::Modified,
+            path: "notes/a.md".to_string(),
+            content_hash: Some("sha256:abc".to_string()),
+            detected_at: "2026-04-25T00:00:00.000000Z".to_string(),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"content_hash\":\"sha256:abc\""), "got: {s}");
+    }
+
+    #[test]
+    fn content_hash_none_is_omitted_not_null() {
+        let ev = ChangeEvent {
+            event_type: EventType::Deleted,
+            path: "notes/a.md".to_string(),
+            content_hash: None,
+            detected_at: "2026-04-25T00:00:00.000000Z".to_string(),
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(
+            !s.contains("content_hash"),
+            "field should be omitted, got: {s}"
+        );
+        assert!(!s.contains("null"), "no null sentinel, got: {s}");
+    }
+
+    #[test]
+    fn change_event_round_trips_for_all_event_types() {
+        for variant in [EventType::Created, EventType::Modified, EventType::Deleted] {
+            let ev = ChangeEvent {
+                event_type: variant,
+                path: "notes/a.md".to_string(),
+                content_hash: Some("sha256:deadbeef".to_string()),
+                detected_at: "2026-04-25T12:34:56.789012Z".to_string(),
+            };
+            let s = serde_json::to_string(&ev).unwrap();
+            let back: ChangeEvent = serde_json::from_str(&s).unwrap();
+            assert_eq!(ev, back);
+        }
+    }
+
+    #[test]
+    fn now_produces_rfc3339_parseable_detected_at() {
+        let ev = ChangeEvent::now(EventType::Created, "notes/a.md".to_string(), None);
+        DateTime::parse_from_rfc3339(&ev.detected_at)
+            .unwrap_or_else(|e| panic!("detected_at not RFC3339: {} ({e})", ev.detected_at));
+    }
+}

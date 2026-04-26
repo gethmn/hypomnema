@@ -7,6 +7,7 @@ pub mod cli;
 pub mod config;
 pub mod indexer;
 pub mod logging;
+pub mod outbox;
 pub mod shutdown;
 pub mod store;
 pub mod watcher;
