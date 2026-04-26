@@ -244,9 +244,11 @@ impl Scanner {
     ///     row update and the `chunks`/`chunks_vec` rewrite, so a crash
     ///     between phases leaves the database consistent.
     ///
-    /// On `EmbeddingError::Transport(_)` or `Status { code: 500..=599, .. }`,
-    /// log ERROR and return `HashUnchanged` without advancing
-    /// `files.content_hash` — see workplan § Resolution 1.
+    /// On `EmbeddingError::Transport(_)`, `Status { code: 500..=599, .. }`,
+    /// or `DimensionMismatch { .. }`, log ERROR and return `HashUnchanged`
+    /// without advancing `files.content_hash` — see workplan § Resolution 1
+    /// and pre-build directive 3 (service-up-with-wrong-dim must not crash
+    /// the daemon at runtime).
     async fn process_entry(
         &self,
         rel: String,
@@ -294,7 +296,8 @@ impl Scanner {
                 Err(EmbeddingError::Transport(_))
                 | Err(EmbeddingError::Status {
                     code: 500..=599, ..
-                }) => {
+                })
+                | Err(EmbeddingError::DimensionMismatch { .. }) => {
                     error!(
                         path = %rel,
                         chunk_index = chunk.chunk_index,
@@ -557,6 +560,38 @@ mod tests {
                 Err(EmbeddingError::Status {
                     code: 503,
                     body: "service unavailable (test stub)".to_string(),
+                })
+            })
+        }
+    }
+
+    /// Embedder that always returns `EmbeddingError::DimensionMismatch`.
+    /// Models a service that is reachable but returns vectors with the
+    /// wrong dimension (e.g. configured against a different model than
+    /// the schema expects); per directive 3 this must skip-and-log, not
+    /// crash the daemon.
+    struct AlwaysDimensionMismatchEmbedder {
+        calls: AtomicUsize,
+    }
+
+    impl AlwaysDimensionMismatchEmbedder {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: AtomicUsize::new(0),
+            })
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Embedder for AlwaysDimensionMismatchEmbedder {
+        fn embed_text<'a>(&'a self, _text: &'a str) -> EmbedFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Err(EmbeddingError::DimensionMismatch {
+                    expected: 768,
+                    actual: 4,
                 })
             })
         }
@@ -1179,6 +1214,41 @@ mod tests {
             read_hash_optional(&store, "note.md").await,
             None,
             "files.content_hash must not advance on embedding skip"
+        );
+        assert_eq!(count_chunks_for(&store, "note.md").await, 0);
+        assert_eq!(count_chunks_vec(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn reindex_skips_on_embedding_dimension_mismatch() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::write(vault_dir.path().join("note.md"), b"# A\n\nbody.\n").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
+            .await
+            .unwrap();
+        let failing = AlwaysDimensionMismatchEmbedder::new();
+        let scanner = Scanner::new(&config, &store, failing.clone() as Arc<dyn Embedder>).unwrap();
+
+        let outcome = scanner.reindex_path("note.md").await.unwrap();
+        assert_eq!(
+            outcome,
+            ReindexOutcome::HashUnchanged,
+            "dimension-mismatch must yield HashUnchanged (no advance)"
+        );
+        assert!(
+            failing.calls() >= 1,
+            "embedder should have been invoked at least once before the skip"
+        );
+
+        // No advance of files.content_hash — here, no `files` row at all,
+        // since the file was new and the write tx never committed.
+        assert_eq!(
+            read_hash_optional(&store, "note.md").await,
+            None,
+            "files.content_hash must not advance on dimension-mismatch skip"
         );
         assert_eq!(count_chunks_for(&store, "note.md").await, 0);
         assert_eq!(count_chunks_vec(&store).await, 0);
