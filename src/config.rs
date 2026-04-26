@@ -163,7 +163,7 @@ impl Default for WatcherConfig {
 }
 
 fn default_debounce_ms() -> u64 {
-    400
+    500
 }
 
 fn default_ignore_patterns() -> Vec<String> {

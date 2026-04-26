@@ -53,7 +53,7 @@ api_key = ""   # empty for local services that don't require one
 # Watcher tuning
 # The watcher only considers .md files; ignore_patterns further excludes matches within that set.
 [watcher]
-debounce_ms = 400
+debounce_ms = 500
 ignore_patterns = [
   ".git/**",
   ".obsidian/**",
@@ -125,8 +125,10 @@ See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-00
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `debounce_ms` | integer | no | `400` | Coalescing window for `notify-debouncer-full`. Too short → event storms slip through; too long → user-visible indexing lag |
+| `debounce_ms` | integer | no | `500` | Coalescing window for `notify-debouncer-full`. Too short → event storms slip through; too long → user-visible indexing lag |
 | `ignore_patterns` | list of glob strings | no | (sensible defaults for Git, Obsidian, Dropbox, Syncthing conflict files, tmp files) | Files matching any pattern are not indexed and do not appear in search. Defaults cover common dotfile directories (`.git/**`, `.obsidian/**`, `.trash/**`), sync-tool conflict files (Obsidian / Dropbox / Syncthing), and tmp-file extensions. No paths are filtered outside `ignore_patterns`; edit the list to change behavior. |
+
+Sync tools that burst-write across more than the debounce window may justify `debounce_ms = 1000` or `2000`; do not raise it speculatively — the watcher logs backpressure, raise it when you see those logs.
 
 > **Future direction (not v0):** honor `.gitignore` / `.dockerignore` when present; add a Mutagen-style `ignore_vcs_files` flag. See [product/vision.md#open-questions](../product/vision.md#open-questions).
 

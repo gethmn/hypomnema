@@ -52,7 +52,7 @@ fn default_round_trip() {
     assert_eq!(config.embedding.model, "nomic-embed-text-v1.5");
     assert_eq!(config.embedding.dimension, 768);
     assert_eq!(config.embedding.api_key, "");
-    assert_eq!(config.watcher.debounce_ms, 400);
+    assert_eq!(config.watcher.debounce_ms, 500);
     assert!(
         config
             .watcher
@@ -252,7 +252,7 @@ fn compiled_ignores_matches_defaults() {
 #[test]
 fn compiled_ignores_reports_offending_pattern() {
     let cfg = WatcherConfig {
-        debounce_ms: 400,
+        debounce_ms: 500,
         ignore_patterns: vec!["valid/**".to_string(), "[".to_string()],
     };
 

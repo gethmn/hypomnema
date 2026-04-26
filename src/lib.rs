@@ -9,3 +9,4 @@ pub mod indexer;
 pub mod logging;
 pub mod shutdown;
 pub mod store;
+pub mod watcher;
