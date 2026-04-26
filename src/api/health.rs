@@ -1,6 +1,9 @@
 use axum::{Json, response::IntoResponse};
-use serde_json::json;
+
+use super::types::HealthResponse;
 
 pub(crate) async fn health() -> impl IntoResponse {
-    Json(json!({ "status": "ok" }))
+    Json(HealthResponse {
+        status: "ok".to_string(),
+    })
 }
