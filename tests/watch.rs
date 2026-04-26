@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use hypomnema::config::Config;
 use hypomnema::indexer::Scanner;
+use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
 use hypomnema::watcher::{self, Watcher};
 use rusqlite::{Connection, OpenFlags};
@@ -89,8 +90,11 @@ async fn start(fx: &Fixture) -> Live {
     )
     .expect("spawn watcher");
 
+    let outbox = Outbox::open(fx.data_dir.join("outbox.jsonl"))
+        .await
+        .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, shutdown_rx));
+    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, outbox, shutdown_rx));
 
     Live {
         watcher,

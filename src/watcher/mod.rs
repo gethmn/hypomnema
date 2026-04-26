@@ -43,7 +43,8 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
-use crate::indexer::{ReindexOutcome, Scanner};
+use crate::indexer::{ReindexOutcome, RemoveOutcome, Scanner};
+use crate::outbox::{ChangeEvent, EventType, Outbox};
 use translate::{TranslateCtx, translate};
 
 const BACKPRESSURE_WARN_EVERY: usize = 64;
@@ -145,12 +146,13 @@ pub fn spawn_watcher(
 pub async fn run_consumer(
     mut rx: mpsc::Receiver<WatchEvent>,
     scanner: Scanner,
+    outbox: Outbox,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     // Honour the initial value too — if shutdown already fired before we
     // started polling, drain and exit without waiting for another change.
     if *shutdown_rx.borrow() {
-        drain_remaining(&mut rx, &scanner).await;
+        drain_remaining(&mut rx, &scanner, &outbox).await;
         return;
     }
     loop {
@@ -160,13 +162,13 @@ pub async fn run_consumer(
                 // Either a new value or the sender was dropped; in both
                 // cases the right move is to drain and exit.
                 if res.is_err() || *shutdown_rx.borrow() {
-                    drain_remaining(&mut rx, &scanner).await;
+                    drain_remaining(&mut rx, &scanner, &outbox).await;
                     break;
                 }
             }
             event = rx.recv() => {
                 match event {
-                    Some(ev) => apply_event(ev, &scanner).await,
+                    Some(ev) => apply_event(ev, &scanner, &outbox).await,
                     None => break,
                 }
             }
@@ -174,28 +176,41 @@ pub async fn run_consumer(
     }
 }
 
-async fn drain_remaining(rx: &mut mpsc::Receiver<WatchEvent>, scanner: &Scanner) {
+async fn drain_remaining(rx: &mut mpsc::Receiver<WatchEvent>, scanner: &Scanner, outbox: &Outbox) {
     let deadline = Instant::now() + DRAIN_TIMEOUT;
     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match timeout(remaining, rx.recv()).await {
-            Ok(Some(ev)) => apply_event(ev, scanner).await,
+            Ok(Some(ev)) => apply_event(ev, scanner, outbox).await,
             Ok(None) | Err(_) => break,
         }
     }
 }
 
-async fn apply_event(ev: WatchEvent, scanner: &Scanner) {
+// Order matters: the index update happens first, the outbox append second.
+// A failed outbox append logs `warn` and the consumer continues — the index
+// is already updated; the outbox simply has a missing line for that one
+// event. We do not roll back the index on outbox failure (see
+// docs/specs/change-events.md § Edge Cases).
+async fn apply_event(ev: WatchEvent, scanner: &Scanner, outbox: &Outbox) {
     match ev {
         WatchEvent::Upsert(rel) => match scanner.reindex_path(&rel).await {
+            Ok(ReindexOutcome::Inserted { content_hash }) => {
+                emit(outbox, EventType::Created, rel, Some(content_hash)).await;
+            }
+            Ok(ReindexOutcome::Updated { content_hash }) => {
+                emit(outbox, EventType::Modified, rel, Some(content_hash)).await;
+            }
+            Ok(ReindexOutcome::HashUnchanged) => {}
             Ok(ReindexOutcome::MissingFromDisk) => {
                 tracing::warn!(
                     rel,
                     "watcher: file missing on reindex; following up with remove"
                 );
                 match scanner.remove_path(&rel).await {
-                    Ok(outcome) => {
-                        tracing::debug!(rel, ?outcome, "watcher: remove follow-up complete")
+                    Ok(RemoveOutcome::Removed { previous_hash }) => {
+                        emit(outbox, EventType::Deleted, rel, Some(previous_hash)).await;
                     }
+                    Ok(RemoveOutcome::NotPresent) => {}
                     Err(e) => tracing::warn!(
                         rel,
                         error = ?e,
@@ -203,12 +218,21 @@ async fn apply_event(ev: WatchEvent, scanner: &Scanner) {
                     ),
                 }
             }
-            Ok(outcome) => tracing::debug!(rel, ?outcome, "watcher: upsert applied"),
             Err(e) => tracing::warn!(rel, error = ?e, "watcher: upsert failed"),
         },
         WatchEvent::Remove(rel) => match scanner.remove_path(&rel).await {
-            Ok(outcome) => tracing::debug!(rel, ?outcome, "watcher: remove applied"),
+            Ok(RemoveOutcome::Removed { previous_hash }) => {
+                emit(outbox, EventType::Deleted, rel, Some(previous_hash)).await;
+            }
+            Ok(RemoveOutcome::NotPresent) => {}
             Err(e) => tracing::warn!(rel, error = ?e, "watcher: remove failed"),
         },
+    }
+}
+
+async fn emit(outbox: &Outbox, event_type: EventType, rel: String, hash: Option<String>) {
+    let ev = ChangeEvent::now(event_type, rel.clone(), hash);
+    if let Err(e) = outbox.append(ev).await {
+        tracing::warn!(rel, error = ?e, "watcher: outbox append failed");
     }
 }

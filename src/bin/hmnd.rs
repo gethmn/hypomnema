@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use hypomnema::config::Config;
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::logging::{self, BinaryKind};
+use hypomnema::outbox::Outbox;
 use hypomnema::shutdown;
 use hypomnema::store::Store;
 use hypomnema::watcher;
@@ -72,9 +73,11 @@ async fn dispatch(command: Option<Command>, config: Config) -> Result<()> {
 
 async fn run_daemon(config: Config) -> Result<()> {
     let pid = std::process::id();
+    let outbox_path = config.storage.data_dir.0.join(&config.storage.outbox_file);
     tracing::info!(
         vault = %config.vault.0.display(),
         data_dir = %config.storage.data_dir.0.display(),
+        outbox = %outbox_path.display(),
         http_bind = %config.http.bind,
         debounce_ms = %config.watcher.debounce_ms,
         pid,
@@ -96,6 +99,10 @@ async fn run_daemon(config: Config) -> Result<()> {
         report.duration.as_secs_f64()
     );
 
+    let outbox = Outbox::open(outbox_path.clone())
+        .await
+        .context("opening outbox")?;
+
     let ignores = config
         .watcher
         .compiled_ignores()
@@ -109,7 +116,12 @@ async fn run_daemon(config: Config) -> Result<()> {
     .context("spawning watcher")?;
 
     let mut shutdown_rx = shutdown::install();
-    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, shutdown_rx.clone()));
+    let consumer = tokio::spawn(watcher::run_consumer(
+        rx,
+        scanner,
+        outbox,
+        shutdown_rx.clone(),
+    ));
 
     let _ = shutdown_rx.wait_for(|v| *v).await;
     // Wait for the consumer to finish its drain window before tearing the
