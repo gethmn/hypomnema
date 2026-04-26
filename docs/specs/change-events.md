@@ -24,7 +24,7 @@ Hypomnema emits a durable stream of change events so consumers can react to vaul
 2. Debouncer coalesces the event storm around a single logical save
 3. Indexer computes the new content hash and compares against the stored hash
 4. *Only if the hash changed* does the indexer emit an event to the outbox
-5. The outbox writer appends one JSON line and fsyncs (TBD: fsync-every vs fsync-periodic)
+5. The outbox writer appends one JSON line and fsyncs per event (resolved in step 4 as per-event `sync_data`; see line 97).
 
 This content-hash gate is the primary defense against editor-save noise and sync-tool mtime churn. An agent tailing the outbox sees only real changes, not every save-triggered filesystem event.
 
