@@ -1,7 +1,7 @@
 # Hypomnema: Architecture Overview
 
-**Version**: 0.1.0
-**Date**: 2026-04-23
+**Version**: 0.2.0
+**Date**: 2026-04-26
 **Status**: Draft
 
 ---
@@ -10,7 +10,7 @@
 
 ### Overview
 
-Hypomnema is a local daemon process. It reads one user-owned directory of Markdown files (the *vault*), maintains three indexes over that content (filesystem, content, semantic), and exposes search and subscription operations to consumers over HTTP and MCP. All state the daemon maintains — index, event log, config, logs — lives outside the watched directory in the daemon's own data directory.
+Hypomnema is a local daemon process. It reads one or more user-owned directories of Markdown files (*vaults*), maintains three indexes per vault (filesystem, content, semantic), and exposes search and subscription operations to consumers over HTTP and MCP. Vaults are runtime state — they are added, paused, and removed via a control-plane API ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) — not configured at startup. All state the daemon maintains — vault registry, per-vault indexes, per-vault event logs, daemon config, logs — lives outside the watched directories in the daemon's own data directory.
 
 ### Context Diagram
 
@@ -20,16 +20,17 @@ Hypomnema is a local daemon process. It reads one user-owned directory of Markdo
 │                                                                      │
 │   ┌──────────────┐        ┌──────────────────┐    ┌──────────────┐  │
 │   │ AI Agents    │◄──MCP─►│                  │    │ Watched      │  │
-│   │ (Iris,       │        │                  │───►│ Vault        │  │
+│   │ (Iris,       │        │                  │───►│ Vaults       │  │
 │   │  Claude Code)│        │                  │read│ (Markdown)   │  │
 │   └──────────────┘        │                  │    └──────────────┘  │
 │                           │   Hypomnema      │                      │
 │   ┌──────────────┐        │   Daemon         │    ┌──────────────┐  │
-│   │ HTTP clients,│◄─HTTP─►│   (hmn)          │    │ Daemon Data  │  │
+│   │ HTTP clients,│◄─HTTP─►│   (hmnd)         │    │ Daemon Data  │  │
 │   │ hmn CLI      │        │                  │───►│ Dir          │  │
-│   └──────────────┘        │                  │r/w │ (index +     │  │
-│                           │                  │    │  outbox +    │  │
-│                           │                  │    │  logs)       │  │
+│   └──────────────┘        │                  │r/w │ (vaults.     │  │
+│                           │                  │    │  sqlite +    │  │
+│                           │                  │    │  per-vault   │  │
+│                           │                  │    │  state)      │  │
 │                           └─────────┬────────┘    └──────────────┘  │
 │                                     │                                │
 │                                     ▼                                │
@@ -48,7 +49,7 @@ Hypomnema is a local daemon process. It reads one user-owned directory of Markdo
 |--------|---------|----------|
 | Embedding service (TEI / vLLM / anything OpenAI-API-shaped) | Produce 768-dim vectors for chunks and queries | HTTP (OpenAI-compatible) |
 | sqlite-vec extension | Vector similarity search via SQLite | Dynamic library loaded in-process |
-| Watched vault directory | Source of indexed content | Filesystem (read-only) |
+| Watched vault directories | Source of indexed content; one or more per daemon | Filesystem (read-only) |
 
 ### Consumers
 
@@ -56,12 +57,12 @@ Hypomnema has no awareness of its consumers. It exposes the same operations to a
 
 | Consumer | Transport | Notes |
 |----------|-----------|-------|
-| AI agents (Iris, Claude Code, others) | MCP | Primary consumer shape |
+| AI agents (Iris, Claude Code, others) | MCP | Primary consumer shape; search and vault-management tools |
 | HTTP clients, skills.sh packages, ad-hoc scripts | HTTP | Same operations as MCP |
-| `hmn` CLI | Calls the HTTP endpoint locally | Thin wrapper for humans |
-| Event subscribers | Tail the JSONL outbox | No push, consumers poll the file |
+| `hmn` CLI | Calls the HTTP endpoint locally | Thin wrapper for humans; covers search, status, **and vault management** ([ADR-0011](../decisions/0011-vault-management-on-hmn.md)) |
+| Event subscribers | Tail the per-vault JSONL outbox | No push, consumers poll the file |
 
-See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing happens in the daemon rather than in consumers, and [ADR-0004](../decisions/0004-three-search-modes-as-peers.md) for why all three search modes are first-class peers.
+See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing happens in the daemon rather than in consumers, and [ADR-0004](../decisions/0004-three-search-modes-as-peers.md) for why all three search modes are first-class peers. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md) for multi-vault per daemon.
 
 ---
 
@@ -73,19 +74,30 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 ┌────────────────────────────────────────────────────────────────────┐
 │                          Hypomnema Daemon                           │
 │                                                                     │
-│   ┌──────────────┐        ┌──────────────┐                         │
-│   │  Watcher     │───────►│  Indexer     │                         │
-│   │  (notify +   │ change │  (scan, hash,│                         │
-│   │  debouncer)  │ events │  chunk,      │                         │
-│   └──────────────┘        │  embed)      │                         │
-│                           └──────┬───────┘                         │
+│   ┌──────────────┐         ┌──────────────┐                        │
+│   │  Vault       │◄───────►│ Control-plane│                        │
+│   │  Registry    │ mutate  │ API          │                        │
+│   │  (vaults.    │         │ (HTTP + MCP) │                        │
+│   │   sqlite)    │         └──────────────┘                        │
+│   └──────┬───────┘                                                 │
+│          │ drives lifecycle                                         │
+│          ▼                                                          │
+│   ┌──────────────┐        ┌──────────────┐    ┌──────────────┐     │
+│   │  Watcher *   │───────►│  Indexer *   │    │  Outbox *    │     │
+│   │  (notify +   │ change │  (scan, hash,│    │  writer      │     │
+│   │  debouncer)  │ events │  chunk,      │    │  (JSONL,     │     │
+│   └──────────────┘        │  embed)      │    │  per vault)  │     │
+│                           └──────┬───────┘    └──────────────┘     │
 │                                  │                                  │
 │                                  ▼                                  │
-│   ┌──────────────┐        ┌──────────────┐   ┌──────────────┐      │
-│   │  Search API  │◄──────►│  Store       │   │  Outbox      │      │
-│   │  (Axum HTTP +│  read  │  (rusqlite + │   │  writer      │      │
-│   │  rmcp MCP)   │        │  sqlite-vec) │   │  (JSONL)     │      │
-│   └──────────────┘        └──────────────┘   └──────────────┘      │
+│   ┌──────────────┐        ┌──────────────┐                         │
+│   │  Search API  │◄──────►│  Store *     │                         │
+│   │  (Axum HTTP +│  read  │  (rusqlite + │                         │
+│   │  rmcp MCP)   │ x-vault│  sqlite-vec, │                         │
+│   │              │ fan-out│  per vault)  │                         │
+│   └──────────────┘        └──────────────┘                         │
+│                                                                     │
+│   * = one instance per active vault                                 │
 │                                                                     │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -94,15 +106,49 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 
 | Container | Technology | Purpose |
 |-----------|------------|---------|
-| Watcher | `notify` + `notify-debouncer-full` | Detect Markdown file changes under the watched directory; filter out sync-conflict files; emit debounced change events |
-| Indexer | pulldown-cmark, rusqlite, reqwest (to embedding service) | Walk the vault, compute content hashes, split files into heading-aware chunks, embed via local HTTP, persist to the store |
-| Store | rusqlite + r2d2 + sqlite-vec | One SQLite file on disk: files table, chunks table (metadata), vec0 virtual table (embeddings). All three indexes (filesystem, content, semantic) live here. |
-| Search API | Axum (HTTP) + rmcp (MCP) | Expose `search_filesystem`, `search_content`, `search_semantic` operations over two transports with identical semantics |
-| Outbox writer | Plain file append | Append change events as JSONL to `~/.local/share/hypomnema/outbox.jsonl`; consumers tail the file |
+| Vault Registry | rusqlite | Authoritative list of registered vaults: id, name, path, status, created_at, last_error. Lives at `<data_dir>/vaults.sqlite`. Daemon reconciles on startup. See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md). |
+| Control-plane API | Axum (HTTP) + rmcp (MCP) | Expose vault lifecycle operations (create / list / status / pause / resume / reset / rename / rescan / terminate) over the same transports as search. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md). |
+| Watcher (per vault) | `notify` + `notify-debouncer-full` | Detect Markdown file changes under one watched directory; filter out sync-conflict files; emit debounced change events. One instance per active vault. |
+| Indexer (per vault) | pulldown-cmark, rusqlite, reqwest (to embedding service) | Walk one vault, compute content hashes, split files into heading-aware chunks, embed via local HTTP, persist to that vault's store. One instance per active vault. |
+| Store (per vault) | rusqlite + r2d2 + sqlite-vec | One SQLite file per vault at `<data_dir>/vaults/<vault_id>/index.sqlite`: files table, chunks table (metadata), vec0 virtual table (embeddings). All three indexes (filesystem, content, semantic) per vault live here. |
+| Search API | Axum (HTTP) + rmcp (MCP) | Expose `search_filesystem`, `search_content`, `search_semantic` operations over two transports with identical semantics; cross-vault fan-out by default |
+| Outbox writer (per vault) | Plain file append | Append change events as JSONL to `<data_dir>/vaults/<vault_id>/outbox.jsonl`; consumers tail the per-vault file. One instance per active vault. |
 
 ---
 
 ## Key Components
+
+### Vault Registry
+
+The registry is the daemon's authoritative list of vaults. Schema (illustrative; finalized in [`docs/specs/vault-management.md`](../specs/vault-management.md)):
+
+```sql
+CREATE TABLE vaults (
+  id              TEXT PRIMARY KEY,        -- surrogate ID, opaque to users
+  name            TEXT NOT NULL UNIQUE,    -- user-facing label, mutable
+  path            TEXT NOT NULL UNIQUE,    -- absolute, canonicalized
+  status          TEXT NOT NULL,           -- 'active' | 'paused' | 'errored'
+  created_at      TEXT NOT NULL,           -- ISO-8601 µs UTC
+  last_error      TEXT
+);
+```
+
+The registry lives at `<data_dir>/vaults.sqlite` (a top-level SQLite file alongside the per-vault subdirectories). On startup, the daemon reads the registry, verifies each vault's path exists and `<data_dir>/vaults/<id>/` is present, and starts a watcher + indexer pair for each `active` vault. Vaults whose path is missing transition to `errored` with a recorded `last_error`; the daemon stays running and other vaults continue to serve.
+
+Control-plane mutations against the registry are serialized per-vault (operations on different vaults run in parallel). Atomic write semantics on `vaults.sqlite` ensure crash safety; a corrupt registry causes the daemon to refuse serving until the file is restored.
+
+See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md) and [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md).
+
+### Control-plane API
+
+Axum routes under `/vaults` mirror the operations defined in ADR-0010:
+
+- `POST /vaults` — create
+- `GET /vaults`, `GET /vaults/{id}` — list, get
+- `POST /vaults/{id}/{pause|resume|reset|rename|rescan}` — lifecycle
+- `DELETE /vaults/{id}` — terminate
+
+The same operations are exposed as MCP tools (same handlers, same wire shapes). Which subset ships in which round is a workplan-time decision; spec coverage is unconditional. The CLI surface is `hmn vault …` per [ADR-0011](../decisions/0011-vault-management-on-hmn.md).
 
 ### Watcher
 
@@ -130,15 +176,15 @@ All three operations are exposed identically over HTTP (Axum) and MCP (rmcp). Th
 
 The same SQL/vector query code backs both transports — transport is a thin layer over operations, not a fork.
 
-Step 5 ships the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). The two search responses and the outbox envelope each carry an optional `vault` field, omitted in v0, reserved for forward-compat with multi-vault; `/health` and `/status` are daemon-scoped and do not.
+Step 5 shipped the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). The two search responses each carry an optional per-result `vault` field — populated with the surrogate vault ID once multi-vault implementation lands (round 3); v0 omits. Search responses additionally carry an optional per-result `vault_name?: string` for display ergonomics; this field is point-in-time and never appears in the outbox (outbox events carry `vault` ID only — names rot, the durable log doesn't). `/health` is daemon-scoped; `/status` returns a `vaults: [{...}]` array under the multi-vault model. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md).
 
 ### Outbox Writer
 
-Each real change (file created, modified, deleted) produces one JSONL line in the outbox. Minimum envelope: `{event_type, path, content_hash, detected_at}`. The outbox lives in the daemon's data directory, never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md).
+Each real change (file created, modified, deleted) produces one JSONL line in that vault's outbox. Minimum envelope: `{event_type, path, content_hash, detected_at, vault?}`. The outbox lives in the daemon's data directory under the per-vault subdirectory (`<data_dir>/vaults/<vault_id>/outbox.jsonl`), never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) (amended 2026-04-26 to formalize the multi-vault layout).
 
-Step 4 ships the implementation: the watcher's consumer task — the same one that drives `Scanner::reindex_path` / `Scanner::remove_path` — emits one JSONL line per real change to `outbox.jsonl`, with per-event `sync_data`.
+Step 4 shipped the implementation: the watcher's consumer task — the same one that drives `Scanner::reindex_path` / `Scanner::remove_path` — emits one JSONL line per real change to the vault's outbox, with per-event `sync_data`.
 
-Consumers subscribe by tailing the file. There is no push notification mechanism in v0; see the handoff's "Out of scope" for deferred fan-out work.
+Consumers subscribe by tailing the per-vault file. The outbox `vault` field carries the surrogate vault ID only (never the name — names are mutable; durable logs need stable identifiers). There is no push notification mechanism in v0; see the handoff's "Out of scope" for deferred fan-out work.
 
 ---
 
@@ -158,9 +204,10 @@ Consumers subscribe by tailing the file. There is no push notification mechanism
 | Direction | Endpoint | Purpose |
 |-----------|----------|---------|
 | Inbound | HTTP `/health`, `/status`, `/search/filesystem`, `/search/content` (default `127.0.0.1:7777`) | Human and script consumers |
-| Inbound | MCP transport (stdio or socket, TBD) | Agent consumers |
+| Inbound | HTTP `POST /vaults`, `GET /vaults`, `GET /vaults/{id}`, `POST /vaults/{id}/{op}`, `DELETE /vaults/{id}` | Vault lifecycle control plane |
+| Inbound | MCP transport (stdio or socket, TBD) | Agent consumers (search + vault management) |
 | Outbound | Embedding service HTTP | Produce vectors for chunks and queries |
-| Outbound | Outbox file (local filesystem) | Publish change events |
+| Outbound | Per-vault outbox files (local filesystem) | Publish change events |
 
 ---
 
@@ -189,6 +236,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Local-only | No required outbound network traffic beyond the (possibly-local) embedding service | All components local-first ([ADR-0005](../decisions/0005-local-everything.md)) |
 | Deployability | Two self-contained binaries plus one extension file | Rust statically-linked build ([ADR-0002](../decisions/0002-rust-over-python.md)); daemon (`hmnd`) and CLI client (`hmn`) ship together ([ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)); sqlite-vec as a `.so`/`.dylib`/`.dll` ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Agent ergonomics | An agent can compose filesystem → content → semantic searches naturally | All three as peer MCP operations ([ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) |
+| Vault isolation | Cross-vault state leakage prevented; per-vault terminate is safe | Per-vault data subdirectory (`<data_dir>/vaults/<id>/`); vault-id-keyed schema; control-plane operations serialized per-vault ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
 
 ---
 
@@ -202,6 +250,9 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Blocking the async runtime with rusqlite calls | Daemon deadlocks; search requests hang | All SQL via `spawn_blocking` without exception (see `.claude/skills/rusqlite-in-async/`) |
 | Single-consumer event delivery (outbox tail) | Doesn't scale to remote consumers or push notifications | Deferred from v0; noted in handoff "Out of scope" |
 | Model switching is a re-index | Migrating to a different embedding model is an operation, not a config flip | Documented; considered acceptable for v0 scope (see [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
+| Concurrent control-plane operations on same vault | Race in registry mutations or per-vault state | Operations on the same vault are serialized at the daemon; operations on different vaults run in parallel ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
+| Vault registry corruption | `vaults.sqlite` partial write or filesystem damage | Atomic write semantics for control-plane mutations; daemon refuses to serve on read failure until the file is restored |
+| Cross-vault search semantics under-specified | Ordering, pagination, fan-out, partial-failure not yet pinned | Wire shapes are forward-compat; resolution deferred to round-3 workplan ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), `docs/specs/vault-management.md` § Open Questions) |
 
 ---
 

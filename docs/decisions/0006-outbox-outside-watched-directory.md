@@ -54,3 +54,5 @@ The daemon reads from the watched directory; it never writes there.
 ## Amendments
 
 - **2026-04-23** — Tightened the data-directory rule: macOS uses the same XDG-style path as Linux (`~/.local/share/hypomnema/`) rather than `~/Library/Application Support/hypomnema/`. The original decision was silent between the two on macOS; this amendment picks the Unix-uniform layout so daemon code and docs do not branch per-OS. No behavioral change for Linux or Windows; no reversal of the "state lives outside the watched vault" rule.
+
+- **2026-04-26** — Multi-vault adopted in [ADR-0009](./0009-multi-vault-per-daemon.md) and the predicted multi-vault data-dir layout is now formalized. The Consequences section's anticipatory note ("Multiple vault directories could share a daemon data-dir scheme without collision") is realized as: `<data_dir>/vaults/<vault_id>/{index.sqlite, outbox.jsonl, meta.toml}` per vault, with a top-level `<data_dir>/vaults.sqlite` registry. The "state lives outside the watched vault" rule is unchanged and now applies per-vault.

@@ -92,4 +92,53 @@ When step 8 ships:
 1. Tag the milestone in git (likely `v0.1.0` or `v0`).
 2. Capture any ADRs that hardened during the build.
 3. Write a short retrospective for steps 6–8 in [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md), and an end-of-round retro answering: did the roadmap → workplan → build cadence still work at higher risk? What surprised us about embedding/sqlite-vec/MCP that the docs did not predict?
-4. Decide whether v0 is *done done* (publish the binary; close the project's "open in scope" list) or whether a third roadmap round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, multi-vault). The handoff doc's "Out of scope" list is the natural source for such a round if one is needed.
+4. Move on to round 3 (Multi-vault) below, or close the project's "open in scope" list. The handoff doc's "Out of scope" list is the natural source for additional follow-on work.
+
+---
+
+## Round 3 — Multi-vault (post-v0)
+
+**Scope**: Implement the multi-vault adoption settled in [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), and [ADR-0011](../decisions/0011-vault-management-on-hmn.md). The canon was amended on 2026-04-26 (immediately after round 1 shipped), pre-staging this round so its scope is settled before round 2 (steps 6–8) lands.
+
+**Status**: Not started. Round 2 (steps 6–8) has not yet begun; this round queues behind it. Workplan(s) created just before implementation per the round-1/2 cadence.
+
+**Specs to amend / create**:
+- `docs/specs/vault-management.md` (already drafted as an outline; `spec-generator` flesh-out at workplan time)
+- `docs/specs/filesystem-search.md` — add per-result `vault` (id) and `vault_name`; add request-side `vaults` filter; describe cross-vault behavior
+- `docs/specs/content-search.md` — same shape
+- `docs/specs/semantic-search.md` — same shape, plus cross-vault ranking semantics
+- `docs/specs/change-events.md` — add `vault` (id); **no** `vault_name` (durability)
+
+**Implementation surface**:
+- New modules: `src/vault_registry/`, `src/control_plane/`
+- Per-vault refactor of `src/watcher/`, `src/indexer/`, `src/store/`, `src/outbox.rs`
+- `vaults.sqlite` registry; per-vault data subdirectory layout
+- Control-plane HTTP routes; `hmn vault …` subcommands; MCP tools (subset to ship per workplan)
+- `hmnd scan` subcommand removed (subsumed by `hmn vault rescan`)
+- Removal of top-level `vault` config key; addition of `default_vault_name`
+
+**Deferred decisions to resolve at the round-3 workplan**:
+- Cross-vault search semantics: result ordering, pagination/cursor, fan-out execution, `limit` semantics, partial-failure handling, paused/errored vault inclusion (see [`vault-management.md` § Open Questions](../specs/vault-management.md#open-questions))
+- Surrogate ID format (`vault_<base32>` vs. UUIDv7 vs. ULID)
+- Compose-style declarative provisioning: ship inline with this round, or queue as a follow-on workplan
+- Which subset of vault-management MCP tools ships in this round (read-only vs. full)
+- Whether `hmnd-compose.toml` ships in this round
+
+**Phasing options** (workplan-time):
+- *Single-shot*: full vault-management surface + cross-vault search semantics in one workplan
+- *Phased*: vault create/list/status/terminate first; pause/reset/rename/rescan + Compose layer in a follow-on workplan; cross-vault search semantics resolved in the first workplan regardless
+
+**Risk**: medium-to-high. Daemon startup-sequence rewrite + per-vault refactor + new HTTP/MCP surface + new state file requiring atomic write semantics. The cross-vault search semantics question is a genuine design unknown and should be the workplan's first deferred-decision target.
+
+**Shipping criteria** (round-level):
+- `hmn vault create / list / status / terminate` against a running daemon work end-to-end
+- `hmn search content "X"` against a daemon with two vaults returns intermingled results, each with `vault` (id) + `vault_name`
+- `--vaults personal,work` filter narrows scope
+- Daemon survives crash mid-create / mid-terminate without orphaning state
+- The four spec amendments and the new vault-management spec land
+
+---
+
+## After round 3
+
+Decide whether v0 is *done done* (publish the binary; close the "open in scope" list) or whether a fourth round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, Compose-style declarative provisioning if it didn't ship in round 3, MCP write-tool gating, push notifications). The handoff doc's "Out of scope" list is the natural source for such a round.

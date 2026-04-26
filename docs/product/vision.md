@@ -1,7 +1,7 @@
 # Hypomnema: Vision Document
 
-**Version**: 0.1.0
-**Date**: 2026-04-23
+**Version**: 0.2.0
+**Date**: 2026-04-26
 **Status**: Draft
 
 ---
@@ -55,9 +55,13 @@ The watched directory is treated as the user's. Hypomnema reads from it. Hypomne
 
 From the ancient Greek ὑπόμνημα (plural *hypomnemata*) — a personal notebook of gathered material assembled from the outside world for later rereading. Marcus Aurelius's *Meditations* is the canonical example. Foucault revived the term for the practice of constituting oneself through accumulated external material. The fit to this project is near-literal: a hypomnema is a reachable substrate of things read, heard, or thought. That is exactly what this daemon builds from the user's vault.
 
-### Watched Directory (the Vault)
+### Vaults
 
-The user's directory of Markdown files. Hypomnema reads from it recursively but never writes to it. Frontmatter is read but not interpreted. Wikilinks are not parsed in v0. Obsidian vaults are implicitly supported since any directory of `.md` files works.
+The user's directories of Markdown files. Hypomnema watches one or more vaults; each vault has a name and a generated surrogate identifier. Hypomnema reads from a vault recursively but never writes to it. Frontmatter is read but not interpreted. Wikilinks are not parsed in v0. Obsidian vaults are implicitly supported since any directory of `.md` files works.
+
+### Vault Lifecycle
+
+Vaults are runtime state, not configuration. They are created, paused, resumed, reset, renamed, rescanned, and terminated via a control-plane API exposed on `hmn vault …` and over HTTP/MCP. The daemon's data directory holds the authoritative vault registry; configuration only specifies daemon-level behavior (HTTP bind, embedding endpoint, default vault name, watcher tuning, log levels). See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md).
 
 ### Indexes
 
@@ -85,7 +89,6 @@ What Hypomnema explicitly does NOT do. These are real, planned, and preserved as
 - **Format spec for bridge-managed files**: No `iris_id` / `hmn_id` frontmatter convention, no recognition of "bridge-owned" files.
 - **Conflict resolution**: No three-way merge, no last-known-synced tracking, no escalation. Read-only systems don't have conflicts.
 - **Multi-consumer event delivery beyond outbox tailing**: No webhooks, no in-process callbacks, no fan-out beyond "consumers tail the JSONL file."
-- **Multi-directory support**: One watched directory per daemon instance.
 - **Multi-instance coordination**: Each daemon is independent.
 - **Obsidian-specific behavior**: Obsidian is the vault format that motivated this project, but the design assumes nothing about Obsidian. Wikilinks aren't parsed. Tags aren't indexed specially. Frontmatter isn't interpreted.
 - **Bidirectional sync** (the original full vault-bridge scope): Belongs to a CRDT-based system (Hexist, AFFiNE, Anytype, Logseq in transition). Hypomnema is the smaller generic thing that fell out of asking "what would still be useful even without the bidirectional half?" — the answer was: probably enough to live as its own project.
@@ -115,7 +118,7 @@ Things deliberately not decided yet, to be settled in early code:
 - [ ] CLI subcommand naming. `hmn start`, `hmn scan`, `hmn search`, `hmn status` is one obvious shape; could change.
 - [ ] Whether the daemon should auto-rescan on startup or trust the existing index. Probably: rescan and reconcile, but make it skippable for fast restarts.
 - [ ] How should the watcher handle VCS-aware ignores? Options to consider: honor `.gitignore` / `.dockerignore` when present; add a Mutagen-inspired `ignore_vcs_files` config. v0 does not commit to any of these — `ignore_patterns` is the only filtering mechanism.
-- [ ] **Multi-vault forward-compat in v0 wire shapes.** v0 is single-vault per daemon (see Non-Goals: "Multi-directory support"). But the JSON shapes for HTTP / MCP search responses and outbox events become a contract once external consumers wire up to them at step 5 (the shipping gate). Question: should v0 responses carry an optional `vault: string` field (omit-when-null in v0) so adding multi-vault later is additive rather than a versioned migration? Three shapes were considered: (A) one `hmnd` per vault, different ports per consumer — zero protocol changes; (B) one `hmnd` covering many vaults — pervasive schema mutation across config, CLI, all four specs, and the outbox; (C) hybrid — daemon stays single-vault, `hmn` and the future MCP server gain a registry/router (`kubectl --context` precedent). Current lean: ship v0 with the optional `vault` field present-but-omitted-when-null. Cost is one nullable field per response shape; benefit is no versioned migration if (B) or (C) lands later. Resolves at the step-5 workplan boundary; if accepted, every response shape (filesystem-search, content-search, change-events outbox event, future semantic) gains the field as optional.
+- [ ] **Cross-vault search UX.** Multi-vault is adopted in [ADR-0009](../decisions/0009-multi-vault-per-daemon.md); search runs across all active vaults by default, with per-result `vault` and `vault_name` disambiguating origin and an optional `vaults` filter restricting scope. The product-UX question — how prominently a user or agent needs to specify or see vault scope when composing searches — is open, separate from the wire-shape decisions in ADR-0009. Detailed spec-level semantics (ordering, pagination, fan-out, partial-failure, paused/errored handling) are tracked in `docs/specs/vault-management.md` § Open Questions and resolve at the round-3 workplan.
 
 ---
 

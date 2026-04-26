@@ -1,7 +1,7 @@
 # Implementation: Hypomnema Technology Stack
 
-**Version**: 0.1.0
-**Date**: 2026-04-23
+**Version**: 0.2.0
+**Date**: 2026-04-26
 **Status**: Draft
 
 ---
@@ -184,6 +184,8 @@ hypomnema/
 │   │   ├── mod.rs
 │   │   ├── schema.rs    # migrations; vec0 dimension baked in
 │   │   └── pool.rs      # r2d2 pool, load_extension hook
+│   ├── vault_registry/  # vaults.sqlite + reconciliation (hmnd only; round 3+)
+│   ├── control_plane/   # vault lifecycle handlers — HTTP + CLI + MCP (round 3+)
 │   ├── watcher/         # notify + debouncer + conflict filter (hmnd only)
 │   ├── indexer/         # scan, hash, chunk, embed, persist (hmnd only)
 │   ├── search/          # filesystem / content / semantic query impls (hmnd only)
@@ -223,6 +225,8 @@ Eight steps, dependency-ordered, each independently useful as a stopping point. 
 8. **MCP wrapper** — Same operations, MCP transport via `rmcp`. Test against an actual agent (Claude Code, Iris).
 
 If a step is hard, ship the previous one and keep using it. Step 5 (filesystem + content over HTTP) is the natural early shipping gate — it is genuinely valuable on its own, and reaching it validates the whole indexing-and-watch skeleton.
+
+> **Multi-vault support** (per [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) is **post-v0**; it lands as **round 3** of the roadmap. The eight steps above remain single-vault. Round 3 introduces `src/vault_registry/` and `src/control_plane/`, refactors the watcher / indexer / store / outbox modules to be per-vault, and ships the vault-management spec (`docs/specs/vault-management.md`).
 
 ---
 
@@ -269,3 +273,4 @@ The handoff names eight pitfalls that agents writing Hypomnema code need to know
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff "Crate stack" and "v0 step plan" sections |
+| 0.2.0 | 2026-04-26 | Multi-vault adoption (ADR-0009 / ADR-0010 / ADR-0011): added `vault_registry/` and `control_plane/` modules to the project structure; added forward-pointer note that multi-vault implementation is round 3, post-v0. v0 step plan unchanged. |

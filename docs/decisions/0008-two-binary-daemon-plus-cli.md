@@ -58,6 +58,7 @@ No workspace split. No feature flags. No transport abstraction. Both binaries li
 - Extends [ADR-0002: Rust over Python](./0002-rust-over-python.md). The single-binary-deployment appeal of Rust was a tipping factor there. That still holds: "single binary" in the Rust sense means "statically linked, no runtime install, ship the file" — not "only one binary in total." Hypomnema now ships two files (plus the sqlite-vec extension), each of which is still a single self-contained executable.
 - Extends [ADR-0003: Indexing in the Daemon, Not in the Consumer](./0003-indexing-in-the-daemon.md). That ADR established that Hypomnema is a daemon with an HTTP / MCP surface, not a library consumers link against. This ADR names the executable that *is* the daemon (`hmnd`) and the executable that *reaches* the daemon (`hmn`).
 - No abstract "transport" trait in v0. The CLI's HTTP client and the daemon's HTTP server can both reach for `reqwest` and `axum` respectively, talk over localhost, and be done. When a second real consumer demands a more formal boundary, that's when abstraction earns its keep.
+- Extended by [ADR-0011: Vault Management Lives on `hmn`](./0011-vault-management-on-hmn.md) — `hmn`'s subcommand surface grows to include vault-management operations (`hmn vault …`); the two-binary shape is preserved.
 
 ## Amendments
 

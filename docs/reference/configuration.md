@@ -1,11 +1,11 @@
 # Hypomnema Configuration Reference
 
-**Version**: 0.1.0
-**Generated**: 2026-04-23
+**Version**: 0.2.0
+**Generated**: 2026-04-26
 
 ---
 
-> **Status**: Schema pinned in step 1 — see [step-01 workplan § TOML config schema](../roadmap/step-01-workplan.md#2-toml-config-schema). Format is TOML; default location is `~/.config/hypomnema/config.toml` (respects `XDG_CONFIG_HOME`).
+> **Status**: Schema pinned in step 1 — see [step-01 workplan § TOML config schema](../roadmap/step-01-workplan.md#2-toml-config-schema). Format is TOML; default location is `~/.config/hypomnema/config.toml` (respects `XDG_CONFIG_HOME`). The top-level `vault` setting was removed in 0.2.0 — vaults are now runtime state managed via the control-plane API ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)).
 
 > **Scope**: Every option on this page is daemon-side — it affects the behavior of `hmnd`. The CLI client (`hmn`) reads only the daemon URL (derived from `[http].bind`) to know where to send requests; override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL`. See [cli.md](./cli.md) and [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md).
 
@@ -30,8 +30,9 @@
 ### Top-Level Structure
 
 ```toml
-# Path to the vault Hypomnema watches (required)
-vault = "/home/user/Documents/vault"
+# When a vault command omits a selector, resolve to this name. Set to ""
+# to require explicit names on every command. Default "default".
+default_vault_name = "default"
 
 # HTTP server binding (defaults to localhost:7777; port TBD)
 [http]
@@ -77,13 +78,15 @@ tokio_level = "error"
 
 ---
 
-## `vault`
+## `default_vault_name`
 
-The directory Hypomnema watches and indexes. Must exist. Must be readable. Hypomnema never writes here.
+When a control-plane command (e.g., `hmn vault status`) omits the vault selector, the daemon resolves to this name. The daemon does **not** auto-create a default vault on first run; the user must run `hmn vault create` (which uses `default_vault_name` if `--name` is omitted).
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `vault` | path | yes | — | Absolute or `~`-expanded path to the vault |
+| `default_vault_name` | string | no | `"default"` | Name resolved when a command omits the selector. Set to `""` to require explicit names on every command. |
+
+See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md) for why vaults live in runtime state rather than configuration.
 
 ---
 
@@ -138,11 +141,23 @@ Sync tools that burst-write across more than the debounce window may justify `de
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `data_dir` | path | no | `~/.local/share/hypomnema` on Linux and macOS; `%APPDATA%\hypomnema` on Windows. Respects `XDG_DATA_HOME`. | Root for daemon-owned state. **Never inside the vault** — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) |
-| `index_file` | relative path | no | `index.sqlite` | SQLite file containing all three indexes |
-| `outbox_file` | relative path | no | `outbox.jsonl` | JSONL event log |
+| `data_dir` | path | no | `~/.local/share/hypomnema` on Linux and macOS; `%APPDATA%\hypomnema` on Windows. Respects `XDG_DATA_HOME`. | Root for daemon-owned state. **Never inside any registered vault path** — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) (amended 2026-04-26 for multi-vault layout). |
 
-The outbox file is created at daemon startup if missing. Consumers that tail it should reopen on `ENOENT` or inode change — see [the change-events spec § Edge Cases](../specs/change-events.md#edge-cases).
+Layout under `data_dir`:
+
+```
+<data_dir>/
+  vaults.sqlite               # authoritative vault registry
+  vaults/
+    <vault_id>/
+      index.sqlite            # files, chunks, chunks_vec
+      outbox.jsonl            # per-vault append-only log
+      meta.toml               # human-readable copy of registry row
+  hmnd.pid
+  logs/
+```
+
+The per-vault `index.sqlite` and `outbox.jsonl` are created when the vault is created (`hmn vault create …`) and removed when the vault is terminated (`hmn vault terminate …`). Outbox consumers tail the per-vault file under the vault's subdirectory; reopen on `ENOENT` or inode change — see [the change-events spec § Edge Cases](../specs/change-events.md#edge-cases). The vault-id-to-path mapping is read from the registry; clients that don't know IDs in advance use `hmn vault list` or `GET /vaults`.
 
 ---
 
@@ -162,7 +177,7 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 
 | Config Path | Environment Variable |
 |-------------|---------------------|
-| `vault` | `HYPOMNEMA_VAULT` |
+| `default_vault_name` | `HYPOMNEMA_DEFAULT_VAULT_NAME` |
 | `http.bind` | `HYPOMNEMA_HTTP_BIND` |
 | `embedding.endpoint` | `HYPOMNEMA_EMBEDDING_ENDPOINT` |
 | `embedding.api_key` | `HYPOMNEMA_EMBEDDING_API_KEY` |
@@ -175,11 +190,11 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 
 ## Validation Rules
 
-- `vault` must exist and be readable
 - `embedding.dimension` must match the schema; mismatch fails the daemon at startup with a message pointing at this reference
-- `storage.data_dir` must not be under `vault` — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md)
+- `storage.data_dir` must not be under any registered vault path — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md). At vault creation time, a path that would place `data_dir` inside the new vault is rejected with `422 vault_path_invalid`.
+- `storage.data_dir/vaults/` must exist or be creatable by the daemon (it is created on first startup if absent)
 - `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
-- The daemon scans + reconciles on every startup; this is the only mode in v0.
+- The daemon scans + reconciles each active vault on every startup; this is the only mode in v0.
 
 ---
 
@@ -188,3 +203,6 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 - [CLI Reference](./cli.md)
 - [Architecture Overview](../architecture/overview.md)
 - [ADR-0006: Outbox Lives Outside the Watched Directory](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0009: Multi-Vault per Daemon](../decisions/0009-multi-vault-per-daemon.md)
+- [ADR-0010: Vault Definitions Are Runtime State, Not Configuration](../decisions/0010-vault-definitions-as-runtime-state.md)
+- [Vault Management Spec](../specs/vault-management.md)

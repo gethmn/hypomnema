@@ -16,6 +16,9 @@ See [`_adr-policy.md`](./_adr-policy.md) for the amend / supersede / extend poli
 | [0006](./0006-outbox-outside-watched-directory.md) | Outbox (and All Daemon State) Lives Outside the Watched Directory | accepted |
 | [0007](./0007-sqlite-vec-over-alternatives.md) | sqlite-vec over Lance, qdrant, and Other Vector Stores | accepted |
 | [0008](./0008-two-binary-daemon-plus-cli.md) | Two Binaries (hmnd + hmn) in One Crate | accepted |
+| [0009](./0009-multi-vault-per-daemon.md) | Multi-Vault per Daemon | proposed |
+| [0010](./0010-vault-definitions-as-runtime-state.md) | Vault Definitions Are Runtime State, Not Configuration | proposed |
+| [0011](./0011-vault-management-on-hmn.md) | Vault Management Lives on `hmn` | proposed |
 
 ## Creating a new ADR
 
