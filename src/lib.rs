@@ -4,6 +4,7 @@
 // See AGENTS.md for orientation and docs/hypomnema-handoff.md for scope.
 
 pub mod api;
+pub mod chunk;
 pub mod cli;
 pub mod client;
 pub mod config;
