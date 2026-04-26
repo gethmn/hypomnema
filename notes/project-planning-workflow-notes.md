@@ -233,11 +233,46 @@ Every per-step retro follows this shape so the structured data accumulates compa
 - *No structural fixes needed before step 3.* Step 1 retro left one structural fix (the binary-target tracing lift) which became Task 2.1. Step 2 leaves no analogous step-3-blocker. Step 3 (watcher) can start its workplan immediately on the human's signal.
 - *Coordinator process-context has not drifted at 7 wake-ups.* The playbook open question on context drift remains unresolved at small scale. Step 5 will be the stress test (more tasks, more forward notes).
 
-### Step 3
+#### Step 3 (shipped 2026-04-26)
 
-### Step 3
+**Structured Eval**
 
-_Not yet started._
+*Batching outcomes:*
+- No batches. All 6 workplan tasks ran as solo task agents (default-not-batch carried forward from steps 1 + 2).
+- Solo task 3.1 (Filter helpers + debounce bump): scope = 6 files (`src/config.rs`, `tests/config.rs`, `docs/reference/configuration.md`, `src/lib.rs`, two new under `src/watcher/`), result-comment ~5 paragraphs incl. soft flag. Adjacent (3.2): touched `src/watcher/mod.rs` only (replaced the stub). Assessment: appropriate solo — pure-logic helpers + 4-place config flip; splitting kept filter-vs-pipeline test surfaces bisect-separated.
+- Solo task 3.2 (notify deps + Watcher module): scope = 4 files (`Cargo.toml`, `Cargo.lock`, `src/watcher/mod.rs` replaced, `src/watcher/translate.rs` new), 16 new unit tests, comment ~6 paragraphs incl. soft flag. Workplan-flagged medium-high risk. Assessment: appropriate solo — task-flagged-risky rule held; soft flag on `RenameMode::Any|Other` was forwardable.
+- Solo task 3.3 (Indexer single-file ops): scope = 1 file (`src/indexer/mod.rs`), 8 new unit tests, comment ~6 paragraphs (no soft flag). Adjacent (3.4): no file overlap. Assessment: appropriate solo — refactor of `run_blocking` into a shared per-file helper landed cleanly without touching the watcher module.
+- Solo task 3.4 (Wire watcher into hmnd): scope = 2 files (`src/watcher/mod.rs` extended with `run_consumer` + backpressure logging, `src/bin/hmnd.rs` extended), comment ~5 paragraphs incl. soft flag + manual smoke verification. Workplan-flagged medium-high risk. Assessment: appropriate solo — composes 3.2 + 3.3 + existing shutdown plumbing; soft flag (`Send`-friendly `changed()` over `wait_for`) was load-bearing for 3.5.
+- Solo task 3.5 (Integration tests): scope = 1 new file (`tests/watch.rs`, 321 lines, 9 tests), comment ~5 paragraphs (no soft flag). Adjacent (3.6): no file overlap. Assessment: appropriate solo — agent ran 6 consecutive clean local repeats to look for flakes before reporting.
+- Solo task 3.6 (Doc updates): scope = 4 doc files (configuration.md was already complete from 3.1; verified), comment ~4 paragraphs (no soft flag). Assessment: appropriate solo.
+
+*Escalations:*
+- Count: 0.
+- By type: ambiguity=0, test-failure=0, scope-question=0, surprise-decision=0, other=0.
+- *Soft flag count: 3* (tasks 3.1 / 3.2 / 3.4), vs. step 2's 4 and step 1's 2. Two of the three (3.2 → 3.4 and 3.4 → 3.5) carried genuine downstream impact and were forwarded as guidance via the rolling-context scratchpad. Both forwards were consumed correctly by the receiving agent (3.4 implemented backpressure logging in the closure exactly as 3.2's note recommended; 3.5 used the same `tokio::sync::watch::channel` shape 3.4 chose). Promoting "soft flag forwarding via scratchpad § Per-task outcomes" from observed pattern to documented playbook contract is now overdue (step 1 + step 2 retros both surfaced this; step 3 confirms it as load-bearing on a higher-complexity, multi-handoff step). Recommend a playbook edit before step 4.
+
+*Retries:*
+- Tasks with retries: none.
+- Per task: all 6 succeeded on first attempt.
+- 2-retry ceiling hit without success: none.
+
+*Time and overhead:*
+- Total wall-clock: ~37m (todo 36 created 2026-04-26 00:05:46 UTC → todo 41 completed 00:42:48 UTC).
+- Per-task wall-clock from todo `created_at` to `completed_at`: task 3.1 = 4m 41s, task 3.2 = 12m 31s (from 3.1's completion: 8m), task 3.3 = 18m 29s (from 3.2's completion: 6m 12s), task 3.4 = 26m 00s (from 3.3's completion: 7m 52s), task 3.5 = 33m 06s (from 3.4's completion: 7m 28s incl. 6 local repeat-runs for flake check), task 3.6 = 35m 29s (from 3.5's completion: 2m 38s).
+- Coordinator wake-up count: 6 (one per task; all genuine completions; zero false-positive idle wake-ups). Two timers used the extended 25-min `max_wait_ms` (3.2 + 3.4, both medium-high risk); the rest used the default 15min. Task 3.6 used 10min (doc-only). All fired well inside their windows.
+- Context drift symptoms: none observed across 6 wake-ups. Rolling-context scratchpad's § Per-task outcomes was actively used to forward soft-flag downstream impact between tasks (notably 3.2→3.4 and 3.4→3.5). Coordinator re-read scratchpad once per wake-up via `todo_get` rather than full reload.
+
+**Notes**
+
+- *Net wall-clock about 7m above step 2 despite the workplan flagging step 3 as "medium-high risk — the project's biggest landmines."* Step 1: 34m (low-risk skeleton). Step 2: 30m (medium scan + first spawn_blocking workload). Step 3: 37m (medium-high watcher with backpressure, async composition, and 9 integration tests). The marginal overhead is clearly absorbed by 3.4 (composing three modules under one async runtime, manual smoke verification) and 3.5 (running the test suite 6× to look for flakes) — both deliberate quality investments by the task agents. The roadmap's risk-grading remains a useful predictor of where wall-clock will go.
+- *Soft-flag forwarding is now the project's load-bearing context-passing pattern.* Step 1 named it ("context-passing baton"); step 2 ran on it (4× soft flags, all forwarded cleanly); step 3 shipped on it through a chain (3.2 → 3.4 → 3.5) where each task agent's downstream-impact paragraph in the scratchpad shaped the next agent's implementation choices. Concretely: 3.2's recommendation that backpressure logging belongs in the closure (not the consumer) was implemented verbatim by 3.4's agent; 3.4's `Send`-friendly `changed()` shape was mirrored by 3.5's tests without prompting. Three steps of evidence is enough — promote "soft flag forwarding via scratchpad § Per-task outcomes" from anecdote to documented playbook contract before step 4. The COORDINATOR § Per-task execution loop step 6 is where it goes.
+- *Anti-flake rule held under stress.* Task 3.5's `sustained_save_loop_*` test naturally needs `SETTLE * 4` because sustained writes keep extending the debouncer's quiet period — the agent caught the *mechanical* basis for the longer settle window and explained it inline rather than treating it as a CI-bump exception. The workplan's "do not introduce a polling-loop helper that hides timing" rule was honored without needing a coordinator intervention.
+- *Workplan TBDs handled cleanly.* Both step-3 deferred decisions (debounce window tuning, rename-as-distinct vs delete+create) resolved at workplan time and held through the build with zero in-build revision. Neither warranted ADR promotion. The "fits in 1–3 paragraphs of workplan prose with a 'Why' → not an ADR" rubric (named in step 2's retro) held for the third consecutive step.
+- *Idle-detection reliability remains 100%.* 6/6 fires were genuine completions in step 3 (and 14/14 across steps 1–3). Three clean steps; the playbook's open question on "Idle-detection false positives" is now answered — `timer_fire_when_idle_any` is reliable as a "task agent done" signal in this workflow shape. Recommend retiring the open question in the next playbook edit.
+- *Coordinator process-context did not drift across 6 wake-ups* — the playbook open question on coordinator context drift remains unresolved at small scale, but step 3 added one more clean data point. Step 5 (HTTP shipping gate, more tasks, more forward notes) is where this will actually be stressed.
+- *Task 3.6 surfaced a coordinator-level concern (workplan-untracked-at-task-time) without escalating* — agent flagged it in the results comment as out-of-scope-for-the-task and intentionally did not commit it. This is a clean instance of "soft flag for the coordinator, not for downstream agents." Worth a separate note in the playbook: soft flags can be addressed *to the coordinator* about coordinator-level concerns (e.g. "this looks like a boundary-ritual responsibility"), not just *to the next task agent* about implementation concerns.
+- *Step-boundary follow-up (not-an-ADR, intentional)*: none. Step 3's resolutions held; no scaffolding artifact to clean up at the start of step 4. Step 4 (outbox) can begin its workplan on the human's signal.
+- *Pilot risk assessment update.* The roadmap labels step 3 as "the biggest landmines in this entire project." The build did expose those landmines — debouncer event coalescing, sync-conflict patterns broader than the globset, rename decomposition, backpressure, async composition with `Send` constraints — and every one of them resolved inside the task-agent / coordinator loop without escalation. The pattern that made this work was load-bearing skill cross-references (`.claude/skills/filesystem-watching` cited at every notify site, `.claude/skills/rusqlite-in-async` at every SQL site) plus the soft-flag forwarding chain. Steps 4 (outbox; low risk) and 5 (HTTP shipping gate; medium risk, first external surface) will not stress the same axes; step 5 will instead test workplan task density (likely 8+ tasks) and forward-note volume.
 
 ### Step 4
 
