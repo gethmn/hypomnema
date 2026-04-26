@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 pub use crate::api::types::{
     ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse, ErrorEnvelope,
     FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, HealthResponse,
-    StatusResponse,
+    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
 };
 use crate::config::Config;
 
@@ -55,6 +55,12 @@ impl DaemonClient {
 
     pub async fn search_content(&self, q: &ContentQueryJson) -> Result<ContentSearchResponse> {
         let url = format!("{}/search/content", self.base_url);
+        let resp = self.http.post(&url).json(q).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse> {
+        let url = format!("{}/search/semantic", self.base_url);
         let resp = self.http.post(&url).json(q).send().await?;
         decode_response(resp).await
     }
@@ -225,6 +231,23 @@ mod tests {
             .expect("content search succeeds");
         assert!(resp.results.is_empty());
         assert!(!resp.truncated);
+        daemon.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn client_search_semantic_round_trips() {
+        let daemon = spawn_test_daemon().await;
+        let cfg = smoke_config("127.0.0.1:7777");
+        let client = DaemonClient::from_config(&cfg, Some(&daemon.base_url)).unwrap();
+        let resp = client
+            .search_semantic(&SemanticQueryJson {
+                query: "anything".to_string(),
+                ..Default::default()
+            })
+            .await
+            .expect("semantic search succeeds");
+        assert!(resp.results.is_empty());
+        assert!(resp.hint.is_none());
         daemon.shutdown().await;
     }
 

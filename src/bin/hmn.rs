@@ -6,7 +6,8 @@ use clap::Parser;
 use hypomnema::cli::{Cli, Command, SearchMode};
 use hypomnema::client::{
     ContentQueryJson, ContentResultJson, ContentSearchResponse, DaemonClient, FilesystemQueryJson,
-    FilesystemResultJson, FilesystemSearchResponse, StatusResponse, is_connect_error,
+    FilesystemResultJson, FilesystemSearchResponse, SemanticQueryJson, SemanticResultJson,
+    SemanticSearchResponse, StatusResponse, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
@@ -66,9 +67,20 @@ async fn main() -> ExitCode {
                 )
                 .await
             }
-            SearchMode::Semantic { .. } => {
-                eprintln!("hmn: semantic search lands in step 7");
-                return ExitCode::from(1);
+            SearchMode::Semantic {
+                query,
+                prefix,
+                limit,
+            } => {
+                cmd_search_semantic(
+                    &config,
+                    cli.daemon_url.as_deref(),
+                    cli.json,
+                    query,
+                    prefix,
+                    limit,
+                )
+                .await
             }
         },
         Command::Status => cmd_status(&config, cli.daemon_url.as_deref(), cli.json).await,
@@ -139,6 +151,30 @@ async fn cmd_search_content(
     Ok(())
 }
 
+async fn cmd_search_semantic(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    query: String,
+    prefix: Option<String>,
+    limit: Option<usize>,
+) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)?;
+    let req = SemanticQueryJson {
+        query,
+        prefix,
+        limit,
+        min_similarity: None,
+    };
+    let resp = client.search_semantic(&req).await?;
+    if json {
+        print_json(&resp)?;
+    } else {
+        print!("{}", render_semantic_text(&resp));
+    }
+    Ok(())
+}
+
 async fn cmd_status(config: &Config, override_url: Option<&str>, json: bool) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let resp = client.status().await?;
@@ -193,6 +229,39 @@ fn print_content_block(r: &ContentResultJson) {
     }
 }
 
+fn render_semantic_text(resp: &SemanticSearchResponse) -> String {
+    let mut out = String::new();
+    let mut first = true;
+    for r in &resp.results {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        append_semantic_block(&mut out, r);
+    }
+    if let Some(h) = &resp.hint {
+        if !first {
+            out.push('\n');
+        }
+        out.push_str(&format!("({h})\n"));
+    }
+    out
+}
+
+fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
+    out.push_str(&format!("{}  (score: {:.2})\n", r.file_path, r.score));
+    let segments: Vec<&str> = r
+        .heading_path
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.as_str())
+        .collect();
+    if !segments.is_empty() {
+        out.push_str(&format!("  > {}\n", segments.join(" / ")));
+    }
+    out.push_str(&format!("  {}\n", r.text));
+}
+
 fn render_status_text(resp: &StatusResponse) {
     let last = resp.last_indexed_at.as_deref().unwrap_or("never");
     println!("vault:         {}", resp.vault);
@@ -231,6 +300,83 @@ mod tests {
         assert_eq!(human_bytes(1024), "1.0 KiB");
         assert_eq!(human_bytes(1536), "1.5 KiB");
         assert_eq!(human_bytes(1024 * 1024), "1.0 MiB");
+    }
+
+    fn semantic_result(
+        file_path: &str,
+        score: f32,
+        heading_path: Vec<&str>,
+        text: &str,
+    ) -> SemanticResultJson {
+        SemanticResultJson {
+            score,
+            file_path: file_path.to_string(),
+            chunk_index: 0,
+            heading_path: heading_path.into_iter().map(String::from).collect(),
+            text: text.to_string(),
+            vault: None,
+        }
+    }
+
+    #[test]
+    fn render_semantic_text_includes_score_and_heading_path() {
+        let resp = SemanticSearchResponse {
+            results: vec![semantic_result(
+                "notes/databases/pgvector.md",
+                0.82,
+                vec!["Architecture", "Indexing"],
+                "Pgvector supports HNSW indexes.",
+            )],
+            hint: None,
+        };
+        let out = render_semantic_text(&resp);
+        assert!(
+            out.contains("notes/databases/pgvector.md  (score: 0.82)"),
+            "missing path+score header in:\n{out}"
+        );
+        assert!(
+            out.contains("  > Architecture / Indexing"),
+            "missing joined heading_path in:\n{out}"
+        );
+        assert!(
+            out.contains("  Pgvector supports HNSW indexes."),
+            "missing body in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_semantic_text_filters_empty_heading_segments() {
+        let resp = SemanticSearchResponse {
+            results: vec![semantic_result(
+                "notes/orphan.md",
+                0.5,
+                vec!["Setup", "", "Prereqs"],
+                "body",
+            )],
+            hint: None,
+        };
+        let out = render_semantic_text(&resp);
+        assert!(
+            out.contains("  > Setup / Prereqs"),
+            "expected filtered heading_path 'Setup / Prereqs' in:\n{out}"
+        );
+        assert!(
+            !out.contains(" /  / "),
+            "expected empty segments dropped (no double-separator) in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_semantic_text_renders_hint_when_present() {
+        let resp = SemanticSearchResponse {
+            results: vec![],
+            hint: Some("semantic index is building".to_string()),
+        };
+        let out = render_semantic_text(&resp);
+        assert!(
+            out.contains("(semantic index is building)"),
+            "expected hint suffix in:\n{out}"
+        );
     }
 
     #[test]
