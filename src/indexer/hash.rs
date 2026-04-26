@@ -1,3 +1,4 @@
+use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -22,6 +23,16 @@ pub fn hash_file(path: &Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(format!("sha256:{:x}", hasher.finalize()))
+}
+
+pub fn read_and_hash(path: &Path) -> Result<(String, String)> {
+    let bytes =
+        fs::read(path).with_context(|| format!("reading file for indexing: {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    let hash = format!("sha256:{:x}", hasher.finalize());
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+    Ok((body, hash))
 }
 
 #[cfg(test)]
@@ -71,5 +82,42 @@ mod tests {
     fn hash_file_missing_path_errors() {
         let err = hash_file(Path::new("/no/such/path/should/exist/x.md")).unwrap_err();
         assert!(format!("{err:#}").contains("opening file for hashing"));
+    }
+
+    #[test]
+    fn read_and_hash_roundtrip() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(b"# hello\n\nbody").unwrap();
+        tmp.flush().unwrap();
+
+        let (body, hash) = read_and_hash(tmp.path()).unwrap();
+        assert_eq!(body, "# hello\n\nbody");
+        assert_eq!(hash, hash_file(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn read_and_hash_lossy_utf8_replaces_invalid_bytes() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        tmp.write_all(b"\xFFvalid").unwrap();
+        tmp.flush().unwrap();
+
+        let (body, hash) = read_and_hash(tmp.path()).unwrap();
+        assert!(
+            body.starts_with('\u{FFFD}'),
+            "expected U+FFFD replacement char at start, got: {body:?}"
+        );
+        assert!(body.ends_with("valid"));
+        assert_eq!(hash, hash_file(tmp.path()).unwrap());
+    }
+
+    #[test]
+    fn read_and_hash_handles_empty_file() {
+        let tmp = NamedTempFile::new().unwrap();
+        let (body, hash) = read_and_hash(tmp.path()).unwrap();
+        assert_eq!(body, "");
+        assert_eq!(
+            hash,
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 }

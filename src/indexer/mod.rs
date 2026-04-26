@@ -119,30 +119,34 @@ fn upsert_file_in_tx(
 ) -> Result<UpsertEffect> {
     match existing {
         None => {
-            let hash = hash::hash_file(abs).with_context(|| format!("hashing new file {rel}"))?;
+            let (body, hash) =
+                hash::read_and_hash(abs).with_context(|| format!("reading new file {rel}"))?;
             tx.execute(
-                "INSERT INTO files (path, size, mtime, content_hash, indexed_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![rel, size, mtime, hash, now_iso],
+                "INSERT INTO files (path, size, mtime, content_hash, content, indexed_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![rel, size, mtime, hash, body, now_iso],
             )
             .with_context(|| format!("inserting row for {rel}"))?;
             Ok(UpsertEffect::Inserted { hash })
         }
         Some(prev) if prev.size == size && prev.mtime == mtime => Ok(UpsertEffect::StatGateHit),
         Some(prev) => {
-            let hash =
-                hash::hash_file(abs).with_context(|| format!("hashing changed-stat file {rel}"))?;
+            let (body, hash) = hash::read_and_hash(abs)
+                .with_context(|| format!("reading changed-stat file {rel}"))?;
             if hash == prev.content_hash {
+                // mtime-only update: keep content in lockstep with the last-read
+                // bytes so an mtime-touched file with invalid UTF-8 reflects the
+                // current lossy decoding.
                 tx.execute(
-                    "UPDATE files SET mtime = ?1, indexed_at = ?2 WHERE path = ?3",
-                    params![mtime, now_iso, rel],
+                    "UPDATE files SET mtime = ?1, content = ?2, indexed_at = ?3 WHERE path = ?4",
+                    params![mtime, body, now_iso, rel],
                 )
                 .with_context(|| format!("updating mtime-only for {rel}"))?;
                 Ok(UpsertEffect::HashMatched)
             } else {
                 tx.execute(
-                    "UPDATE files SET size = ?1, mtime = ?2, content_hash = ?3, indexed_at = ?4 WHERE path = ?5",
-                    params![size, mtime, hash, now_iso, rel],
+                    "UPDATE files SET size = ?1, mtime = ?2, content_hash = ?3, content = ?4, indexed_at = ?5 WHERE path = ?6",
+                    params![size, mtime, hash, body, now_iso, rel],
                 )
                 .with_context(|| format!("updating row for {rel}"))?;
                 Ok(UpsertEffect::Updated { hash })
@@ -352,6 +356,22 @@ mod tests {
             let conn = pool.get().unwrap();
             conn.query_row(
                 "SELECT content_hash FROM files WHERE path = ?1",
+                params![rel],
+                |r| r.get(0),
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn read_content(store: &Store, rel: &str) -> String {
+        let pool = store.pool();
+        let rel = rel.to_string();
+        task::spawn_blocking(move || -> String {
+            let conn = pool.get().unwrap();
+            conn.query_row(
+                "SELECT content FROM files WHERE path = ?1",
                 params![rel],
                 |r| r.get(0),
             )
@@ -722,6 +742,40 @@ mod tests {
             ReindexOutcome::Updated { content_hash } => assert_eq!(content_hash, expected),
             other => panic!("expected Updated with hash, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn scan_populates_content_for_inserted_files() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::write(vault_dir.path().join("hello.md"), b"# hello\n\nbody").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        let report = scanner.run().await.unwrap();
+        assert_eq!(report.inserted, 1);
+
+        assert_eq!(read_content(&store, "hello.md").await, "# hello\n\nbody");
+    }
+
+    #[tokio::test]
+    async fn scan_populates_content_for_updated_files() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# v1").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.run().await.unwrap();
+        assert_eq!(read_content(&store, "hello.md").await, "# v1");
+
+        fs::write(&path, b"# v2 longer").unwrap();
+        let report = scanner.run().await.unwrap();
+        assert_eq!(report.updated, 1);
+        assert_eq!(read_content(&store, "hello.md").await, "# v2 longer");
     }
 
     #[tokio::test]
