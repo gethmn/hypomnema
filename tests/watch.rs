@@ -1,0 +1,321 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use hypomnema::config::Config;
+use hypomnema::indexer::Scanner;
+use hypomnema::store::Store;
+use hypomnema::watcher::{self, Watcher};
+use rusqlite::{Connection, OpenFlags};
+use tempfile::TempDir;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+
+const DEBOUNCE_MS: u64 = 50;
+const SETTLE: Duration = Duration::from_millis(2 * DEBOUNCE_MS);
+
+struct Fixture {
+    _root: TempDir,
+    vault: PathBuf,
+    data_dir: PathBuf,
+    config: Config,
+    debounce_ms: u64,
+}
+
+fn fixture() -> Fixture {
+    fixture_with_debounce(DEBOUNCE_MS)
+}
+
+fn fixture_with_debounce(debounce_ms: u64) -> Fixture {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let vault = root.path().join("vault");
+    let data_dir = root.path().join("data");
+    fs::create_dir_all(&vault).expect("create vault dir");
+
+    let cfg_path = root.path().join("config.toml");
+    fs::write(
+        &cfg_path,
+        format!(
+            "vault = \"{}\"\n[storage]\ndata_dir = \"{}\"\n[watcher]\ndebounce_ms = {}\n",
+            vault.display(),
+            data_dir.display(),
+            debounce_ms,
+        ),
+    )
+    .expect("write config.toml");
+    let config = Config::load(Some(&cfg_path)).expect("load config");
+    let vault = config.vault.0.clone();
+    let data_dir = config.storage.data_dir.0.clone();
+    Fixture {
+        _root: root,
+        vault,
+        data_dir,
+        config,
+        debounce_ms,
+    }
+}
+
+struct Live {
+    watcher: Watcher,
+    shutdown_tx: watch::Sender<bool>,
+    consumer: JoinHandle<()>,
+}
+
+impl Live {
+    async fn shutdown(self) {
+        let _ = self.shutdown_tx.send(true);
+        let _ = self.consumer.await;
+        drop(self.watcher);
+    }
+}
+
+async fn start(fx: &Fixture) -> Live {
+    let store = Store::open(&fx.data_dir, &fx.config.storage.index_file)
+        .await
+        .expect("open store");
+    let scanner = Scanner::new(&fx.config, &store).expect("construct scanner");
+    let _ = scanner.run().await.expect("initial scan");
+
+    let ignores = fx
+        .config
+        .watcher
+        .compiled_ignores()
+        .expect("compile ignores");
+    let (watcher, rx) = watcher::spawn_watcher(
+        &fx.vault,
+        ignores,
+        Duration::from_millis(fx.debounce_ms),
+        256,
+    )
+    .expect("spawn watcher");
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, shutdown_rx));
+
+    Live {
+        watcher,
+        shutdown_tx,
+        consumer,
+    }
+}
+
+fn open_index(data_dir: &Path) -> Connection {
+    let db_path = data_dir.join("index.sqlite");
+    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("open index.sqlite read-only")
+}
+
+fn paths_in_index(data_dir: &Path) -> Vec<String> {
+    let conn = open_index(data_dir);
+    let mut stmt = conn
+        .prepare("SELECT path FROM files ORDER BY path")
+        .unwrap();
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+    rows.map(|r| r.unwrap()).collect()
+}
+
+fn hash_for(data_dir: &Path, path: &str) -> Option<String> {
+    let conn = open_index(data_dir);
+    conn.query_row(
+        "SELECT content_hash FROM files WHERE path = ?1",
+        rusqlite::params![path],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+#[tokio::test]
+async fn edit_updates_content_hash() {
+    let fx = fixture();
+    fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
+
+    let live = start(&fx).await;
+    let initial_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+
+    fs::write(fx.vault.join("note.md"), b"# v1 changed bytes\n").unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    let new_hash = hash_for(&fx.data_dir, "note.md").expect("row after edit");
+    assert_ne!(initial_hash, new_hash, "content_hash should change on edit");
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn dropping_sync_conflict_file_is_ignored() {
+    let fx = fixture();
+    fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    fs::write(
+        fx.vault.join("My Note.sync-conflict-202604.md"),
+        b"# conflict\n",
+    )
+    .unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn dropping_obsidian_conflict_file_is_ignored() {
+    let fx = fixture();
+    fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    fs::write(
+        fx.vault.join("My Note (conflicted copy 2026-04-25).md"),
+        b"# conflict\n",
+    )
+    .unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_md_removes_row() {
+    let fx = fixture();
+    fs::write(fx.vault.join("a.md"), b"# a\n").unwrap();
+    fs::write(fx.vault.join("b.md"), b"# b\n").unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(
+        paths_in_index(&fx.data_dir),
+        vec!["a.md".to_string(), "b.md".to_string()]
+    );
+
+    fs::remove_file(fx.vault.join("a.md")).unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["b.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_modified_without_byte_change_leaves_hash() {
+    use std::time::SystemTime;
+
+    let fx = fixture();
+    fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
+
+    let live = start(&fx).await;
+    let original_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+
+    let f = fs::OpenOptions::new()
+        .write(true)
+        .open(fx.vault.join("note.md"))
+        .unwrap();
+    f.set_modified(SystemTime::now() + Duration::from_secs(60))
+        .unwrap();
+    drop(f);
+    tokio::time::sleep(SETTLE).await;
+
+    let after_hash = hash_for(&fx.data_dir, "note.md").expect("row after touch");
+    assert_eq!(
+        original_hash, after_hash,
+        "content_hash must not change for an mtime-only bump"
+    );
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn creating_nested_md_appears_with_forward_slash_path() {
+    let fx = fixture();
+    fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
+    fs::create_dir_all(fx.vault.join("notes/sub")).unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    fs::write(fx.vault.join("notes/sub/new.md"), b"# new\n").unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(
+        paths_in_index(&fx.data_dir),
+        vec!["kept.md".to_string(), "notes/sub/new.md".to_string()]
+    );
+
+    live.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rename_decomposes_into_remove_and_upsert() {
+    let fx = fixture();
+    fs::create_dir_all(fx.vault.join("notes")).unwrap();
+    fs::write(fx.vault.join("notes/a.md"), b"# a\n").unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["notes/a.md".to_string()]);
+
+    fs::rename(fx.vault.join("notes/a.md"), fx.vault.join("notes/b.md")).unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["notes/b.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn dropping_dot_git_md_is_ignored() {
+    let fx = fixture();
+    fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
+    fs::create_dir_all(fx.vault.join(".git")).unwrap();
+
+    let live = start(&fx).await;
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    fs::write(fx.vault.join(".git/HEAD.md"), b"ref: refs/heads/main\n").unwrap();
+    tokio::time::sleep(SETTLE).await;
+
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+
+    live.shutdown().await;
+}
+
+#[tokio::test]
+async fn sustained_save_loop_completes_with_consistent_row() {
+    let fx = fixture();
+    fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
+
+    let live = start(&fx).await;
+    let initial_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+
+    let started = Instant::now();
+    for _ in 0..50 {
+        fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
+    }
+    // Sustained writes keep extending the debouncer's quiet window; settle
+    // generously so the final batch has time to fire and the consumer to
+    // reindex once on the stabilised file.
+    tokio::time::sleep(SETTLE * 4).await;
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "sustained save loop took {:?}, expected < 5s (criterion 5 smoke)",
+        elapsed
+    );
+
+    let final_hash =
+        hash_for(&fx.data_dir, "note.md").expect("row must still exist after save loop");
+    assert_eq!(
+        initial_hash, final_hash,
+        "same-bytes loop must leave content_hash equal to the original"
+    );
+    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+
+    live.shutdown().await;
+}
