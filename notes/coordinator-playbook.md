@@ -50,7 +50,7 @@ A fresh agent that finds itself at the top of the hierarchy — talking directly
 3. Send the workplan-writing prompt to the new coordinator-to-be (template in [§ Workplan-writing prompt](#workplan-writing-prompt)).
 4. Set an idle timer to wake when the coordinator-to-be finishes the workplan: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator-to-be went idle, check workplan>")`.
 5. On wake-up: read the workplan output, surface its path to the human for review. Do not modify it.
-6. On the human's "build" / "go" / "approved": forward "build" to the same coordinator-to-be process (don't spawn a new one — this is the moment of the in-place coordinator promotion). The coordinator takes it from there per the COORDINATOR section.
+6. On the human's "build" / "go" / "approved": forward "build" to the same coordinator-to-be process (don't spawn a new one — this is the moment of the in-place coordinator promotion). The coordinator takes it from there per the COORDINATOR section. Then **arm the build-phase poll** per [§ Polling the coordinator](#polling-the-coordinator-cheap-check-and-re-arm) — the workplan-completion timer set in step 4 only covered the writing phase.
 
 ### Per-step ongoing
 
@@ -58,6 +58,19 @@ While the coordinator runs:
 
 - The orchestrator handles human-facing surfacing only (status checks, escalation routing per [§ Orchestrator surfacing rules](#orchestrator-surfacing-rules)).
 - The orchestrator **never** spawns task agents directly. If you find yourself wanting to spawn a `step-NN-task-MM`, stop — you are not the coordinator. Re-read this section.
+
+#### Polling the coordinator (cheap-check-and-re-arm)
+
+The coordinator goes idle many times during a build — once between every per-task wake-up. The orchestrator's idle-watch on the coordinator therefore fires more often than the orchestrator has work to do. Keep the noise cheap rather than over-thinking each fire:
+
+1. Arm an idle-watch on the coordinator: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=600000, body="<wake-up: coordinator idle, run bounded check per playbook>")`. 10-min cap is the default — short enough that a real `needs-human` event doesn't sit too long, long enough to absorb routine coordinator-idle gaps. Tighten for higher-vigilance phases (e.g. 5 min if you've just answered an escalation and expect rapid follow-through).
+2. **On every wake-up, run exactly this bounded checklist:**
+   1. `todo_list(tags=["needs-human"], completed=false)` — if non-empty, surface to the human per [§ Orchestrator surfacing rules](#orchestrator-surfacing-rules) and stop (do not re-arm; the human's answer is the next event).
+   2. `get_process_status(<coordinator-pid>)` — if non-Running, check the latest comment on the step's outer todo (17–21 set); if it confirms completion, run § Step boundary; otherwise treat as a crash.
+   3. Otherwise re-arm the timer with the same parameters and stop.
+3. **Do not reason further per fire.** If steps 1–2 show nothing for the orchestrator to act on, the answer is "still waiting on the subagents" and the next step is re-arm. Future-orchestrator-self may feel an urge to glance at the scratchpad or count tasks — resist it. The coordinator surfaces what the orchestrator needs via `needs-human` todos; everything else is the coordinator's business.
+
+Why this shape: the coordinator's own `timer_fire_when_idle_any` on its task agents is reliable as a "task agent done" signal (14/14 in pilot), but the orchestrator's same signal on the coordinator picks up every gap between the coordinator's per-task timers, not just step boundaries. Bounding per-fire work keeps that noise cheap; tightening `max_wait_ms` keeps real escalations fresh. Pilot lesson: a 30-min cap let two task completions go unnoticed before the orchestrator next checked — too long. 10 min is the calibrated default.
 
 ### Step boundary
 
@@ -397,9 +410,15 @@ When the human says…
 
 These are unresolved and worth noting during the pilot run:
 
-- **Orchestrator–coordinator separation.** Step 3 will be the first build to actually run the 3-tier architecture (steps 1 and 2 collapsed orchestrator and coordinator into one process). Does the separation pay for itself? Does the orchestrator have enough to do, or does the extra spawn add latency without value?
 - **Coordinator context drift.** The coordinator's session context grows across many task wake-ups. After ~10 wake-ups, does it still behave correctly, or does it need to compact / re-read scratchpad more aggressively?
-- **Idle-detection false positives.** Is `timer_fire_when_idle_any` reliable as a "task agent done" signal, or do we get false wake-ups from intermediate idle states (waiting for a tool result, etc.)?
 - **Status-check interruption.** When the coordinator interrupts an agent via `send_input` for a status check, does that derail an in-flight task? May need a less intrusive signal.
 - **Batching pattern emergence.** Across multiple steps, do the structured batching evals (per § Post-build evaluation) reveal a stable pattern about which task shapes batch well and which don't? Until at least 3 steps have shipped with the eval, treat per-step batching outcomes as anecdote, not signal — don't change the playbook's batching rules from one step's data.
 - **Escalation latency.** From task-agent escalation → coordinator notice → human notice → resolution → task agent re-spawn, what's the round-trip time? Is the 5-min escalation poll right?
+
+### Resolved during the pilot
+
+Questions that started in the open list above and answered cleanly during the steps-1–3 pilot. Kept here so the answer is visible, and so future-self doesn't re-open them without reason.
+
+- **Idle-detection false positives** (coordinator → task-agent direction). 14/14 genuine fires across steps 1–3. `timer_fire_when_idle_any(processes=[<task-agent-pid>])` is reliable as a "task agent done" signal in the coordinator's per-task wake-up loop. *Caveat*: scoped to the coordinator-watching-its-own-task-agents direction. The orchestrator-watching-the-coordinator direction is noisier (the coordinator goes idle many times during a build); see ORCHESTRATOR § Polling the coordinator for the bounded-work pattern that handles it.
+
+- **Orchestrator–coordinator separation pays off.** Step 3 (the first true 3-tier build) ran cleanly. The orchestrator's surface area was light: spawn coordinator-to-be, forward "build", periodically check for `needs-human`, close on completion. The separation kept the human-facing layer honest (orchestrator never writes code) and produced no escalation routing in a clean build. *Do not collapse the tiers on the basis of "the orchestrator had little to do."* The light workload is the success state. Revisit the question only if a step accumulates multiple escalations and the orchestrator's routing role becomes load-bearing.
