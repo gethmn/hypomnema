@@ -3,6 +3,7 @@
 //
 // See AGENTS.md for orientation and docs/hypomnema-handoff.md for scope.
 
+pub mod api;
 pub mod cli;
 pub mod config;
 pub mod indexer;
