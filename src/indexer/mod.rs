@@ -2,13 +2,15 @@ mod hash;
 mod walk;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
 use globset::GlobSet;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use tokio::task;
 use tracing::info;
 
@@ -26,6 +28,20 @@ pub struct ScanReport {
     pub skipped_outside_vault: usize,
     pub walk_errors: usize,
     pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReindexOutcome {
+    Inserted,
+    Updated,
+    HashUnchanged,
+    MissingFromDisk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveOutcome {
+    Removed,
+    NotPresent,
 }
 
 pub struct Scanner {
@@ -55,6 +71,23 @@ impl Scanner {
             .await
             .context("spawn_blocking join error in Scanner::run")?
     }
+
+    pub async fn reindex_path(&self, rel: &str) -> Result<ReindexOutcome> {
+        let vault = self.vault.clone();
+        let pool = self.pool.clone();
+        let rel = rel.to_string();
+        task::spawn_blocking(move || single_file_blocking(vault, rel, pool))
+            .await
+            .context("spawn_blocking join error in Scanner::reindex_path")?
+    }
+
+    pub async fn remove_path(&self, rel: &str) -> Result<RemoveOutcome> {
+        let pool = self.pool.clone();
+        let rel = rel.to_string();
+        task::spawn_blocking(move || remove_blocking(rel, pool))
+            .await
+            .context("spawn_blocking join error in Scanner::remove_path")?
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +95,76 @@ struct StoredFile {
     size: i64,
     mtime: String,
     content_hash: String,
+}
+
+// Internal effect of one upsert decision against an existing row (or absence
+// thereof). The bulk and single-file paths both go through `upsert_file_in_tx`
+// so they cannot disagree on stat-gate / hash-gate semantics; they only
+// disagree on how to count the result.
+enum UpsertEffect {
+    Inserted,
+    Updated,
+    HashMatched,
+    StatGateHit,
+}
+
+fn upsert_file_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    rel: &str,
+    abs: &Path,
+    size: i64,
+    mtime: &str,
+    now_iso: &str,
+    existing: Option<&StoredFile>,
+) -> Result<UpsertEffect> {
+    match existing {
+        None => {
+            let hash = hash::hash_file(abs).with_context(|| format!("hashing new file {rel}"))?;
+            tx.execute(
+                "INSERT INTO files (path, size, mtime, content_hash, indexed_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![rel, size, mtime, hash, now_iso],
+            )
+            .with_context(|| format!("inserting row for {rel}"))?;
+            Ok(UpsertEffect::Inserted)
+        }
+        Some(prev) if prev.size == size && prev.mtime == mtime => Ok(UpsertEffect::StatGateHit),
+        Some(prev) => {
+            let hash =
+                hash::hash_file(abs).with_context(|| format!("hashing changed-stat file {rel}"))?;
+            if hash == prev.content_hash {
+                tx.execute(
+                    "UPDATE files SET mtime = ?1, indexed_at = ?2 WHERE path = ?3",
+                    params![mtime, now_iso, rel],
+                )
+                .with_context(|| format!("updating mtime-only for {rel}"))?;
+                Ok(UpsertEffect::HashMatched)
+            } else {
+                tx.execute(
+                    "UPDATE files SET size = ?1, mtime = ?2, content_hash = ?3, indexed_at = ?4 WHERE path = ?5",
+                    params![size, mtime, hash, now_iso, rel],
+                )
+                .with_context(|| format!("updating row for {rel}"))?;
+                Ok(UpsertEffect::Updated)
+            }
+        }
+    }
+}
+
+fn read_existing_one(tx: &rusqlite::Transaction<'_>, rel: &str) -> Result<Option<StoredFile>> {
+    tx.query_row(
+        "SELECT size, mtime, content_hash FROM files WHERE path = ?1",
+        params![rel],
+        |row| {
+            Ok(StoredFile {
+                size: row.get(0)?,
+                mtime: row.get(1)?,
+                content_hash: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .with_context(|| format!("reading existing row for {rel}"))
 }
 
 fn run_blocking(vault: PathBuf, ignores: GlobSet, pool: SqlitePool) -> Result<ScanReport> {
@@ -106,40 +209,20 @@ fn run_blocking(vault: PathBuf, ignores: GlobSet, pool: SqlitePool) -> Result<Sc
 
     for entry in &walked.entries {
         found.insert(entry.rel_path.clone());
-        match existing.get(&entry.rel_path) {
-            None => {
-                let hash = hash::hash_file(&entry.abs_path)
-                    .with_context(|| format!("hashing new file {}", entry.rel_path))?;
-                tx.execute(
-                    "INSERT INTO files (path, size, mtime, content_hash, indexed_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![entry.rel_path, entry.size, entry.mtime, hash, now_iso],
-                )
-                .with_context(|| format!("inserting row for {}", entry.rel_path))?;
-                report.inserted += 1;
-            }
-            Some(prev) if prev.size == entry.size && prev.mtime == entry.mtime => {
-                // Stat-gate: same size + mtime → trust the stored content_hash, no work.
-            }
-            Some(prev) => {
-                let hash = hash::hash_file(&entry.abs_path)
-                    .with_context(|| format!("hashing changed-stat file {}", entry.rel_path))?;
-                if hash == prev.content_hash {
-                    tx.execute(
-                        "UPDATE files SET mtime = ?1, indexed_at = ?2 WHERE path = ?3",
-                        params![entry.mtime, now_iso, entry.rel_path],
-                    )
-                    .with_context(|| format!("updating mtime-only for {}", entry.rel_path))?;
-                    report.hash_unchanged += 1;
-                } else {
-                    tx.execute(
-                        "UPDATE files SET size = ?1, mtime = ?2, content_hash = ?3, indexed_at = ?4 WHERE path = ?5",
-                        params![entry.size, entry.mtime, hash, now_iso, entry.rel_path],
-                    )
-                    .with_context(|| format!("updating row for {}", entry.rel_path))?;
-                    report.updated += 1;
-                }
-            }
+        let effect = upsert_file_in_tx(
+            &tx,
+            &entry.rel_path,
+            &entry.abs_path,
+            entry.size,
+            &entry.mtime,
+            &now_iso,
+            existing.get(&entry.rel_path),
+        )?;
+        match effect {
+            UpsertEffect::Inserted => report.inserted += 1,
+            UpsertEffect::Updated => report.updated += 1,
+            UpsertEffect::HashMatched => report.hash_unchanged += 1,
+            UpsertEffect::StatGateHit => {}
         }
     }
 
@@ -171,6 +254,62 @@ fn run_blocking(vault: PathBuf, ignores: GlobSet, pool: SqlitePool) -> Result<Sc
     Ok(report)
 }
 
+fn single_file_blocking(vault: PathBuf, rel: String, pool: SqlitePool) -> Result<ReindexOutcome> {
+    let abs = vault.join(&rel);
+
+    let metadata = match fs::metadata(&abs) {
+        Ok(m) => m,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(ReindexOutcome::MissingFromDisk);
+        }
+        Err(err) => {
+            return Err(anyhow::Error::new(err))
+                .with_context(|| format!("reading metadata for {}", abs.display()));
+        }
+    };
+    if !metadata.is_file() {
+        return Ok(ReindexOutcome::MissingFromDisk);
+    }
+    let size = metadata.len() as i64;
+    let mtime_sys = metadata
+        .modified()
+        .with_context(|| format!("reading mtime for {}", abs.display()))?;
+    let mtime = walk::format_mtime(mtime_sys);
+    let now_iso = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
+
+    let mut conn = pool
+        .get()
+        .context("acquiring connection from pool for reindex_path")?;
+    let tx = conn
+        .transaction()
+        .context("beginning reindex transaction")?;
+    let existing = read_existing_one(&tx, &rel)?;
+    let effect = upsert_file_in_tx(&tx, &rel, &abs, size, &mtime, &now_iso, existing.as_ref())?;
+    tx.commit().context("committing reindex transaction")?;
+
+    Ok(match effect {
+        UpsertEffect::Inserted => ReindexOutcome::Inserted,
+        UpsertEffect::Updated => ReindexOutcome::Updated,
+        UpsertEffect::HashMatched | UpsertEffect::StatGateHit => ReindexOutcome::HashUnchanged,
+    })
+}
+
+fn remove_blocking(rel: String, pool: SqlitePool) -> Result<RemoveOutcome> {
+    let mut conn = pool
+        .get()
+        .context("acquiring connection from pool for remove_path")?;
+    let tx = conn.transaction().context("beginning remove transaction")?;
+    let n = tx
+        .execute("DELETE FROM files WHERE path = ?1", params![rel])
+        .with_context(|| format!("deleting row for {rel}"))?;
+    tx.commit().context("committing remove transaction")?;
+    Ok(if n > 0 {
+        RemoveOutcome::Removed
+    } else {
+        RemoveOutcome::NotPresent
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +332,22 @@ mod tests {
             let conn = pool.get().unwrap();
             conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
                 .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn read_hash(store: &Store, rel: &str) -> String {
+        let pool = store.pool();
+        let rel = rel.to_string();
+        task::spawn_blocking(move || -> String {
+            let conn = pool.get().unwrap();
+            conn.query_row(
+                "SELECT content_hash FROM files WHERE path = ?1",
+                params![rel],
+                |r| r.get(0),
+            )
+            .unwrap()
         })
         .await
         .unwrap()
@@ -350,5 +505,142 @@ mod tests {
         let r2 = scanner.run().await.unwrap();
         assert_eq!(r2.deleted, 1);
         assert_eq!(count_files(&store).await, 1);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_inserts_new_file() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        let outcome = scanner.reindex_path("hello.md").await.unwrap();
+        assert_eq!(outcome, ReindexOutcome::Inserted);
+        assert_eq!(count_files(&store).await, 1);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_idempotent_when_bytes_unchanged() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        assert_eq!(
+            scanner.reindex_path("hello.md").await.unwrap(),
+            ReindexOutcome::Inserted
+        );
+        assert_eq!(
+            scanner.reindex_path("hello.md").await.unwrap(),
+            ReindexOutcome::HashUnchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn reindex_path_returns_updated_when_bytes_change() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# v1").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.reindex_path("hello.md").await.unwrap();
+        let h1 = read_hash(&store, "hello.md").await;
+
+        fs::write(&path, b"# v2 longer").unwrap();
+        let outcome = scanner.reindex_path("hello.md").await.unwrap();
+        assert_eq!(outcome, ReindexOutcome::Updated);
+        let h2 = read_hash(&store, "hello.md").await;
+        assert_ne!(h1, h2);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_mtime_only_bump_returns_hash_unchanged() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# stable").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.reindex_path("hello.md").await.unwrap();
+        let h1 = read_hash(&store, "hello.md").await;
+
+        let f = fs::File::options().write(true).open(&path).unwrap();
+        f.set_modified(SystemTime::now() + Duration::from_secs(2))
+            .unwrap();
+        drop(f);
+
+        let outcome = scanner.reindex_path("hello.md").await.unwrap();
+        assert_eq!(outcome, ReindexOutcome::HashUnchanged);
+        assert_eq!(read_hash(&store, "hello.md").await, h1);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_returns_missing_when_file_absent() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        let outcome = scanner.reindex_path("ghost.md").await.unwrap();
+        assert_eq!(outcome, ReindexOutcome::MissingFromDisk);
+        assert_eq!(count_files(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_handles_nested_relative_path() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::create_dir_all(vault_dir.path().join("notes/sub")).unwrap();
+        fs::write(vault_dir.path().join("notes/sub/note.md"), b"# nested").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        let outcome = scanner.reindex_path("notes/sub/note.md").await.unwrap();
+        assert_eq!(outcome, ReindexOutcome::Inserted);
+        assert_eq!(count_files(&store).await, 1);
+    }
+
+    #[tokio::test]
+    async fn remove_path_removes_present_row() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.reindex_path("hello.md").await.unwrap();
+        assert_eq!(count_files(&store).await, 1);
+
+        let outcome = scanner.remove_path("hello.md").await.unwrap();
+        assert_eq!(outcome, RemoveOutcome::Removed);
+        assert_eq!(count_files(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn remove_path_returns_not_present_for_unknown_row() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        let outcome = scanner.remove_path("ghost.md").await.unwrap();
+        assert_eq!(outcome, RemoveOutcome::NotPresent);
+        assert_eq!(count_files(&store).await, 0);
     }
 }
