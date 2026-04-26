@@ -85,7 +85,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     .await
     .expect("open store");
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-    let scanner = Scanner::new(&fx.config, &store, embedder).expect("construct scanner");
+    let scanner = Scanner::new(&fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
     let outbox_path = fx.data_dir.join(&fx.config.storage.outbox_file);
@@ -93,6 +93,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         pool: store.pool(),
         vault: fx.vault.clone(),
         outbox_path,
+        embedder,
+        embedding_dimension: fx.config.embedding.dimension,
     };
     let app = api::router(state);
 

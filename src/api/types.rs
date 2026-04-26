@@ -70,6 +70,35 @@ pub struct ContentMatchJson {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SemanticQueryJson {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_similarity: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticSearchResponse {
+    pub results: Vec<SemanticResultJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticResultJson {
+    pub score: f32,
+    pub file_path: String,
+    pub chunk_index: u32,
+    pub heading_path: Vec<String>,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResponse {
     pub vault: String,

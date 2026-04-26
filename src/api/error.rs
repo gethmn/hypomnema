@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
 
 use super::types::{ErrorBody, ErrorEnvelope};
+use crate::search::SemanticSearchError;
 
 pub(crate) struct ApiError {
     status: StatusCode,
@@ -27,6 +28,27 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal",
             message: "internal server error".to_string(),
+        }
+    }
+}
+
+impl From<SemanticSearchError> for ApiError {
+    fn from(err: SemanticSearchError) -> Self {
+        match err {
+            SemanticSearchError::EmbeddingUnavailable { detail } => ApiError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "embedding_unavailable",
+                message: detail,
+            },
+            SemanticSearchError::InvalidPrefix(detail) => ApiError {
+                status: StatusCode::BAD_REQUEST,
+                code: "invalid_prefix",
+                message: detail,
+            },
+            SemanticSearchError::Internal(e) => {
+                tracing::error!(error = ?e, "internal API error from semantic search");
+                ApiError::internal()
+            }
         }
     }
 }

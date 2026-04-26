@@ -100,9 +100,12 @@ mod tests {
     use tokio::sync::watch;
     use tokio::task::JoinHandle;
 
+    use std::sync::Arc;
+
     use super::*;
     use crate::api::{ApiState, router};
     use crate::config::EmbeddingConfig;
+    use crate::embedding::{Embedder, StubEmbedder};
     use crate::store::Store;
 
     struct TestDaemon {
@@ -128,10 +131,13 @@ mod tests {
         let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
             .await
             .unwrap();
+        let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
         let state = ApiState {
             pool: store.pool(),
             vault: vault.path().to_path_buf(),
             outbox_path: dir.path().join("outbox.jsonl"),
+            embedder,
+            embedding_dimension: 768,
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

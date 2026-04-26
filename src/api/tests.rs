@@ -6,8 +6,11 @@ use tempfile::TempDir;
 use tokio::task;
 use tower::ServiceExt;
 
+use std::sync::{Arc, Mutex};
+
 use super::{ApiState, router};
 use crate::config::EmbeddingConfig;
+use crate::embedding::{EmbedFuture, Embedder, EmbeddingError, StubEmbedder};
 use crate::store::Store;
 
 // 4 MB is plenty for these test bodies; we set a finite cap to satisfy
@@ -21,6 +24,10 @@ struct Harness {
 }
 
 async fn harness() -> Harness {
+    harness_with_embedder(Arc::new(StubEmbedder::new(768))).await
+}
+
+async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     let dir = TempDir::new().unwrap();
     let vault = TempDir::new().unwrap();
     let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
@@ -30,6 +37,8 @@ async fn harness() -> Harness {
         pool: store.pool(),
         vault: vault.path().to_path_buf(),
         outbox_path: dir.path().join("outbox.jsonl"),
+        embedder,
+        embedding_dimension: 768,
     };
     Harness {
         _dir: dir,
@@ -262,6 +271,270 @@ async fn search_response_omits_vault_field_in_v0() {
         entry.get("vault").is_none(),
         "content entry should omit `vault`; got {entry}"
     );
+}
+
+// ===== Semantic-search test helpers =====
+
+const DIM: usize = 768;
+
+/// Test embedder yielding a single result on the first call. Mirrors the
+/// `OneShotEmbedder` shape from `src/search/semantic.rs::tests` so handler
+/// tests can inject either a specific non-zero vector or a chosen
+/// `EmbeddingError`.
+struct OneShotEmbedder {
+    slot: Mutex<Option<Result<Vec<f32>, EmbeddingError>>>,
+}
+
+impl OneShotEmbedder {
+    fn ok(v: Vec<f32>) -> Arc<Self> {
+        Arc::new(Self {
+            slot: Mutex::new(Some(Ok(v))),
+        })
+    }
+    fn err(e: EmbeddingError) -> Arc<Self> {
+        Arc::new(Self {
+            slot: Mutex::new(Some(Err(e))),
+        })
+    }
+}
+
+impl Embedder for OneShotEmbedder {
+    fn embed_text<'a>(&'a self, _text: &'a str) -> EmbedFuture<'a> {
+        let r = self
+            .slot
+            .lock()
+            .unwrap()
+            .take()
+            .expect("OneShotEmbedder called more than once");
+        Box::pin(async move { r })
+    }
+}
+
+fn unit_vec(positions: &[(usize, f32)]) -> Vec<f32> {
+    let mut v = vec![0.0f32; DIM];
+    for (i, x) in positions {
+        v[*i] = *x;
+    }
+    v
+}
+
+async fn seed_chunk(
+    state: &ApiState,
+    file_path: &'static str,
+    chunk_index: u32,
+    heading_path: &'static str,
+    content: &'static str,
+    embedding: Vec<f32>,
+) {
+    let pool = state.pool.clone();
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                file_path,
+                chunk_index,
+                heading_path,
+                content,
+                "sha256:00",
+                0i64,
+                content.len() as i64,
+                "2026-01-01T00:00:00Z"
+            ],
+        )
+        .unwrap();
+        let chunk_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+            params![chunk_id, bytemuck::cast_slice::<f32, u8>(&embedding)],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn semantic_handler_returns_200_with_results_for_seeded_chunks() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        &h.state,
+        vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        &h.state,
+        "a.md",
+        0,
+        "Intro",
+        "alpha body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["file_path"], "a.md");
+    assert_eq!(results[0]["chunk_index"], 0);
+    assert_eq!(results[0]["heading_path"], json!(["Intro"]));
+    assert_eq!(results[0]["text"], "alpha body");
+    assert!(body.get("hint").is_none() || body["hint"].is_null());
+}
+
+#[tokio::test]
+async fn semantic_handler_returns_503_for_embedding_unavailable() {
+    let embedder = OneShotEmbedder::err(EmbeddingError::Status {
+        code: 503,
+        body: "service unavailable".to_string(),
+    });
+    let h = harness_with_embedder(embedder).await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "embedding_unavailable");
+}
+
+#[tokio::test]
+async fn semantic_handler_returns_400_for_invalid_prefix() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "prefix": "/abs" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_prefix");
+}
+
+#[tokio::test]
+async fn semantic_handler_omits_vault_field_in_v0_response() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        &h.state,
+        vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        &h.state,
+        "a.md",
+        0,
+        "Intro",
+        "alpha body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let entry = &body["results"][0];
+    assert!(
+        entry.get("vault").is_none(),
+        "semantic entry should omit `vault`; got {entry}"
+    );
+}
+
+#[tokio::test]
+async fn semantic_handler_returns_hint_when_index_empty_and_files_present() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(&h.state, vec![("a.md", "alpha", "2026-04-01T00:00:00Z")]).await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["results"].as_array().unwrap().is_empty());
+    assert_eq!(body["hint"], "semantic index is building");
+}
+
+#[tokio::test]
+async fn semantic_handler_clamps_min_similarity_to_unit_range() {
+    // Out-of-range min_similarity must not error; it clamps to [0.0, 1.0].
+    // 1.5 clamps to 1.0, which filters out an orthogonal seeded chunk
+    // (orthogonal cosine score is 0.5).
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        &h.state,
+        vec![("a.md", "orthogonal", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(&h.state, "a.md", 0, "", "orthogonal", unit_vec(&[(1, 1.0)])).await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "min_similarity": 1.5 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["results"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn semantic_handler_default_limit_caps_at_default() {
+    // Default limit (DEFAULT_LIMIT == 100) caps the result count even when
+    // more chunks are present. Seed 105 identical-vector chunks, omit
+    // `limit`, expect exactly 100 results.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let pool = h.state.pool.clone();
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0u32..105 {
+            let path = format!("f{i:03}.md");
+            tx.execute(
+                "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
+                 VALUES (?1, 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z', '')",
+                params![path],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at) \
+                 VALUES (?1, 0, '', 'x', 'sha256:00', 0, 1, '2026-01-01T00:00:00Z')",
+                params![path],
+            )
+            .unwrap();
+            let chunk_id = tx.last_insert_rowid();
+            let v = {
+                let mut v = vec![0.0f32; DIM];
+                v[0] = 1.0;
+                v
+            };
+            tx.execute(
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, bytemuck::cast_slice::<f32, u8>(&v)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 100);
 }
 
 #[tokio::test]

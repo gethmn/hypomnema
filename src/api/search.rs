@@ -4,11 +4,12 @@ use super::ApiState;
 use super::error::{ApiError, ApiJson};
 use super::types::{
     ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse,
+    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, SemanticQueryJson,
+    SemanticResultJson, SemanticSearchResponse,
 };
 use crate::search::{
-    ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, search_content,
-    search_filesystem,
+    ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery, SemanticResult,
+    search_content, search_filesystem, search_semantic,
 };
 
 const DEFAULT_LIMIT: usize = 100;
@@ -55,6 +56,35 @@ fn filesystem_to_json(r: FilesystemResult) -> FilesystemResultJson {
         size: r.size,
         mtime: r.mtime,
         content_hash: r.content_hash,
+        vault: None,
+    }
+}
+
+pub(crate) async fn semantic(
+    State(s): State<ApiState>,
+    ApiJson(req): ApiJson<SemanticQueryJson>,
+) -> Result<Json<SemanticSearchResponse>, ApiError> {
+    let q = SemanticQuery {
+        query: req.query,
+        prefix: req.prefix,
+        limit: req.limit.unwrap_or(DEFAULT_LIMIT),
+        min_similarity: req.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0),
+    };
+    let (rows, hint) =
+        search_semantic(s.pool.clone(), s.embedder.clone(), s.embedding_dimension, q)
+            .await
+            .map_err(ApiError::from)?;
+    let results = rows.into_iter().map(semantic_to_json).collect();
+    Ok(Json(SemanticSearchResponse { results, hint }))
+}
+
+fn semantic_to_json(r: SemanticResult) -> SemanticResultJson {
+    SemanticResultJson {
+        score: r.score,
+        file_path: r.file_path,
+        chunk_index: r.chunk_index,
+        heading_path: r.heading_path.split('/').map(String::from).collect(),
+        text: r.text,
         vault: None,
     }
 }
