@@ -43,6 +43,8 @@ Running `hmnd` with no subcommand starts the daemon in the foreground.
 
 Start the daemon in the foreground. Reads config, opens the SQLite store, starts the watcher, the HTTP server, and (depending on config) the MCP server over the configured transport.
 
+Implemented in step 3; the watcher runs for the daemon's lifetime, debounces filesystem events, and updates the index in place for files whose content hash changed.
+
 **Usage**:
 ```
 hmnd [--config PATH] [--rescan] [--mcp-stdio]

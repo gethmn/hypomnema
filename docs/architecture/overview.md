@@ -112,6 +112,8 @@ Uses `notify` with `notify-debouncer-full` to coalesce the event storms that edi
 
 Content-hash check: when the watcher observes a write, the indexer computes the file's content hash and compares against the stored hash. *No change in hash → no reindex, no outbox event.* This is the core defense against editor-save noise and sync-tool mtime churn. See [Pitfalls](../implementation/appendices/tech-stack/pitfalls.md) and the `.claude/skills/filesystem-watching/` skill.
 
+Step 3 ships the implementation: `notify-debouncer-full` feeds a translation layer into a bounded `tokio::mpsc` channel; a consumer task drives `Scanner::reindex_path` / `Scanner::remove_path` until shutdown drains the channel.
+
 ### Indexer
 
 Three responsibilities, run on each changed file:

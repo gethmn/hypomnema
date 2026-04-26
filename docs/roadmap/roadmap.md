@@ -57,6 +57,8 @@
 
 ## Step 3 — Watcher
 
+**Status**: shipped 2026-04-26
+
 **Goal**: `notify` + `notify-debouncer-full` watch the vault. On debounced events, re-hash changed files; if the new hash differs from the stored hash, update the row. Sync-conflict filenames filtered at the watcher boundary (per `.claude/skills/filesystem-watching`).
 
 **Shipping criteria**:

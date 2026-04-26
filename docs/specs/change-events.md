@@ -39,7 +39,7 @@ This content-hash gate is the primary defense against editor-save noise and sync
 }
 ```
 
-Event types: `created`, `modified`, `deleted`. (Renames are observed as a `deleted` + `created` pair in v0; fused rename detection is an open question.)
+Event types: `created`, `modified`, `deleted`. v0 behavior, confirmed in step 3: renames are observed as a `deleted` + `created` pair. Fused rename detection remains open (line 98).
 
 ### Consumer Subscription
 
