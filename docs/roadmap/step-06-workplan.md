@@ -2,7 +2,7 @@
 
 **Step**: 6 of 8 (round 2 of 2). First step of round 2 — see [`roadmap-2.md`](./roadmap-2.md) for the round and [`roadmap.md`](./roadmap.md) for round 1.
 
-**Status**: workplan written 2026-04-26; awaiting review before build.
+**Status**: shipped 2026-04-26. See [§ Build-time amendments](#build-time-amendments) at the end of this file for the prose-accuracy edits the build surfaced.
 
 **Round-1 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) end-of-round retro):
 
@@ -463,3 +463,23 @@ This workplan came in at ~460 lines, under the ~1000-line threshold of the new P
 
 **One residual ambiguity flagged for the agent at task time**:
 - The `sqlite-vec` Cargo crate's exact name and the runtime-load-vs-Cargo-bundle shape. Task 6.1 and § Net new dependencies both flag this as an implementation choice the agent verifies against the upstream sqlite-vec project. This is a *narrow* prose-accuracy escape hatch — the verification gate is in the task itself, not deferred to soft-flag.
+
+---
+
+## Build-time amendments
+
+The following items came up during the build (2026-04-26) and are recorded here for accuracy. They do **not** change the shipped behavior; the build matched the workplan's load-bearing intent in every case. The amendments are workplan-body corrections that the build surfaced, plus one cross-task design tension that resolved to a small follow-up commit (Task 6.4r1).
+
+1. **Pre-build directive 1 (sqlite-vec Cargo verification — § Task 6.1, § Net new dependencies)** — Task 6.1's verification confirmed runtime-load is the right shape: **no `sqlite-vec` Cargo entry**; only the `rusqlite` `load_extension` feature flip + the path config from Resolution 5 (with the upstream-sourced `vec0.dylib` placed at `embedding.extension_path`). The workplan's "or its bundled-loading shim" hedge can be read as "deferred to release-packaging."
+
+2. **Pre-build directive 2 (futures::stream pseudocode — § Task 6.4)** — Task 6.4's pseudocode imports `futures::stream::iter(...).then(...).try_collect()`. `futures` is not in tree, and at v0 `batch_size = 1` the stream is a one-element iterator. The shipped pipeline uses a plain sequential `for chunk in &chunks { match client.embed(...).await { ... } }` form (recorded as soft-flag-to-coordinator by Task 6.4 per the directive). Treat the workplan's pseudocode as illustrative, not a binding shape.
+
+3. **Pre-build directive 3 + Task 6.4r1 (DimensionMismatch classification)** — Task 6.5's manual smoke (Run 2: service up, returns wrong-dimension vector) demonstrated that Task 6.4's `process_entry` was propagating `EmbeddingError::DimensionMismatch` instead of skip-and-logging, which contradicted directive 3's "WARN, do not fail the daemon" intent for the operator-experience contract. The coordinator dispatched a small surgical follow-up (Task 6.4r1, commit `72f2934`) that reclassifies `DimensionMismatch` alongside `Transport(_)` and `Status { code: 500..=599, .. }` as skip-and-log. Task 6.4's "Forward note for Task 6.5" recommendation that `DimensionMismatch` propagate-and-bubble is **superseded** — the v0 contract is "service-up-wrong-dim never crashes the daemon, anywhere in the runtime." Task 6.6's integration tests added a 7th case covering this path.
+
+4. **Task 6.3 — `EmbeddingClient` field set** — workplan literal listed `http, endpoint, model, api_key, timeout, max_retries, batch_size`. Shipped: `http, endpoint, model, api_key, dimension, max_retries`. Reasons: `timeout` is consumed by `reqwest::Client::builder().timeout()` at construction (no need to retain); `batch_size` is config-only at v0 (the client always sends a one-element `input` array); `dimension` is needed at the call site for the `DimensionMismatch` check (the workplan acknowledges this in prose but didn't list it as a struct field). Public `EmbeddingClient::new(&EmbeddingConfig)` shape is unchanged.
+
+5. **Task 6.4 — test name `reindex_skips_on_embedding_transport_error`** — the test exercises the skip-and-log code path via `Status { code: 503 }` rather than a synthetic real `Transport` (`reqwest::Error` has no public constructor). Both classify identically per Resolution 1; only the trigger differs. A semantically more accurate name would be `reindex_skips_on_embedding_skip_class_error`. Task 6.6's live integration tests (`embedding_service_unavailable_skips_file_and_keeps_daemon_responsive`) exercise the real-Transport equivalent end-to-end.
+
+6. **Task 6.6 added a 7th integration case** — `embedding_service_returns_wrong_dimension_skips_file_and_keeps_daemon_responsive` complements the 6 prescribed cases, covering the runtime DimensionMismatch path that Task 6.4r1 reclassified.
+
+7. **Cross-platform extension binary (boundary-ritual flag from Task 6.1, surfaced again by Task 6.5 smoke)** — the dev shell (`flake.nix`) does not currently provision the sqlite-vec dylib; operator (or task agent) must download from the upstream `https://github.com/asg017/sqlite-vec` releases and place at `embedding.extension_path`. Task 6.7 documented the operator prereq in `docs/reference/configuration.md`. The "should `flake.nix` fetch the dylib?" question is a separate dev-environment concern, deferred to a follow-up after step 6 (not an ADR; see retro for disposition).

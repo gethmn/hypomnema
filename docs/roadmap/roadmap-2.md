@@ -16,6 +16,8 @@
 
 ## Step 6 — Chunking and embedding
 
+**Status**: shipped 2026-04-26. See [`step-06-workplan.md`](./step-06-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 for the retrospective.
+
 **Goal**: On each real change, `hmnd` parses the changed file with `pulldown-cmark`, splits it into heading-aware chunks (per the `markdown-chunking` skill), embeds each chunk via HTTP to a local OpenAI-compatible embedding service (default: a TEI sidecar), and persists the chunk metadata + vector to a `chunks` metadata table and a sibling `chunks_vec` virtual table (per the `sqlite-vec-extension` skill). The vec0 dimension is baked at schema creation; mismatch with config fails the daemon at startup.
 
 **Shipping criteria**:
