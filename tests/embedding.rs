@@ -16,13 +16,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hypomnema::api::{self, ApiState};
 use hypomnema::chunk::chunk_file;
 use hypomnema::config::{Config, EmbeddingConfig};
-use hypomnema::embedding::{Embedder, EmbeddingClient};
+use hypomnema::embedding::{EmbedFuture, Embedder, EmbeddingClient};
 use hypomnema::indexer::Scanner;
 use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
@@ -50,6 +51,7 @@ enum StubMode {
 
 struct StubServer {
     url: String,
+    mode: Arc<Mutex<StubMode>>,
     shutdown_tx: watch::Sender<bool>,
     handle: Option<JoinHandle<()>>,
 }
@@ -59,7 +61,8 @@ impl StubServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind stub");
         let addr = listener.local_addr().expect("stub local_addr");
         let (tx, mut rx) = watch::channel(false);
-        let mode = Arc::new(mode);
+        let mode = Arc::new(Mutex::new(mode));
+        let mode_for_loop = mode.clone();
         let handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -69,17 +72,30 @@ impl StubServer {
                             Ok((s, _)) => s,
                             Err(_) => continue,
                         };
-                        let mode = (*mode).clone();
-                        tokio::spawn(handle_request(stream, mode));
+                        // Lock-clone-release: never hold the Mutex across an
+                        // .await in the per-connection handler (footgun with
+                        // std::sync::Mutex on tokio).
+                        let snapshot = mode_for_loop.lock().expect("stub mode lock").clone();
+                        tokio::spawn(handle_request(stream, snapshot));
                     }
                 }
             }
         });
         Self {
             url: format!("http://{addr}/v1/embeddings"),
+            mode,
             shutdown_tx: tx,
             handle: Some(handle),
         }
+    }
+
+    /// Atomically swap the stub's response mode. The next request to land in
+    /// `accept()` will pick up the new mode. Tests must serialize their
+    /// mode-change-then-request call so an in-flight request doesn't race
+    /// (the workplan calls this out — `set_mode` is intentionally not async
+    /// and not coordinated with in-flight handlers).
+    fn set_mode(&self, m: StubMode) {
+        *self.mode.lock().expect("stub mode lock") = m;
     }
 
     async fn shutdown(mut self) {
@@ -161,6 +177,7 @@ struct Fixture {
     _root: TempDir,
     vault: PathBuf,
     data_dir: PathBuf,
+    cfg_path: PathBuf,
     config: Config,
 }
 
@@ -196,6 +213,7 @@ fn fixture(stub_url: &str) -> Fixture {
         _root: root,
         vault,
         data_dir,
+        cfg_path,
         config,
     }
 }
@@ -204,6 +222,7 @@ fn fixture(stub_url: &str) -> Fixture {
 
 struct LiveDaemon {
     base_url: String,
+    cfg_path: PathBuf,
     data_dir: PathBuf,
     vault: PathBuf,
     watcher: Option<Watcher>,
@@ -227,6 +246,12 @@ impl LiveDaemon {
 }
 
 async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
+    let client = EmbeddingClient::new(&fx.config.embedding).expect("build embedding client");
+    let embedder: Arc<dyn Embedder> = Arc::new(client);
+    spawn_live_daemon_with_embedder(fx, embedder).await
+}
+
+async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder>) -> LiveDaemon {
     let store = Store::open(
         &fx.data_dir,
         &fx.config.storage.index_file,
@@ -234,8 +259,6 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     )
     .await
     .expect("open store");
-    let client = EmbeddingClient::new(&fx.config.embedding).expect("build embedding client");
-    let embedder: Arc<dyn Embedder> = Arc::new(client);
     let scanner = Scanner::new(&fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
@@ -286,6 +309,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
 
     LiveDaemon {
         base_url: format!("http://{addr}"),
+        cfg_path: fx.cfg_path.clone(),
         data_dir: fx.data_dir.clone(),
         vault: fx.vault.clone(),
         watcher: Some(watcher),
@@ -599,4 +623,324 @@ async fn embedding_service_returns_wrong_dimension_skips_file_and_keeps_daemon_r
 
     daemon.shutdown().await;
     stub.shutdown().await;
+}
+
+// ===== Semantic search integration tests (Task 7.5) =====
+
+/// Test-only embedder that maps each input string to a deterministic, non-zero
+/// unit vector via per-slot FNV-1a hashing. Used in lieu of the all-zero
+/// `StubEmbedder` and the same-vector-for-every-input HTTP stub so kNN
+/// ordering against varied chunk text is well-conditioned (cosine distance is
+/// undefined for zero vectors and degenerate when every chunk shares the
+/// query's vector).
+struct DeterministicHashEmbedder {
+    dimension: usize,
+}
+
+impl DeterministicHashEmbedder {
+    fn new(dimension: usize) -> Self {
+        Self { dimension }
+    }
+}
+
+impl Embedder for DeterministicHashEmbedder {
+    fn embed_text<'a>(&'a self, text: &'a str) -> EmbedFuture<'a> {
+        let dim = self.dimension;
+        let owned = text.to_string();
+        Box::pin(async move {
+            let bytes = owned.as_bytes();
+            let mut v = vec![0.0_f32; dim];
+            for (i, slot) in v.iter_mut().enumerate() {
+                let mut h: u64 = 0xcbf29ce484222325 ^ (i as u64);
+                for b in bytes {
+                    h ^= *b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+                *slot = ((h as f32) / (u64::MAX as f32)) - 0.5;
+            }
+            let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for x in &mut v {
+                    *x /= norm;
+                }
+            }
+            Ok(v)
+        })
+    }
+}
+
+fn open_index_rw(data_dir: &Path) -> Connection {
+    let db_path = data_dir.join("index.sqlite");
+    let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
+    let ext = EmbeddingConfig::default().resolved_extension_path();
+    unsafe {
+        conn.load_extension_enable()
+            .expect("enable load_extension on rw conn");
+        conn.load_extension(&ext, Some("sqlite3_vec_init"))
+            .expect("load sqlite-vec on rw conn");
+        conn.load_extension_disable()
+            .expect("disable load_extension on rw conn");
+    }
+    conn
+}
+
+/// Wipe `chunks_vec` and `chunks` while leaving `files` populated. Reaches the
+/// "empty index but vault has been seen" state needed for resolution B's hint
+/// path. The workplan-literal recipe (configure stub to fail at index time)
+/// does not produce this state — embedding failures during the initial scan
+/// cause the indexer to skip the file row entirely, leaving `files` empty as
+/// well. Forwarded from Task 7.3's smoke verification.
+fn truncate_chunks_only(data_dir: &Path) {
+    let conn = open_index_rw(data_dir);
+    conn.execute("DELETE FROM chunks_vec", [])
+        .expect("delete chunks_vec");
+    conn.execute("DELETE FROM chunks", [])
+        .expect("delete chunks");
+}
+
+fn count_files_total(data_dir: &Path) -> i64 {
+    let conn = open_index(data_dir);
+    conn.query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .expect("count files total")
+}
+
+#[tokio::test]
+async fn semantic_search_returns_results_after_indexing() {
+    // Custom embedder bypasses the HTTP stub entirely so kNN ordering
+    // distinguishes chunks rather than collapsing to the all-same-vector
+    // tie. The HTTP stub URL in the fixture is unused on this path.
+    let fx = fixture("http://127.0.0.1:1/v1/embeddings");
+    let embedder: Arc<dyn Embedder> = Arc::new(DeterministicHashEmbedder::new(SCHEMA_DIM));
+    let daemon = spawn_live_daemon_with_embedder(fx, embedder).await;
+
+    fs::write(
+        daemon.vault.join("note.md"),
+        b"## Section A\n\nAlpha body content.\n\n\
+          ## Section B\n\nBeta body content.\n\n\
+          ## Section C\n\nGamma body content.\n",
+    )
+    .expect("write note.md");
+    tokio::time::sleep(SETTLE).await;
+    assert!(
+        count_chunks_total(&daemon.data_dir) >= 3,
+        "expected ≥3 chunks indexed before query, got {}",
+        count_chunks_total(&daemon.data_dir)
+    );
+
+    let body: Value = http_client()
+        .post(format!("{}/search/semantic", daemon.base_url))
+        .json(&json!({ "query": "alpha body", "limit": 5 }))
+        .send()
+        .await
+        .expect("POST /search/semantic")
+        .error_for_status()
+        .expect("/search/semantic 2xx")
+        .json()
+        .await
+        .expect("/search/semantic JSON");
+    let results = body["results"].as_array().expect("results array");
+    assert!(
+        !results.is_empty(),
+        "expected non-empty results from indexed vault, got {body}"
+    );
+    assert!(
+        body.get("hint").map(|h| h.is_null()).unwrap_or(true),
+        "no hint when results are non-empty, got {body}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn semantic_search_returns_hint_when_index_empty_after_files_seeded() {
+    // Reach the hint state via the corrected recipe (Task 7.3 forward note):
+    // (a) index normally so `files` and `chunks` populate, (b) truncate
+    // `chunks_vec` + `chunks` while leaving `files`, (c) query and assert
+    // the hint. The workplan literal ("stub down → no chunks land") does
+    // not produce this state — see truncate_chunks_only doc comment.
+    let stub = StubServer::spawn(StubMode::Ok).await;
+    let fx = fixture(&stub.url);
+    let daemon = spawn_live_daemon(fx).await;
+
+    fs::write(
+        daemon.vault.join("seeded.md"),
+        b"## Section\n\nIndexed body.\n",
+    )
+    .expect("write seeded.md");
+    tokio::time::sleep(SETTLE).await;
+    assert!(
+        count_chunks_total(&daemon.data_dir) > 0,
+        "indexer must populate chunks before truncate; got 0"
+    );
+    assert!(
+        count_files_total(&daemon.data_dir) > 0,
+        "indexer must populate files before truncate; got 0"
+    );
+
+    truncate_chunks_only(&daemon.data_dir);
+    assert_eq!(count_chunks_total(&daemon.data_dir), 0);
+    assert_eq!(count_chunks_vec_total(&daemon.data_dir), 0);
+    assert!(
+        count_files_total(&daemon.data_dir) > 0,
+        "files row must remain so the hint condition triggers"
+    );
+
+    let body: Value = http_client()
+        .post(format!("{}/search/semantic", daemon.base_url))
+        .json(&json!({ "query": "section" }))
+        .send()
+        .await
+        .expect("POST /search/semantic")
+        .error_for_status()
+        .expect("/search/semantic 2xx")
+        .json()
+        .await
+        .expect("/search/semantic JSON");
+    assert_eq!(body["results"].as_array().unwrap().len(), 0);
+    assert_eq!(body["hint"].as_str(), Some("semantic index is building"));
+
+    daemon.shutdown().await;
+    stub.shutdown().await;
+}
+
+#[tokio::test]
+async fn semantic_search_returns_503_when_embedding_service_unavailable_at_query_time() {
+    let stub = StubServer::spawn(StubMode::Ok).await;
+    let fx = fixture(&stub.url);
+    let daemon = spawn_live_daemon(fx).await;
+
+    fs::write(
+        daemon.vault.join("seeded.md"),
+        b"## Section\n\nIndexed body.\n",
+    )
+    .expect("write seeded.md");
+    tokio::time::sleep(SETTLE).await;
+    assert!(
+        count_chunks_total(&daemon.data_dir) > 0,
+        "chunks must land before flipping the stub mode; got 0"
+    );
+
+    stub.set_mode(StubMode::Err503);
+
+    let resp = http_client()
+        .post(format!("{}/search/semantic", daemon.base_url))
+        .json(&json!({ "query": "section" }))
+        .send()
+        .await
+        .expect("POST /search/semantic");
+    assert_eq!(
+        resp.status(),
+        503,
+        "expected 503 when embedding service is down at query time"
+    );
+    let body: Value = resp.json().await.expect("error body JSON");
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some("embedding_unavailable"),
+        "expected error.code = embedding_unavailable, got {body}"
+    );
+
+    daemon.shutdown().await;
+    stub.shutdown().await;
+}
+
+#[tokio::test]
+async fn semantic_search_against_wrong_dimension_at_query_time_returns_503() {
+    let stub = StubServer::spawn(StubMode::Ok).await;
+    let fx = fixture(&stub.url);
+    let daemon = spawn_live_daemon(fx).await;
+
+    fs::write(
+        daemon.vault.join("seeded.md"),
+        b"## Section\n\nIndexed body.\n",
+    )
+    .expect("write seeded.md");
+    tokio::time::sleep(SETTLE).await;
+    assert!(
+        count_chunks_total(&daemon.data_dir) > 0,
+        "chunks must land before flipping the stub mode; got 0"
+    );
+
+    stub.set_mode(StubMode::WrongDim(4));
+
+    let resp = http_client()
+        .post(format!("{}/search/semantic", daemon.base_url))
+        .json(&json!({ "query": "section" }))
+        .send()
+        .await
+        .expect("POST /search/semantic");
+    assert_eq!(
+        resp.status(),
+        503,
+        "expected 503 when embedding service returns wrong-dim at query time"
+    );
+    let body: Value = resp.json().await.expect("error body JSON");
+    assert_eq!(
+        body["error"]["code"].as_str(),
+        Some("embedding_unavailable"),
+        "expected error.code = embedding_unavailable, got {body}"
+    );
+
+    daemon.shutdown().await;
+    stub.shutdown().await;
+}
+
+#[tokio::test]
+async fn semantic_search_full_round_trip_via_hmn_binary() {
+    // Mirrors `tests/cli.rs` precedent: drive the real `hmn` binary against a
+    // live in-process daemon. Uses a custom embedder so the HTTP stub is not
+    // a third moving part for the binary path; the HTTP-stub-mode-flip cases
+    // already cover the network surface in tests above.
+    let fx = fixture("http://127.0.0.1:1/v1/embeddings");
+    let embedder: Arc<dyn Embedder> = Arc::new(DeterministicHashEmbedder::new(SCHEMA_DIM));
+    let daemon = spawn_live_daemon_with_embedder(fx, embedder).await;
+
+    fs::write(
+        daemon.vault.join("note.md"),
+        b"## Section A\n\nAlpha body content.\n\n\
+          ## Section B\n\nBeta body content.\n",
+    )
+    .expect("write note.md");
+    tokio::time::sleep(SETTLE).await;
+    assert!(
+        count_chunks_total(&daemon.data_dir) >= 2,
+        "expected ≥2 chunks before binary invocation, got {}",
+        count_chunks_total(&daemon.data_dir)
+    );
+
+    let cfg_path = daemon.cfg_path.clone();
+    let base_url = daemon.base_url.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        // The hmn binary is sync; run it on a blocking thread so the daemon's
+        // tokio reactor remains free to serve the in-process HTTP request.
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hmn"));
+        cmd.arg("--config")
+            .arg(&cfg_path)
+            .arg("--daemon-url")
+            .arg(&base_url)
+            .arg("search")
+            .arg("semantic")
+            .arg("alpha");
+        cmd.output().expect("run hmn search semantic")
+    })
+    .await
+    .expect("spawn_blocking join");
+
+    assert!(
+        out.status.success(),
+        "hmn exit={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("note.md"),
+        "stdout missing 'note.md': {stdout}"
+    );
+    assert!(
+        stdout.contains("(score:"),
+        "stdout missing '(score:' header: {stdout}"
+    );
+
+    daemon.shutdown().await;
 }
