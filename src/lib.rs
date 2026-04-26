@@ -8,6 +8,7 @@ pub mod chunk;
 pub mod cli;
 pub mod client;
 pub mod config;
+pub mod embedding;
 pub mod indexer;
 pub mod logging;
 pub mod outbox;

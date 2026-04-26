@@ -121,6 +121,12 @@ pub struct EmbeddingConfig {
     pub api_key: String,
     #[serde(default = "default_embedding_extension_path")]
     pub extension_path: ConfigPath,
+    #[serde(default = "default_embedding_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_embedding_max_retries")]
+    pub max_retries: u8,
+    #[serde(default = "default_embedding_batch_size")]
+    pub batch_size: u8,
 }
 
 impl Default for EmbeddingConfig {
@@ -131,6 +137,9 @@ impl Default for EmbeddingConfig {
             dimension: default_embedding_dimension(),
             api_key: String::new(),
             extension_path: default_embedding_extension_path(),
+            timeout_ms: default_embedding_timeout_ms(),
+            max_retries: default_embedding_max_retries(),
+            batch_size: default_embedding_batch_size(),
         }
     }
 }
@@ -165,6 +174,18 @@ fn default_embedding_extension_path() -> ConfigPath {
     ConfigPath(expand_tilde(
         &Path::new("~/.local/share/hypomnema").join(filename),
     ))
+}
+
+fn default_embedding_timeout_ms() -> u64 {
+    30_000
+}
+
+fn default_embedding_max_retries() -> u8 {
+    1
+}
+
+fn default_embedding_batch_size() -> u8 {
+    1
 }
 
 fn platform_extension_suffix() -> &'static str {
