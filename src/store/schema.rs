@@ -38,6 +38,21 @@ pub const MIGRATIONS: &[&str] = &[
         chunk_id INTEGER PRIMARY KEY,
         embedding FLOAT[768]
     );",
+    // 0004 — recreate chunks_vec with schema-baked cosine distance per
+    // step-7 workplan § Resolution F. Truncate `chunks` and clear
+    // `files.content_hash` so the next scan re-reads, re-chunks, and
+    // re-embeds; the vault is the source of truth per ADR-0006.
+    // Order matters: drop chunks_vec before deleting chunks (chunks_vec
+    // is dropped, not joined). The dimension validation regex in
+    // `Store::validate_dimension` matches `embedding FLOAT[<dim>]` and
+    // ignores trailing column-level options like `distance_metric=...`.
+    "DROP TABLE chunks_vec;
+     DELETE FROM chunks;
+     UPDATE files SET content_hash = '';
+     CREATE VIRTUAL TABLE chunks_vec USING vec0(
+         chunk_id INTEGER PRIMARY KEY,
+         embedding FLOAT[768] distance_metric=cosine
+     );",
 ];
 
 pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
@@ -224,13 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn migrations_advance_user_version_to_3() {
-        let mut conn = test_conn();
-        apply_migrations(&mut conn).unwrap();
-        assert_eq!(user_version(&conn), 3);
-    }
-
-    #[test]
     fn migration_0003_creates_chunks_table() {
         let mut conn = test_conn();
         apply_migrations(&mut conn).unwrap();
@@ -305,6 +313,74 @@ mod tests {
             .unwrap_or_else(|| panic!("no FLOAT[<dim>] in {sql:?}"));
         let dim: u32 = caps[1].parse().unwrap();
         assert_eq!(dim, 768);
+    }
+
+    #[test]
+    fn migrations_advance_user_version_to_4() {
+        let mut conn = test_conn();
+        apply_migrations(&mut conn).unwrap();
+        assert_eq!(user_version(&conn), 4);
+    }
+
+    #[test]
+    fn migration_0004_chunks_vec_uses_cosine_metric() {
+        let mut conn = test_conn();
+        apply_migrations(&mut conn).unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_vec'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            sql.contains("distance_metric=cosine"),
+            "expected `distance_metric=cosine` in {sql:?}"
+        );
+    }
+
+    #[test]
+    fn migration_0004_clears_files_content_hash_and_chunks() {
+        let mut conn = test_conn();
+        // Apply migrations 0001..=0003, stop short of 0004 so we can seed
+        // pre-migration rows (post-0003 chunks rows + a non-empty files
+        // content_hash) and then assert 0004 truncates / clears them.
+        for (idx, migration) in MIGRATIONS.iter().enumerate().take(3) {
+            conn.execute_batch(migration).unwrap();
+            conn.pragma_update(None, "user_version", (idx + 1) as i64)
+                .unwrap();
+        }
+        assert_eq!(user_version(&conn), 3);
+
+        conn.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content)
+             VALUES ('a.md', 1, '2026-01-01T00:00:00Z', 'sha256:beef', '2026-01-01T00:00:00Z', 'hi')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at)
+             VALUES ('a.md', 0, '', 'hi', 'sha256:beef', 0, 2, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        apply_migrations(&mut conn).unwrap();
+        assert_eq!(user_version(&conn), 4);
+
+        let content_hash: String = conn
+            .query_row(
+                "SELECT content_hash FROM files WHERE path = 'a.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_hash, "");
+
+        let chunk_count: i64 = conn
+            .query_row("SELECT count(*) FROM chunks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(chunk_count, 0);
     }
 
     #[test]
