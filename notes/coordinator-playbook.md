@@ -117,7 +117,15 @@ For each task (or batch) in workplan order:
 3. **Send the task prompt.** Use the template in [§ Task agent bootstrap prompt](#task-agent-bootstrap-prompt) below, filled in with: the task agent's process_id (from the spawn), the todo IDs being executed, the step-context scratchpad ID, the workplan task numbers. Send via `send_input(process_id=<task agent>, input=<filled template>, wait_ms=2000)`.
 4. **Schedule wake-up on idle.** `timer_fire_when_idle_any(processes=[<task agent process_id>], max_wait_ms=900000, body="<wake-up message>")`. The wake-up message must be self-contained and instruct future-you to: check the task agent's todo(s) status, read any new todo comments, decide outcome → advance / retry / escalate. Use the template in [§ Wake-up message](#wake-up-message). 15min max-wait is the default; raise for tasks the workplan flagged as long.
 5. **When the timer fires** (your PTY receives the wake-up message as a fresh user turn): execute the routing logic in [§ Wake-up routing](#wake-up-routing).
-6. **After a task completes successfully**, scan the results comment for a `**Soft flag:**` line. If present, record it in the step-context scratchpad's § Decisions made during build, and forward the substance to subsequent task agents (via the rolling context) if its downstream impact applies. Then append a one-paragraph summary to the step-context scratchpad (use `scratchpad_append`) noting: which task(s) finished, what files changed, anything downstream tasks need to know.
+6. **After a task completes successfully**, do these in order:
+   1. **Scan the results comment for a `**Soft flag:**` line.** If present, route by its `Audience` field (per TASK AGENT § Soft flag):
+      - `coordinator-only` → record in the step-context scratchpad's § Decisions made during build for boundary review. Do not forward.
+      - `next-task-agent` → record in § Decisions made during build, then carry the substance into the forward-note in step 6.3.
+      - `both` → do both.
+   2. **Append a per-task outcome paragraph** to the step-context scratchpad (`scratchpad_append`): which task(s) finished, what files changed, anything downstream tasks need to know.
+   3. **If anything material applies to the next task agent**, append a `**Forward note for Task M+1:**` paragraph at the end of the outcome from 6.2. Substance comes from the soft flag's downstream impact (if any) plus anything else you noticed during wake-up routing that the next agent should know. The next task agent's bootstrap prompt references this paragraph by location.
+
+   The forward note is the load-bearing context-passing artifact across steps 1–3 (named "context-passing baton" in the step-1 retro, ran in step 2, shipped in step 3 through a 3.2 → 3.4 → 3.5 chain). Treat it as a first-class deliverable, not a side-effect of the outcome paragraph.
 7. **Close the task agent.** `close_process(process_id=<task agent>)`. Task agents are ephemeral.
 8. Move to the next task.
 
@@ -252,15 +260,21 @@ When you complete a task (success or unsuccessful but bounded):
 
 A third state between full success and escalation: you made a non-trivial judgment call **within the bounds of the task** — choosing between two reasonable implementations, settling on a small naming convention, working around an unexpected technical constraint — and you shipped the task successfully. Surface the call to the coordinator without blocking the build.
 
+Soft flags come in two flavors. Pick deliberately — the coordinator routes by which one you chose:
+
+- **Soft-flag-to-next-task-agent** — implementation-level call the next task agent should know about (e.g. "I chose `Send`-friendly `changed()` because `wait_for` returns `!Send`; you'll hit the same constraint in the test scaffolding"). Audience: the next task agent, via the coordinator's forward-note in the rolling-context scratchpad.
+- **Soft-flag-to-coordinator** — workflow-level call only the coordinator should act on (e.g. "this gap looks like a boundary-ritual responsibility, not in any task's scope"). Audience: coordinator only; not forwarded to subsequent task agents.
+
 How to flag:
 
 1. Complete the task as normal (results comment + `todo_complete`).
 2. In the results comment, include a line of the form `**Soft flag:** <one-line summary>` followed by:
+   - **Audience** — one of `next-task-agent`, `coordinator-only`, or `both`.
    - **What you decided** (the choice made)
    - **The trade-off** (briefly — why this over the alternative)
-   - **Downstream impact** (whether subsequent task agents need to know)
+   - **Downstream impact** — only if audience includes `next-task-agent`. What the next agent should do with this knowledge. Skip this bullet for `coordinator-only` flags.
 
-The coordinator reads soft flags during wake-up routing. They may be forwarded as guidance to subsequent task agents via the rolling-context scratchpad, surfaced in the post-build evaluation, or quietly accepted.
+The coordinator reads soft flags during wake-up routing and routes by audience: `next-task-agent` flags become a forward-note paragraph in the rolling-context scratchpad; `coordinator-only` flags are recorded in § Decisions made during build for boundary review; `both` does both.
 
 When **NOT** to use a soft flag:
 - The decision would warrant an ADR → escalate.
@@ -375,7 +389,7 @@ Used by the orchestrator at "start step N" when spawning the coordinator-to-be. 
 
 Use this template when sending the first prompt to a freshly-spawned task agent. Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
 
-> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as a TASK AGENT. Solo process ID: \<task-agent-pid\>, name: \<task-agent-name\>, project: Hypomnema, project ID: 4. Your coordinator is Solo process step-\<NN\>-coordinator. [END SOLO ORCHESTRATION CONTEXT]  You are executing Solo todo(s) \<comma-separated todo IDs\> (workplan task(s) \<comma-separated task numbers\> from docs/roadmap/step-\<NN\>-workplan.md). Before you start, read in this order: (1) notes/coordinator-playbook.md — TASK AGENT section is your reporting and escalation contract; (2) Solo todo(s) \<ids\> with todo_get(include_comments=true); (3) the step's rolling-context scratchpad id \<context-scratchpad-id\>; (4) your workplan task section. Then execute. Follow the playbook for reporting and escalation. When done (success or escalation), stop — the coordinator will close you. Do not advance to the next task.
+> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as a TASK AGENT. Solo process ID: \<task-agent-pid\>, name: \<task-agent-name\>, project: Hypomnema, project ID: 4. Your coordinator is Solo process step-\<NN\>-coordinator. [END SOLO ORCHESTRATION CONTEXT]  You are executing Solo todo(s) \<comma-separated todo IDs\> (workplan task(s) \<comma-separated task numbers\> from docs/roadmap/step-\<NN\>-workplan.md). Before you start, read in this order: (1) notes/coordinator-playbook.md — TASK AGENT section is your reporting and escalation contract; (2) Solo todo(s) \<ids\> with todo_get(include_comments=true); (3) the step's rolling-context scratchpad id \<context-scratchpad-id\> — if the previous task left a `Forward note for Task <M>` paragraph at the end of its entry in § Per-task outcomes, that paragraph is intended for you; (4) your workplan task section. Then execute. Follow the playbook for reporting and escalation. When done (success or escalation), stop — the coordinator will close you. Do not advance to the next task.
 
 ---
 
