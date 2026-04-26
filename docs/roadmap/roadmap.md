@@ -121,11 +121,13 @@
 - Regex vs. glob behavior boundaries
 - Phrase search across line boundaries ([`specs/content-search.md` line 86](../specs/content-search.md))
 - Regex alternative to glob ([`specs/filesystem-search.md` line 92](../specs/filesystem-search.md))
+- **Multi-vault forward-compat** ([`vision.md` Open Questions](../product/vision.md#open-questions)): should v0 response shapes carry an optional `vault: string` field (omit-when-null in v0) so that adding multi-vault support later is additive rather than a versioned migration? **Current lean: yes.** Step 5 is the inflection point — once consumers wire to vault-less shapes at the shipping gate, adding the field later breaks them. The workplan author should resolve this inline alongside the JSON-response-shape decisions and apply consistently across `/search/filesystem`, `/search/content`, the outbox event envelope (a doc-only spec table flip in `specs/change-events.md` would land in this step's doc-update task), and the future semantic-search response shape (so step 6+ inherits the contract).
 
 **Explicitly out of shipping-gate scope**:
 - Pagination (specs prescribe truncate + flag)
 - Frontmatter summaries in filesystem results ([`specs/filesystem-search.md` line 93](../specs/filesystem-search.md))
 - Health metrics beyond basic reachability
+- **Multi-vault implementation itself** — the `vault` field in v0 is forward-compat scaffolding only; actual support for more than one vault per daemon is post-v0.
 
 **New deps**: `axum`, `tower`, `tower-http`, `reqwest` (for `hmn`), `regex`. (`globset` already landed in step 2.)
 
