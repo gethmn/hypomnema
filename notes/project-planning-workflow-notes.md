@@ -44,6 +44,8 @@ A concrete task list for **the step being started next**, written immediately be
 
 **We do not write all five workplans up front.** They will rot. Each is written when its step's turn arrives.
 
+**Self-review for prose accuracy** (added 2026-04-26 at the round-1 boundary). For workplans projected to exceed ~1000 lines, do an end-to-end re-read after writing, focused on testable claims about external library semantics — anything of the form "X library does Y." Round 1 shipped two such slips (step 5 task 5.7's globset-semantics claim and task 5.8's architecture-overview wording) that the workplan author couldn't self-review mid-build; catching them at workplan-write time would have removed the build-time soft-flag detour entirely. Cost is small (5–10 min); benefit is a tighter build cycle.
+
 ### Phase C — Build
 
 Implementation against the workplan. The user reviews before code lands and at step boundaries.
