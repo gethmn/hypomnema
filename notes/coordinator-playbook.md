@@ -3,7 +3,7 @@
 Operational playbook for the orchestrator, step coordinator, and task agent roles in Hypomnema's build workflow. Three roles:
 
 - **Orchestrator** — top-level agent (Solo agent or Claude Code terminal session) that talks directly to the human, spawns the per-step coordinator, and surfaces escalations. Never writes code; never becomes the coordinator.
-- **Coordinator** — drives a single roadmap step end-to-end. Freshly spawned by the orchestrator at "start step N" as the workplan-writer; promoted in place to coordinator on "build."
+- **Coordinator** — drives a single roadmap step end-to-end. Freshly spawned by the orchestrator at "start step N". The coordinator's first phase is writing the step's workplan; after the human reviews and says "build," the same coordinator transitions into its build phase. Same agent, same role, sequential phases — no second process is spawned.
 - **Task agent** — ephemeral worker spawned by the coordinator to execute one (or a small batch) of workplan tasks.
 
 This playbook is read by all three roles. It is *not* canonical project documentation — it is a working description of the orchestration pattern, expected to evolve after each step.
@@ -17,7 +17,8 @@ Human  ⇅  Orchestrator     (Solo agent OR Claude Code terminal session — tal
                             directly to the human; never writes code itself)
               ⇅
          Step coordinator  (Solo agent: step-NN-coordinator, freshly spawned
-                            per step; promoted from workplan-writer on "build")
+                            per step; writes the workplan, then on "build"
+                            drives the build — same process throughout)
               ↓ spawns
          Task agents       (Solo agents: step-NN-task-MM, ephemeral)
 ```
@@ -46,11 +47,11 @@ A fresh agent that finds itself at the top of the hierarchy — talking directly
 ### Per-step kickoff (on "start step N")
 
 1. Read the step N todo (from the original 17–21 set) and the relevant section of `docs/roadmap/roadmap.md`.
-2. **Spawn a fresh coordinator-to-be**: `spawn_process(kind="agent", agent_tool_id=<id>, name="step-NN-coordinator")`. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
-3. Send the workplan-writing prompt to the new coordinator-to-be (template in [§ Workplan-writing prompt](#workplan-writing-prompt)).
-4. Set an idle timer to wake when the coordinator-to-be finishes the workplan: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator-to-be went idle, check workplan>")`.
+2. **Spawn a fresh coordinator**: `spawn_process(kind="agent", agent_tool_id=<id>, name="step-NN-coordinator")`. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
+3. Send the workplan-phase prompt to the new coordinator (template in [§ Workplan-phase prompt](#workplan-phase-prompt)). The coordinator's first piece of work is writing the workplan; the build phase follows on human approval, in the same process.
+4. Set an idle timer to wake when the coordinator finishes its workplan-phase output: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator went idle in workplan phase, check workplan>")`.
 5. On wake-up: read the workplan output, surface its path to the human for review. Do not modify it.
-6. On the human's "build" / "go" / "approved": forward "build" to the same coordinator-to-be process (don't spawn a new one — this is the moment of the in-place coordinator promotion). The coordinator takes it from there per the COORDINATOR section. Then **arm the build-phase poll** per [§ Polling the coordinator](#polling-the-coordinator-cheap-check-and-re-arm) — the workplan-completion timer set in step 4 only covered the writing phase.
+6. On the human's "build" / "go" / "approved": forward "build" to the same coordinator process (don't spawn a new one — the coordinator simply transitions from its workplan phase to its build phase). The coordinator takes it from there per the COORDINATOR section. Then **arm the build-phase poll** per [§ Polling the coordinator](#polling-the-coordinator-cheap-check-and-re-arm) — the workplan-phase completion timer set in step 4 only covered that phase.
 
 ### Per-step ongoing
 
@@ -85,23 +86,30 @@ When the coordinator reports the step shipped:
 When the human asks "what do I do to start step N?" / "how do I kick off step N?" / similar (a *meta* question, not a command):
 
 - Do **not** answer with "just type 'start step N'." That answer hides the spawn the orchestrator is about to perform and invites the orchestrator to silently skip it.
-- Instead, describe the spawn you would perform: "I'll spawn `step-NN-coordinator` as a fresh Solo agent and send it the workplan-writing prompt for step N. The coordinator-to-be writes the workplan, you review, then on 'build' it gets promoted in place. Want me to go ahead now?"
+- Instead, describe the spawn you would perform: "I'll spawn `step-NN-coordinator` as a fresh Solo agent and send it the workplan-phase prompt for step N. The coordinator writes the workplan first, you review, then on 'build' the same coordinator drives the build. Want me to go ahead now?"
 - This both confirms the architecture is intact and gives the human a chance to redirect before the spawn happens.
 
 ---
 
 ## COORDINATOR section
 
-### Identity & promotion
+### Identity & phases
 
-> **Audience**: the Solo agent that wrote the workplan and is being promoted to coordinator. The orchestrator should not act on this section — it spawned you, but it is not you.
+> **Audience**: the Solo agent spawned by the orchestrator as `step-NN-coordinator`. The orchestrator should not act on this section — it spawned you, but it is not you.
 
-You become the step N coordinator the moment the human says "build" on the workplan you wrote. From that point on:
+You are the step N coordinator from the moment the orchestrator spawned you. Your name in `list_processes` is `step-NN-coordinator` from spawn time onward. There is no second process and no promotion event — you do all of the coordinator's work in this single Solo process.
 
-1. Rename your Solo process if you can, conceptually if not — you are now `step-NN-coordinator`. You no longer write code yourself; you orchestrate task agents.
-2. Confirm your identity with `whoami()`.
+Your work falls into two sequential phases within this one lifecycle:
 
-### Setup (run once, at build start)
+1. **Workplan phase** (your first turn through "stop and wait for review"). You write the step's workplan at `docs/roadmap/step-NN-workplan.md`, post a short summary back to the human, and stop. During this phase you are still the coordinator — you just haven't started orchestrating task agents yet.
+2. **Build phase** (begins when the human says "build" / "go" / "approved" on the workplan you wrote). You stop writing code yourself and start orchestrating task agents per the rest of this section.
+
+On entering the build phase:
+
+1. Confirm your identity with `whoami()` (your process name is already `step-NN-coordinator` from spawn).
+2. Read this COORDINATOR section in full if you haven't yet. The TASK AGENT section can wait until you're spawning task agents.
+
+### Setup (run once, at build-phase start)
 
 1. **Create the step's rolling-context scratchpad.** Name: `step-NN-context`. Initial content uses the template in [§ Scratchpad templates](#scratchpad-templates) below. Tag with `step-NN`, `coordinator-context`.
 2. **Decide task batching.** Read your own workplan. For each adjacent pair of tasks, decide whether to batch them. Apply the rules in [§ Batching rules](#batching-rules). Record your batching plan as a section in the step-context scratchpad (so it's visible to the human and to future task agents).
@@ -377,11 +385,11 @@ When the human asks for status, anything related, or just a vague "what's going 
 
 ---
 
-## Workplan-writing prompt
+## Workplan-phase prompt
 
-Used by the orchestrator at "start step N" when spawning the coordinator-to-be. Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
+Used by the orchestrator at "start step N" when spawning the step coordinator. This is the prompt that kicks off the coordinator's workplan phase; the same coordinator continues into its build phase later, on the human's "build." Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
 
-> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as the STEP \<NN\> COORDINATOR-TO-BE. Solo process ID: \<coordinator-pid\>, name: step-\<NN\>-coordinator, project: Hypomnema, project ID: 4. Your orchestrator is Solo process \<orchestrator-pid\>. [END SOLO ORCHESTRATION CONTEXT] Your job right now is to write the workplan for step \<NN\> at docs/roadmap/step-\<NN\>-workplan.md. Read in this order: (1) docs/roadmap/roadmap.md § Step \<NN\>; (2) the relevant ADRs in docs/decisions/ for this step's deferred decisions; (3) the relevant specs in docs/specs/; (4) any skills surfaced by the step's scope; (5) notes/project-planning-workflow-notes.md for the workplan format expectations. Then write the workplan and post a short summary back to the human; stop and wait for review. When the human says "build" / "go" / "approved", you will be promoted in place to the step \<NN\> coordinator — at that point read notes/coordinator-playbook.md § COORDINATOR section in full (the TASK AGENT section can wait until you're spawning task agents). Do NOT read the ORCHESTRATOR section — that's the role of the agent that spawned you, not yours.
+> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as the STEP \<NN\> COORDINATOR. Solo process ID: \<coordinator-pid\>, name: step-\<NN\>-coordinator, project: Hypomnema, project ID: 4. Your orchestrator is Solo process \<orchestrator-pid\>. [END SOLO ORCHESTRATION CONTEXT] You are the step \<NN\> coordinator from this moment onward. Your work has two sequential phases in this same Solo process: a workplan phase (now) and a build phase (after the human reviews). Your job right now, in the workplan phase, is to write the workplan for step \<NN\> at docs/roadmap/step-\<NN\>-workplan.md. Read in this order: (1) docs/roadmap/roadmap.md § Step \<NN\>; (2) the relevant ADRs in docs/decisions/ for this step's deferred decisions; (3) the relevant specs in docs/specs/; (4) any skills surfaced by the step's scope; (5) notes/project-planning-workflow-notes.md for the workplan format expectations. Then write the workplan and post a short summary back to the human; stop and wait for review. When the human says "build" / "go" / "approved", you will transition into your build phase — at that point read notes/coordinator-playbook.md § COORDINATOR section in full (the TASK AGENT section can wait until you're spawning task agents). Do NOT read the ORCHESTRATOR section — that's the role of the agent that spawned you, not yours.
 
 ---
 
@@ -409,9 +417,9 @@ When the human says…
 
 | User says… | Orchestrator does |
 |---|---|
-| "What do I do to start step N?" / "How do I kick off step N?" (a *meta* question) | Per ORCHESTRATOR § Response style for ambiguous start questions: describe the spawn you'd perform ("I'll spawn `step-NN-coordinator` and send it the workplan-writing prompt — want me to go ahead?"). Do **not** answer "just type 'start step N'" — that hides the spawn and invites silently skipping it. |
-| "Start step N" | Per ORCHESTRATOR § Per-step kickoff: read the step N todo and `docs/roadmap/roadmap.md` § Step N; **spawn a fresh** `step-NN-coordinator` Solo agent (never reuse an existing process — the orchestrator never becomes the coordinator); send the workplan-writing prompt; set an idle timer to wake on workplan completion. |
-| "Build" / "Approved, build it" / "Go" (after workplan review) | Forward "build" to the same coordinator-to-be process you spawned at "start step N" (don't spawn a new one — this is the in-place promotion). The coordinator takes it from there. |
+| "What do I do to start step N?" / "How do I kick off step N?" (a *meta* question) | Per ORCHESTRATOR § Response style for ambiguous start questions: describe the spawn you'd perform ("I'll spawn `step-NN-coordinator` and send it the workplan-phase prompt — want me to go ahead?"). Do **not** answer "just type 'start step N'" — that hides the spawn and invites silently skipping it. |
+| "Start step N" | Per ORCHESTRATOR § Per-step kickoff: read the step N todo and `docs/roadmap/roadmap.md` § Step N; **spawn a fresh** `step-NN-coordinator` Solo agent (never reuse an existing process — the orchestrator never becomes the coordinator); send the workplan-phase prompt; set an idle timer to wake when the coordinator finishes its workplan-phase output. |
+| "Build" / "Approved, build it" / "Go" (after workplan review) | Forward "build" to the same coordinator process you spawned at "start step N" (don't spawn a new one — the coordinator transitions from its workplan phase to its build phase in place). The coordinator takes it from there. |
 | "Status" / "Any updates?" / "What's going on?" | `todo_list(tags=["needs-human"], completed=false)` first. Also `get_process_status` on the active coordinator. Surface both. |
 | "Approve option A" (in response to an escalation) | `todo_comment_create` on the escalation todo with the resolution. `todo_remove_tag(needs-human)` on both the escalation todo and the task todo it references. The coordinator's escalation poll picks it up. |
 | "Pause step N" | Send to the coordinator: `"Pause: do not start a new task after the current one finishes. Set a timer to wake on resume."` |
@@ -435,4 +443,4 @@ Questions that started in the open list above and answered cleanly during the st
 
 - **Idle-detection false positives** (coordinator → task-agent direction). 14/14 genuine fires across steps 1–3. `timer_fire_when_idle_any(processes=[<task-agent-pid>])` is reliable as a "task agent done" signal in the coordinator's per-task wake-up loop. *Caveat*: scoped to the coordinator-watching-its-own-task-agents direction. The orchestrator-watching-the-coordinator direction is noisier (the coordinator goes idle many times during a build); see ORCHESTRATOR § Polling the coordinator for the bounded-work pattern that handles it.
 
-- **Orchestrator–coordinator separation pays off.** Step 3 (the first true 3-tier build) ran cleanly. The orchestrator's surface area was light: spawn coordinator-to-be, forward "build", periodically check for `needs-human`, close on completion. The separation kept the human-facing layer honest (orchestrator never writes code) and produced no escalation routing in a clean build. *Do not collapse the tiers on the basis of "the orchestrator had little to do."* The light workload is the success state. Revisit the question only if a step accumulates multiple escalations and the orchestrator's routing role becomes load-bearing.
+- **Orchestrator–coordinator separation pays off.** Step 3 (the first true 3-tier build) ran cleanly. The orchestrator's surface area was light: spawn the coordinator, forward "build", periodically check for `needs-human`, close on completion. The separation kept the human-facing layer honest (orchestrator never writes code) and produced no escalation routing in a clean build. *Do not collapse the tiers on the basis of "the orchestrator had little to do."* The light workload is the success state. Revisit the question only if a step accumulates multiple escalations and the orchestrator's routing role becomes load-bearing.
