@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -7,6 +8,7 @@ use clap::{Parser, Subcommand};
 
 use hypomnema::api;
 use hypomnema::config::Config;
+use hypomnema::embedding::{Embedder, EmbeddingClient};
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::logging::{self, BinaryKind};
 use hypomnema::outbox::Outbox;
@@ -93,7 +95,9 @@ async fn run_daemon(config: Config) -> Result<()> {
     )
     .await
     .context("opening store")?;
-    let scanner = Scanner::new(&config, &store).context("constructing scanner")?;
+    let embedder: Arc<dyn Embedder> =
+        Arc::new(EmbeddingClient::new(&config.embedding).context("constructing embedding client")?);
+    let scanner = Scanner::new(&config, &store, embedder).context("constructing scanner")?;
     let report = scanner.run().await.context("running initial scan")?;
     tracing::info!(
         "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
@@ -174,7 +178,9 @@ async fn do_scan(config: &Config) -> Result<ScanReport> {
     )
     .await
     .context("opening store")?;
-    let scanner = Scanner::new(config, &store).context("constructing scanner")?;
+    let embedder: Arc<dyn Embedder> =
+        Arc::new(EmbeddingClient::new(&config.embedding).context("constructing embedding client")?);
+    let scanner = Scanner::new(config, &store, embedder).context("constructing scanner")?;
     let report = scanner.run().await.context("running scan")?;
     tracing::info!(
         "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",

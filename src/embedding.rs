@@ -6,6 +6,8 @@
 //! distinguish "service unavailable, skip-and-log" from "JSON parse failure,
 //! bug in our code or the service".
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -149,6 +151,48 @@ fn is_retryable(e: &EmbeddingError) -> bool {
         EmbeddingError::Transport(_) => true,
         EmbeddingError::Status { code, .. } => *code >= 500,
         EmbeddingError::BodyParse(_) | EmbeddingError::DimensionMismatch { .. } => false,
+    }
+}
+
+/// Boxed-future shape returned by [`Embedder::embed_text`]. Manual `Pin<Box<…>>`
+/// (rather than `async fn` in the trait) so the trait stays object-safe and
+/// `Scanner` can hold an `Arc<dyn Embedder>` without a generic parameter.
+pub type EmbedFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<f32>, EmbeddingError>> + Send + 'a>>;
+
+/// Abstraction over the embedding backend. Production wires
+/// [`EmbeddingClient`]; tests wire [`StubEmbedder`] (or a custom impl) so the
+/// indexer's chunk-and-embed pipeline can be exercised without a live HTTP
+/// service.
+pub trait Embedder: Send + Sync + 'static {
+    fn embed_text<'a>(&'a self, text: &'a str) -> EmbedFuture<'a>;
+}
+
+impl Embedder for EmbeddingClient {
+    fn embed_text<'a>(&'a self, text: &'a str) -> EmbedFuture<'a> {
+        Box::pin(self.embed(text))
+    }
+}
+
+/// Test embedder that returns a deterministic zero-filled vector of the
+/// configured dimension for any input. Public so that integration tests in
+/// `tests/` can wire it through `Scanner::new` without standing up a stub
+/// HTTP service.
+#[derive(Debug, Clone)]
+pub struct StubEmbedder {
+    pub dimension: usize,
+}
+
+impl StubEmbedder {
+    pub fn new(dimension: usize) -> Self {
+        Self { dimension }
+    }
+}
+
+impl Embedder for StubEmbedder {
+    fn embed_text<'a>(&'a self, _text: &'a str) -> EmbedFuture<'a> {
+        let dim = self.dimension;
+        Box::pin(async move { Ok(vec![0.0_f32; dim]) })
     }
 }
 

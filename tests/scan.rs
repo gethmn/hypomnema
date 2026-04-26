@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use hypomnema::config::Config;
+use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::store::Store;
 use rusqlite::{Connection, OpenFlags};
@@ -49,7 +51,8 @@ async fn run_scan(fx: &Fixture) -> ScanReport {
     )
     .await
     .expect("open store");
-    let scanner = Scanner::new(&fx.config, &store).expect("construct scanner");
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let scanner = Scanner::new(&fx.config, &store, embedder).expect("construct scanner");
     scanner.run().await.expect("run scan")
 }
 

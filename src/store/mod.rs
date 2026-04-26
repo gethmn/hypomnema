@@ -1,3 +1,4 @@
+mod chunks;
 mod pool;
 mod schema;
 
@@ -13,6 +14,7 @@ use tracing::info;
 
 use crate::config::{EmbeddingConfig, VEC_EXT_PATH_ENV};
 
+pub use chunks::rewrite_chunks_for_file;
 pub use pool::SqlitePool;
 pub use schema::MIGRATIONS;
 

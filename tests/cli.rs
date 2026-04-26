@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use hypomnema::api::{self, ApiState};
 use hypomnema::config::Config;
+use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
 use serde_json::Value;
@@ -82,7 +84,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     )
     .await
     .expect("open store");
-    let scanner = Scanner::new(&fx.config, &store).expect("construct scanner");
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let scanner = Scanner::new(&fx.config, &store, embedder).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
     let outbox_path = fx.data_dir.join(&fx.config.storage.outbox_file);

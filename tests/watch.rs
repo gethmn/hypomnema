@@ -1,8 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hypomnema::config::Config;
+use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
@@ -78,7 +80,8 @@ async fn start(fx: &Fixture) -> Live {
     )
     .await
     .expect("open store");
-    let scanner = Scanner::new(&fx.config, &store).expect("construct scanner");
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let scanner = Scanner::new(&fx.config, &store, embedder).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
     let ignores = fx
