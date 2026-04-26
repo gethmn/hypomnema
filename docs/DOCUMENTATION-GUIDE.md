@@ -24,6 +24,7 @@ This guide documents the Hypomnema project's installed Layered Documentation Sys
 - **Changing the architecture?** → [`architecture/overview.md`](./architecture/overview.md)
 - **Changing the tech stack?** → [`implementation/tech-stack.md`](./implementation/tech-stack.md)
 - **Running a documentation audit?** → [`maintenance/audit.md`](./maintenance/audit.md)
+- **Negotiating a proposed change against existing canon?** → [`maintenance/explore.md`](./maintenance/explore.md)
 
 ---
 
@@ -242,6 +243,7 @@ docs/
 │
 ├── maintenance/                    # Documentation maintenance workflows
 │   ├── audit.md                    # Documentation health audit
+│   ├── explore.md                  # Negotiate a proposed change against canon
 │   ├── refine.md                   # Quality improvements
 │   ├── sync.md                     # Audit docs against implementation
 │   └── update.md                   # Update docs after code changes
@@ -317,6 +319,7 @@ Workflows in `maintenance/` are installed to be executed by AI agents. Each is a
 | [`sync.md`](./maintenance/sync.md) | Before releases, after significant refactoring — audit docs against current code |
 | [`update.md`](./maintenance/update.md) | After a code change that affects documented behavior |
 | [`refine.md`](./maintenance/refine.md) | Quality improvements, consolidation, clarity passes |
+| [`explore.md`](./maintenance/explore.md) | A proposed change conflicts with vision / ADR / spec / architecture canon — negotiate trade-offs and produce canon edits |
 
 ---
 
