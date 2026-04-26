@@ -166,9 +166,11 @@ Three responsibilities, run on each changed file:
 
 1. **File-level**: upsert path, size, mtime, content hash into the files table
 2. **Content**: the file text is stored as-is in the content index (grep-shaped queries operate on this)
-3. **Semantic**: parse with pulldown-cmark, emit heading-aware chunks, embed each chunk via HTTP to the embedding service, store chunk + vector in sqlite-vec
+3. **Semantic**: split frontmatter off the top, walk the body with pulldown-cmark, emit heading-aware chunks (size targets, frontmatter handling, and heading-stack edge cases live in the `.claude/skills/markdown-chunking/` skill), embed each chunk via HTTP to the embedding service, and persist chunk metadata + vector blob into the per-vault `chunks` and `chunks_vec` tables in a single SQL transaction (delete-then-reinsert per the `.claude/skills/sqlite-vec-extension/` skill).
 
-Vec0 virtual tables do not update gracefully — the indexer *deletes and reinserts* all chunks for a file when the content hash changes. See the `.claude/skills/sqlite-vec-extension/` skill.
+Vec0 virtual tables do not update gracefully — the indexer *deletes and reinserts* all chunks for a file when the content hash changes.
+
+Step 6 shipped this path. The vec0 dimension is baked at schema-creation time (currently `768`); a config↔schema mismatch fails the daemon at startup with a structured error. At index time, embedding-service unavailability — transport error, HTTP `5xx`, or a wrong-dimension response — skips that file's chunks, logs an `ERROR`, and leaves `files.content_hash` unadvanced so the next watcher event or rescan retries; the daemon stays responsive throughout. See [`docs/reference/configuration.md`](../reference/configuration.md#embedding) for the embedding knobs and [`docs/specs/semantic-search.md`](../specs/semantic-search.md) for the query-time surface (lands in step 7).
 
 ### Search API
 

@@ -50,6 +50,12 @@ endpoint = "http://127.0.0.1:8080/v1/embeddings"
 model = "nomic-embed-text-v1.5"
 dimension = 768
 api_key = ""   # empty for local services that don't require one
+# Path to the sqlite-vec dynamic library. `<ext>` is `dylib` (macOS), `so` (Linux), `dll` (Windows).
+# The HYPOMNEMA_VEC_EXT_PATH environment variable, if set, overrides this value.
+extension_path = "~/.local/share/hypomnema/sqlite-vec.dylib"
+timeout_ms = 30000   # per-request embed timeout
+max_retries = 1      # retry once on transport error or HTTP 5xx; 250ms backoff
+batch_size = 1       # chunks per embed request (v0 always 1)
 
 # Watcher tuning
 # The watcher only considers .md files; ignore_patterns further excludes matches within that set.
@@ -117,8 +123,16 @@ See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md) for why 
 | `model` | string | yes | — | Model name sent in the API request |
 | `dimension` | integer | yes | `768` | Must match the dimension baked into the schema. Mismatch → daemon fails at startup. |
 | `api_key` | string | no | `""` | Sent as `Authorization: Bearer` if non-empty |
+| `extension_path` | path | no | `~/.local/share/hypomnema/sqlite-vec.<ext>` (`<ext>` = `dylib` macOS / `so` Linux / `dll` Windows) | Filesystem path to the sqlite-vec dynamic library, loaded into every SQLite connection in the pool. Daemon fails at startup if the file does not exist. The `HYPOMNEMA_VEC_EXT_PATH` environment variable, if set, overrides this value. |
+| `timeout_ms` | integer | no | `30000` | Per-request timeout for the embed HTTP call, in milliseconds. |
+| `max_retries` | integer | no | `1` | Maximum retries on transport-level failures or HTTP `5xx`. Backoff before retry is 250ms. `4xx` responses are never retried (those are the daemon's bug, not the service's). Set to `0` to disable retries. |
+| `batch_size` | integer | no | `1` | Number of chunks per embed request. v0 ships at `1`; future steps may promote to batching when chunk volume justifies the coordination cost. |
 
 Changing `dimension` after the index is built is not supported — the vec0 virtual table's dimension is fixed at creation time. A different embedding model with a different dimension requires a re-index (drop + rebuild).
+
+**sqlite-vec extension prerequisite**: the dynamic library at `extension_path` is **not** bundled with `hmnd` and is **not** provisioned by the development shell. The operator must download a prebuilt artifact for their platform from the [sqlite-vec releases](https://github.com/asg017/sqlite-vec/releases) and place it at the configured path (or set `HYPOMNEMA_VEC_EXT_PATH`). If the file is missing at startup, the daemon exits with a structured error naming both the configured path and the env-var override.
+
+**Skip-and-log on embedding failure**: if the embedding service is unreachable (transport error), responds with HTTP `5xx`, or returns a vector whose length disagrees with `dimension`, the indexer logs an `ERROR` and skips that file's chunks — `chunks` and `chunks_vec` rows are left in their previous state, the file's `content_hash` is not advanced, and the daemon stays responsive. The next watcher event or rescan retries naturally. `4xx` responses and JSON parse failures propagate as bugs in the daemon — those classes are not the service's fault. Daemon startup separately fails loudly when `dimension` disagrees with the schema-baked value (a configuration error, not a runtime one). At startup, after the embedding client is built, the daemon also issues a one-token health probe: a successful probe logs `INFO`, and a failure (unreachable, wrong dimension, etc.) logs `WARN` with both numbers, the configured `endpoint`, and the configured `model` — but never fails the daemon. See [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases for the query-time complement.
 
 See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-0007: sqlite-vec over Alternatives](../decisions/0007-sqlite-vec-over-alternatives.md).
 
@@ -181,6 +195,7 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 | `http.bind` | `HYPOMNEMA_HTTP_BIND` |
 | `embedding.endpoint` | `HYPOMNEMA_EMBEDDING_ENDPOINT` |
 | `embedding.api_key` | `HYPOMNEMA_EMBEDDING_API_KEY` |
+| `embedding.extension_path` | `HYPOMNEMA_VEC_EXT_PATH` |
 | `storage.data_dir` | `HYPOMNEMA_DATA_DIR` |
 | `logging.level` | `HYPOMNEMA_LOG_LEVEL` |
 

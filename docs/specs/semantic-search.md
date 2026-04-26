@@ -10,6 +10,8 @@
 
 Semantic search answers conceptual-similarity questions: *what in this vault is similar to this idea?* The query is embedded into a vector via the same model used for indexing, and compared against the stored chunk vectors by cosine similarity. Results are chunks (heading-aware slices of files), with metadata identifying the file and section they came from.
 
+The data substrate this spec reads from — the `chunks` metadata table and the `chunks_vec` virtual table — ships in step 6. The query handler (`POST /search/semantic` / `hmn search semantic`) ships in step 7.
+
 **Related Documents**:
 - [ADR-0003: Indexing in the Daemon](../decisions/0003-indexing-in-the-daemon.md)
 - [ADR-0004: Three Search Modes as Peers](../decisions/0004-three-search-modes-as-peers.md)
@@ -34,7 +36,7 @@ Semantic search answers conceptual-similarity questions: *what in this vault is 
 Chunks are produced by the indexer (not at query time) using pulldown-cmark to parse Markdown events and split on heading boundaries. See the `markdown-chunking` skill in `.claude/skills/` for the current boundary rules.
 
 Each chunk carries:
-- `chunk_id` (primary key)
+- `chunk_id` (the `chunks.id` column from the schema baked in step 6)
 - `file_path` (vault-relative)
 - `chunk_index` (ordinal within file)
 - `heading_path` (e.g., `["Architecture", "Containers"]`)
