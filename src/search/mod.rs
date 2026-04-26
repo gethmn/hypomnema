@@ -1,10 +1,12 @@
 mod content;
 mod filesystem;
+mod semantic;
 
 use anyhow::{Result, anyhow};
 
 pub use content::{ContentMatch, ContentQuery, ContentResult, search_content};
 pub use filesystem::{FilesystemQuery, FilesystemResult, search_filesystem};
+pub use semantic::{SemanticQuery, SemanticResult, SemanticSearchError, search_semantic};
 
 pub(crate) fn normalize_prefix(raw: &str) -> Result<String> {
     if raw.is_empty() {
