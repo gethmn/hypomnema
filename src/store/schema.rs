@@ -11,6 +11,11 @@ pub const MIGRATIONS: &[&str] = &[
         content_hash   TEXT    NOT NULL,
         indexed_at     TEXT    NOT NULL
     ) STRICT;",
+    // 0002 — content storage for grep-shaped queries per step-5 workplan
+    // § Resolution A. The DELETE clears any rows present before the schema
+    // bump so the next bulk scan repopulates with bodies.
+    "ALTER TABLE files ADD COLUMN content TEXT NOT NULL DEFAULT '';
+     DELETE FROM files;",
 ];
 
 pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
@@ -91,5 +96,89 @@ mod tests {
             .unwrap();
         let err = apply_migrations(&mut conn).unwrap_err();
         assert!(format!("{err:#}").contains("ahead of code-known migrations"));
+    }
+
+    #[test]
+    fn migration_0002_adds_content_column() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        let mut stmt = conn.prepare("PRAGMA table_info(files)").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "content"),
+            "content column missing; columns: {names:?}"
+        );
+    }
+
+    #[test]
+    fn migration_0002_clears_rows_from_pre_existing_db() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1i64).unwrap();
+        conn.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at)
+             VALUES ('a.md', 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let before: i64 = conn
+            .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, 1);
+
+        apply_migrations(&mut conn).unwrap();
+
+        let after: i64 = conn
+            .query_row("SELECT count(*) FROM files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, 0);
+    }
+
+    #[test]
+    fn content_column_is_not_null_with_empty_default() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at)
+             VALUES ('a.md', 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let content: String = conn
+            .query_row("SELECT content FROM files WHERE path = 'a.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(content, "");
+    }
+
+    #[test]
+    fn content_column_accepts_arbitrary_utf8() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        let body = "héllo café";
+        conn.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content)
+             VALUES ('a.md', 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z', ?1)",
+            [body],
+        )
+        .unwrap();
+        let read_back: String = conn
+            .query_row("SELECT content FROM files WHERE path = 'a.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(read_back, body);
+    }
+
+    #[test]
+    fn migrations_advance_user_version_to_2() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        apply_migrations(&mut conn).unwrap();
+        assert_eq!(user_version(&conn), 2);
     }
 }
