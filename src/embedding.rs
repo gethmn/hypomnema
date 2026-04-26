@@ -196,6 +196,55 @@ impl Embedder for StubEmbedder {
     }
 }
 
+/// Startup health probe for the embedding service. Sends a one-token
+/// `embed("ping")` request and logs the outcome.
+///
+/// **Never fails the daemon.** Per Resolution 4 + the v0 skip-and-log
+/// policy, embedding outages are tolerated at runtime — the indexer
+/// classifies per-file. The probe is purely diagnostic so an operator
+/// sees the service state at startup without grepping later indexer
+/// logs.
+///
+/// Three log shapes:
+/// - `INFO`: 200 + correct-dimension vector → service reachable.
+/// - `WARN` (dimension mismatch): service responded with a wrong-length
+///   vector. Names both numbers, the configured endpoint and model, and
+///   the suggested resolution path. Indexing will continue per-file but
+///   every file will fail to index until the model is fixed.
+/// - `WARN` (other failure): transport / 5xx / 4xx / parse error.
+///   Daemon stays up; chunking will skip-and-log per file.
+pub async fn embed_health_probe(client: &EmbeddingClient, cfg: &EmbeddingConfig) {
+    match client.embed("ping").await {
+        Ok(v) => {
+            tracing::info!(
+                endpoint = %cfg.endpoint,
+                model = %cfg.model,
+                vector_len = v.len(),
+                "embedding service reachable, vector length matches dimension"
+            );
+        }
+        Err(EmbeddingError::DimensionMismatch { expected, actual }) => {
+            tracing::warn!(
+                endpoint = %cfg.endpoint,
+                model = %cfg.model,
+                expected_dimension = expected,
+                observed_dimension = actual,
+                "embedding service returned a vector with the wrong dimension; \
+                 service may be configured to a different model — check `embedding.model` \
+                 and the endpoint's loaded model. Daemon stays up; chunking will skip-and-log per file."
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                endpoint = %cfg.endpoint,
+                model = %cfg.model,
+                error = %e,
+                "embedding service not reachable at startup; chunking will skip-and-log per file"
+            );
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct ApiResponse {
     data: Vec<EmbeddingItem>,

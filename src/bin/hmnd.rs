@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 
 use hypomnema::api;
 use hypomnema::config::Config;
-use hypomnema::embedding::{Embedder, EmbeddingClient};
+use hypomnema::embedding::{Embedder, EmbeddingClient, embed_health_probe};
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::logging::{self, BinaryKind};
 use hypomnema::outbox::Outbox;
@@ -95,8 +95,10 @@ async fn run_daemon(config: Config) -> Result<()> {
     )
     .await
     .context("opening store")?;
-    let embedder: Arc<dyn Embedder> =
-        Arc::new(EmbeddingClient::new(&config.embedding).context("constructing embedding client")?);
+    let client =
+        EmbeddingClient::new(&config.embedding).context("constructing embedding client")?;
+    embed_health_probe(&client, &config.embedding).await;
+    let embedder: Arc<dyn Embedder> = Arc::new(client);
     let scanner = Scanner::new(&config, &store, embedder).context("constructing scanner")?;
     let report = scanner.run().await.context("running initial scan")?;
     tracing::info!(
@@ -178,8 +180,10 @@ async fn do_scan(config: &Config) -> Result<ScanReport> {
     )
     .await
     .context("opening store")?;
-    let embedder: Arc<dyn Embedder> =
-        Arc::new(EmbeddingClient::new(&config.embedding).context("constructing embedding client")?);
+    let client =
+        EmbeddingClient::new(&config.embedding).context("constructing embedding client")?;
+    embed_health_probe(&client, &config.embedding).await;
+    let embedder: Arc<dyn Embedder> = Arc::new(client);
     let scanner = Scanner::new(config, &store, embedder).context("constructing scanner")?;
     let report = scanner.run().await.context("running scan")?;
     tracing::info!(
