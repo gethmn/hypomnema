@@ -142,6 +142,8 @@ Sync tools that burst-write across more than the debounce window may justify `de
 | `index_file` | relative path | no | `index.sqlite` | SQLite file containing all three indexes |
 | `outbox_file` | relative path | no | `outbox.jsonl` | JSONL event log |
 
+The outbox file is created at daemon startup if missing. Consumers that tail it should reopen on `ENOENT` or inode change — see [the change-events spec § Edge Cases](../specs/change-events.md#edge-cases).
+
 ---
 
 ## `[logging]`

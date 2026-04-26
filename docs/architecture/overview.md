@@ -134,6 +134,8 @@ The same SQL/vector query code backs both transports — transport is a thin lay
 
 Each real change (file created, modified, deleted) produces one JSONL line in the outbox. Minimum envelope: `{event_type, path, content_hash, detected_at}`. The outbox lives in the daemon's data directory, never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md).
 
+Step 4 ships the implementation: the watcher's consumer task — the same one that drives `Scanner::reindex_path` / `Scanner::remove_path` — emits one JSONL line per real change to `outbox.jsonl`, with per-event `sync_data`.
+
 Consumers subscribe by tailing the file. There is no push notification mechanism in v0; see the handoff's "Out of scope" for deferred fan-out work.
 
 ---

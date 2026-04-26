@@ -58,8 +58,10 @@ Hypomnema offers no push, no webhook, no in-process callback in v0. See the hand
 |-------|------|----------|-------|
 | `event_type` | string | yes | One of `created`, `modified`, `deleted` |
 | `path` | string | yes | Vault-relative path |
-| `content_hash` | string | yes for create/modify, null for delete | `sha256:` hex of file content |
+| `content_hash` | string | yes when known (always for create/modify; for delete, the last known hash from the index) | `sha256:` hex of file content |
 | `detected_at` | ISO-8601 string (µs precision, UTC) | yes | When Hypomnema confirmed the change |
+
+When the daemon has no prior record for a deleted path — a rare race where the watcher reports a delete on a path that was never indexed — the outbox emits no event for it; the schema therefore never expresses delete-without-hash in practice.
 
 Future fields (additive, optional) will be added as the daemon learns to notice more. Consumers should ignore unknown fields.
 
@@ -94,7 +96,7 @@ The write is small (one line). In the worst case a consumer sees a truncated JSO
 
 ## Open Questions
 
-- [ ] Exact fsync policy: per-event vs periodic?
+- [x] Exact fsync policy: per-event vs periodic? Resolved in step 4 as per-event `sync_data`. See [step-4 workplan § Deferred decision 1](../roadmap/step-04-workplan.md#1-fsync-policy-per-event-vs-periodic).
 - [ ] Rename detection: should `renamed` be a distinct event type?
 - [ ] Outbox rotation / retention — should Hypomnema rotate after N MB or N days, or leave this to the user?
 - [ ] Should a consumer be able to ask Hypomnema for the current outbox byte offset, so it can checkpoint without inspecting the file directly?

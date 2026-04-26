@@ -45,6 +45,8 @@ Start the daemon in the foreground. Reads config, opens the SQLite store, starts
 
 Implemented in step 3; the watcher runs for the daemon's lifetime, debounces filesystem events, and updates the index in place for files whose content hash changed.
 
+After the watcher applies an indexer outcome, the outbox writer appends a JSONL line for each real change. Tail `~/.local/share/hypomnema/outbox.jsonl` to subscribe; see [the change-events spec](../specs/change-events.md) for envelope shape.
+
 **Usage**:
 ```
 hmnd [--config PATH] [--rescan] [--mcp-stdio]

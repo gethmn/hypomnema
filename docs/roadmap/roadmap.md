@@ -80,6 +80,8 @@
 
 ## Step 4 — Outbox
 
+**Status**: shipped 2026-04-26
+
 **Goal**: On each real change (post hash-gate), append a JSONL line to `~/.local/share/hypomnema/outbox.jsonl`: `{event_type, path, content_hash, detected_at}`. Event types: `created`, `modified`, `deleted`.
 
 **Shipping criteria**:
