@@ -30,17 +30,17 @@ pub struct ScanReport {
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReindexOutcome {
-    Inserted,
-    Updated,
+    Inserted { content_hash: String },
+    Updated { content_hash: String },
     HashUnchanged,
     MissingFromDisk,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoveOutcome {
-    Removed,
+    Removed { previous_hash: String },
     NotPresent,
 }
 
@@ -102,8 +102,8 @@ struct StoredFile {
 // so they cannot disagree on stat-gate / hash-gate semantics; they only
 // disagree on how to count the result.
 enum UpsertEffect {
-    Inserted,
-    Updated,
+    Inserted { hash: String },
+    Updated { hash: String },
     HashMatched,
     StatGateHit,
 }
@@ -126,7 +126,7 @@ fn upsert_file_in_tx(
                 params![rel, size, mtime, hash, now_iso],
             )
             .with_context(|| format!("inserting row for {rel}"))?;
-            Ok(UpsertEffect::Inserted)
+            Ok(UpsertEffect::Inserted { hash })
         }
         Some(prev) if prev.size == size && prev.mtime == mtime => Ok(UpsertEffect::StatGateHit),
         Some(prev) => {
@@ -145,7 +145,7 @@ fn upsert_file_in_tx(
                     params![size, mtime, hash, now_iso, rel],
                 )
                 .with_context(|| format!("updating row for {rel}"))?;
-                Ok(UpsertEffect::Updated)
+                Ok(UpsertEffect::Updated { hash })
             }
         }
     }
@@ -219,8 +219,8 @@ fn run_blocking(vault: PathBuf, ignores: GlobSet, pool: SqlitePool) -> Result<Sc
             existing.get(&entry.rel_path),
         )?;
         match effect {
-            UpsertEffect::Inserted => report.inserted += 1,
-            UpsertEffect::Updated => report.updated += 1,
+            UpsertEffect::Inserted { .. } => report.inserted += 1,
+            UpsertEffect::Updated { .. } => report.updated += 1,
             UpsertEffect::HashMatched => report.hash_unchanged += 1,
             UpsertEffect::StatGateHit => {}
         }
@@ -288,8 +288,8 @@ fn single_file_blocking(vault: PathBuf, rel: String, pool: SqlitePool) -> Result
     tx.commit().context("committing reindex transaction")?;
 
     Ok(match effect {
-        UpsertEffect::Inserted => ReindexOutcome::Inserted,
-        UpsertEffect::Updated => ReindexOutcome::Updated,
+        UpsertEffect::Inserted { hash } => ReindexOutcome::Inserted { content_hash: hash },
+        UpsertEffect::Updated { hash } => ReindexOutcome::Updated { content_hash: hash },
         UpsertEffect::HashMatched | UpsertEffect::StatGateHit => ReindexOutcome::HashUnchanged,
     })
 }
@@ -299,14 +299,22 @@ fn remove_blocking(rel: String, pool: SqlitePool) -> Result<RemoveOutcome> {
         .get()
         .context("acquiring connection from pool for remove_path")?;
     let tx = conn.transaction().context("beginning remove transaction")?;
+    let prior: Option<String> = tx
+        .query_row(
+            "SELECT content_hash FROM files WHERE path = ?1",
+            params![rel],
+            |row| row.get(0),
+        )
+        .optional()
+        .with_context(|| format!("reading prior content_hash for {rel}"))?;
     let n = tx
         .execute("DELETE FROM files WHERE path = ?1", params![rel])
         .with_context(|| format!("deleting row for {rel}"))?;
     tx.commit().context("committing remove transaction")?;
-    Ok(if n > 0 {
-        RemoveOutcome::Removed
-    } else {
-        RemoveOutcome::NotPresent
+    Ok(match (n, prior) {
+        (0, _) => RemoveOutcome::NotPresent,
+        (_, Some(h)) => RemoveOutcome::Removed { previous_hash: h },
+        (_, None) => RemoveOutcome::NotPresent,
     })
 }
 
@@ -511,14 +519,21 @@ mod tests {
     async fn reindex_path_inserts_new_file() {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
         let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
         let scanner = Scanner::new(&config, &store).unwrap();
 
         let outcome = scanner.reindex_path("hello.md").await.unwrap();
-        assert_eq!(outcome, ReindexOutcome::Inserted);
+        let expected = hash_file(&path).unwrap();
+        assert_eq!(
+            outcome,
+            ReindexOutcome::Inserted {
+                content_hash: expected
+            }
+        );
         assert_eq!(count_files(&store).await, 1);
     }
 
@@ -526,15 +541,19 @@ mod tests {
     async fn reindex_path_idempotent_when_bytes_unchanged() {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
         let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
         let scanner = Scanner::new(&config, &store).unwrap();
 
+        let expected = hash_file(&path).unwrap();
         assert_eq!(
             scanner.reindex_path("hello.md").await.unwrap(),
-            ReindexOutcome::Inserted
+            ReindexOutcome::Inserted {
+                content_hash: expected
+            }
         );
         assert_eq!(
             scanner.reindex_path("hello.md").await.unwrap(),
@@ -556,10 +575,17 @@ mod tests {
         let h1 = read_hash(&store, "hello.md").await;
 
         fs::write(&path, b"# v2 longer").unwrap();
+        let expected = hash_file(&path).unwrap();
         let outcome = scanner.reindex_path("hello.md").await.unwrap();
-        assert_eq!(outcome, ReindexOutcome::Updated);
+        assert_eq!(
+            outcome,
+            ReindexOutcome::Updated {
+                content_hash: expected.clone()
+            }
+        );
         let h2 = read_hash(&store, "hello.md").await;
         assert_ne!(h1, h2);
+        assert_eq!(h2, expected);
     }
 
     #[tokio::test]
@@ -603,14 +629,21 @@ mod tests {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         fs::create_dir_all(vault_dir.path().join("notes/sub")).unwrap();
-        fs::write(vault_dir.path().join("notes/sub/note.md"), b"# nested").unwrap();
+        let path = vault_dir.path().join("notes/sub/note.md");
+        fs::write(&path, b"# nested").unwrap();
 
         let config = smoke_config(vault_dir.path());
         let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
         let scanner = Scanner::new(&config, &store).unwrap();
 
         let outcome = scanner.reindex_path("notes/sub/note.md").await.unwrap();
-        assert_eq!(outcome, ReindexOutcome::Inserted);
+        let expected = hash_file(&path).unwrap();
+        assert_eq!(
+            outcome,
+            ReindexOutcome::Inserted {
+                content_hash: expected
+            }
+        );
         assert_eq!(count_files(&store).await, 1);
     }
 
@@ -618,7 +651,8 @@ mod tests {
     async fn remove_path_removes_present_row() {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
-        fs::write(vault_dir.path().join("hello.md"), b"# hi").unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
         let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
@@ -626,8 +660,14 @@ mod tests {
         scanner.reindex_path("hello.md").await.unwrap();
         assert_eq!(count_files(&store).await, 1);
 
+        let expected = hash_file(&path).unwrap();
         let outcome = scanner.remove_path("hello.md").await.unwrap();
-        assert_eq!(outcome, RemoveOutcome::Removed);
+        assert_eq!(
+            outcome,
+            RemoveOutcome::Removed {
+                previous_hash: expected
+            }
+        );
         assert_eq!(count_files(&store).await, 0);
     }
 
@@ -641,6 +681,67 @@ mod tests {
 
         let outcome = scanner.remove_path("ghost.md").await.unwrap();
         assert_eq!(outcome, RemoveOutcome::NotPresent);
+        assert_eq!(count_files(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn reindex_path_carries_inserted_hash() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# carries-inserted-hash").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+
+        let expected = hash_file(&path).unwrap();
+        let outcome = scanner.reindex_path("hello.md").await.unwrap();
+        match outcome {
+            ReindexOutcome::Inserted { content_hash } => assert_eq!(content_hash, expected),
+            other => panic!("expected Inserted with hash, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reindex_path_carries_updated_hash() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# v1").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.reindex_path("hello.md").await.unwrap();
+
+        fs::write(&path, b"# v2 carries-updated-hash").unwrap();
+        let expected = hash_file(&path).unwrap();
+        let outcome = scanner.reindex_path("hello.md").await.unwrap();
+        match outcome {
+            ReindexOutcome::Updated { content_hash } => assert_eq!(content_hash, expected),
+            other => panic!("expected Updated with hash, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_path_carries_prior_hash() {
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# carries-prior-hash").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(data_dir.path(), "index.sqlite").await.unwrap();
+        let scanner = Scanner::new(&config, &store).unwrap();
+        scanner.reindex_path("hello.md").await.unwrap();
+        let inserted_hash = read_hash(&store, "hello.md").await;
+
+        let outcome = scanner.remove_path("hello.md").await.unwrap();
+        match outcome {
+            RemoveOutcome::Removed { previous_hash } => assert_eq!(previous_hash, inserted_hash),
+            other => panic!("expected Removed with prior hash, got {other:?}"),
+        }
         assert_eq!(count_files(&store).await, 0);
     }
 }
