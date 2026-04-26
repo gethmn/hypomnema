@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -9,6 +10,7 @@ use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::logging::{self, BinaryKind};
 use hypomnema::shutdown;
 use hypomnema::store::Store;
+use hypomnema::watcher;
 
 #[derive(Debug, Parser)]
 #[command(name = "hmnd", version, about = "Hypomnema daemon")]
@@ -74,15 +76,50 @@ async fn run_daemon(config: Config) -> Result<()> {
         vault = %config.vault.0.display(),
         data_dir = %config.storage.data_dir.0.display(),
         http_bind = %config.http.bind,
+        debounce_ms = %config.watcher.debounce_ms,
         pid,
         "hmnd: starting daemon"
     );
     tracing::debug!(?config, "hmnd: full configuration");
 
-    do_scan(&config).await?;
+    let store = Store::open(&config.storage.data_dir.0, &config.storage.index_file)
+        .await
+        .context("opening store")?;
+    let scanner = Scanner::new(&config, &store).context("constructing scanner")?;
+    let report = scanner.run().await.context("running initial scan")?;
+    tracing::info!(
+        "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
+        report.inserted,
+        report.updated,
+        report.hash_unchanged,
+        report.deleted,
+        report.duration.as_secs_f64()
+    );
+
+    let ignores = config
+        .watcher
+        .compiled_ignores()
+        .context("compiling watcher.ignore_patterns for daemon watcher")?;
+    let (watcher_handle, rx) = watcher::spawn_watcher(
+        &config.vault.0,
+        ignores,
+        Duration::from_millis(config.watcher.debounce_ms),
+        256,
+    )
+    .context("spawning watcher")?;
 
     let mut shutdown_rx = shutdown::install();
+    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, shutdown_rx.clone()));
+
     let _ = shutdown_rx.wait_for(|v| *v).await;
+    // Wait for the consumer to finish its drain window before tearing the
+    // watcher down so any in-flight events sitting in the channel are still
+    // applied to the index.
+    let _ = consumer.await;
+    // Drop ordering matters: keep `watcher_handle` alive until after the
+    // consumer drains. Dropping the debouncer earlier would stop the notify
+    // thread mid-drain and leave queued events unprocessed.
+    drop(watcher_handle);
 
     tracing::info!("hmnd: drain complete, exiting cleanly");
     Ok(())
