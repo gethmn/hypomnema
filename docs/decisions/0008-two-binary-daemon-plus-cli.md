@@ -62,4 +62,48 @@ No workspace split. No feature flags. No transport abstraction. Both binaries li
 
 ## Amendments
 
-<!-- None yet -->
+### 2026-04-27: MCP-over-stdio lives on `hmn`, not `hmnd`
+
+ADR-0008 § Decision was internally inconsistent on the MCP-over-stdio
+binary placement. Line 29 named `hmn` as "the CLI ... used over stdio
+for the MCP surface" but invoked `hmnd --mcp-stdio`. Line 40 committed
+to `hmnd` with the rationale "the daemon, running over stdio instead
+of HTTP — both modes are the daemon."
+
+Step 8's workplan resolved the TBD ("final flag shape TBD" on line 29)
+as a clap subcommand on `hmn`: **`hmn mcp`**. Rationale:
+
+1. The stdio MCP process under step 8's Resolution D is a thin HTTP
+   shim — it opens no SQLite, loads no sqlite-vec extension, runs no
+   watcher, holds no embedding client. It is not "the daemon"; it is
+   a CLI client of the daemon, just with stdio MCP transport instead
+   of human-stdout transport. Line 40's "both modes are the daemon"
+   framing was based on an alternative implementation (Model Y:
+   stdio-MCP opens SQLite directly, runs as its own daemon-shaped
+   process) that Resolution D rejected on WAL-contention and
+   operational-simplicity grounds.
+2. `hmn`'s ADR-0008-line-38 framing — "the user's general-purpose
+   interaction surface for Hypomnema" — fits MCP exactly: an agent
+   calling MCP tools is using Hypomnema. The shim that bridges
+   agent-stdio to daemon-HTTP is structurally identical to what
+   `hmn search …` already does, modulo the input/output transport.
+3. When the deferred socket transport ships (post-v0), it lives in
+   `hmnd` (long-lived listener — that *is* a daemon feature). Stdio
+   on `hmn`, socket on `hmnd`. Each transport's binary matches its
+   lifetime.
+
+**Binary weight clarification (amends ADR-0008 § Consequences →
+"Binary weight" line 39)**: `hmn`'s dependency graph in v0 grows by
+`rmcp` (with `["server", "transport-io", "macros", "schemars"]`) and
+`schemars`. `hmnd` does **not** link `rmcp` in v0 — the daemon does
+not bind any MCP transport itself until socket transport lands. The
+original "small subgraph (reqwest + serde + clap)" framing is
+superseded by "small subgraph + rmcp's stdio-server dep set."
+
+See [step-08 workplan § Resolution A](../roadmap/step-08-workplan.md#a-final-flag-shape-and-binary-placement-hmnd---mcp-stdio-vs-hmnd-mcp-stdio-vs-hmn-mcp-vs-env-var)
+and [§ Resolution F](../roadmap/step-08-workplan.md#f-tool-result-content-shape--structured_content-vs-content-vs-both-and-where-rmcp-lives-in-the-dep-graph)
+for the full reasoning, and [ADR-0012](./0012-mcp-transport-stdio-v0.md)
+for the formal record of stdio-shipped / socket-deferred. The
+two-binary shape and the "thin client" framing of the ADR are
+otherwise preserved — this amendment clarifies *which* thin client
+owns the MCP surface, not whether the project uses thin clients.

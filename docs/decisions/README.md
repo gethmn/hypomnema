@@ -19,6 +19,7 @@ See [`_adr-policy.md`](./_adr-policy.md) for the amend / supersede / extend poli
 | [0009](./0009-multi-vault-per-daemon.md) | Multi-Vault per Daemon | proposed |
 | [0010](./0010-vault-definitions-as-runtime-state.md) | Vault Definitions Are Runtime State, Not Configuration | proposed |
 | [0011](./0011-vault-management-on-hmn.md) | Vault Management Lives on `hmn` | proposed |
+| [0012](./0012-mcp-transport-stdio-v0.md) | MCP transport — stdio on `hmn` in v0; socket on `hmnd` deferred | accepted |
 
 ## Creating a new ADR
 

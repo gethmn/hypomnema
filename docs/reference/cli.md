@@ -1,7 +1,7 @@
 # CLI Reference: `hmnd` and `hmn`
 
-**Version**: 0.2.0
-**Generated**: 2026-04-26
+**Version**: 0.3.0
+**Generated**: 2026-04-27
 
 ---
 
@@ -11,8 +11,8 @@
 
 Hypomnema ships two binaries:
 
-- **`hmnd`** — the daemon. Owns the watched directory, the SQLite store, and the HTTP + MCP servers. Long-running; typically managed by systemd or an equivalent supervisor.
-- **`hmn`** — the CLI client. Thin wrapper that speaks HTTP to a running `hmnd`. Used for day-to-day search, status, and scripts.
+- **`hmnd`** — the daemon. Owns the watched directory, the SQLite store, and the HTTP server. Long-running; typically managed by systemd or an equivalent supervisor. (The deferred Unix-socket MCP transport will also live in `hmnd` when it ships — see [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md).)
+- **`hmn`** — the CLI client. Thin wrapper that speaks HTTP to a running `hmnd`. Used for day-to-day search, status, scripts, and the MCP-over-stdio surface (`hmn mcp`).
 
 Both read the same configuration file by default ([configuration.md](./configuration.md)); `hmn` only consults the subset it needs to reach `hmnd` (the daemon URL).
 
@@ -41,7 +41,7 @@ Running `hmnd` with no subcommand starts the daemon in the foreground.
 
 #### (default — no subcommand)
 
-Start the daemon in the foreground. Reads config, opens the SQLite store, starts the watcher, the HTTP server, and (depending on config) the MCP server over the configured transport.
+Start the daemon in the foreground. Reads config, opens the SQLite store, starts the watcher and the HTTP server. v0 does not bind any MCP transport in `hmnd`: the MCP surface ships as the `hmn mcp` subcommand (stdio); the deferred socket transport will land in `hmnd` in a follow-on workplan. See [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md).
 
 Implemented in step 3; the watcher runs for the daemon's lifetime, debounces filesystem events, and updates the index in place for files whose content hash changed.
 
@@ -51,7 +51,7 @@ Step 5 ships the HTTP server alongside the watcher. `/health` returns 200 OK; `/
 
 **Usage**:
 ```
-hmnd [--config PATH] [--rescan] [--mcp-stdio]
+hmnd [--config PATH] [--rescan]
 ```
 
 **Options**:
@@ -59,7 +59,6 @@ hmnd [--config PATH] [--rescan] [--mcp-stdio]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--rescan` | Force a full rescan and reconciliation of the vault on startup instead of trusting the existing index | deferred (forces re-hashing every file regardless of stat; not implemented in v0). |
-| `--mcp-stdio` | Serve the MCP surface over stdio instead of starting the HTTP server. Intended for agent hosts (Claude Code, Iris) that launch the daemon as a child process. Final flag shape TBD. | `false` |
 
 **Examples**:
 
@@ -72,10 +71,9 @@ hmnd --config ~/etc/hypomnema/config.toml
 
 # Force full rescan of all active vaults on startup
 hmnd --rescan
-
-# Launched by an agent host over stdio
-hmnd --mcp-stdio
 ```
+
+> **Note**: the MCP-over-stdio mode lives on the CLI binary as `hmn mcp` (not `hmnd`). See the `hmn mcp` subcommand below and [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments). The daemon's `mcp.transport` config knob continues to parse and validate; non-`stdio` values produce a `WARN`-level log at startup but do not crash — the deferred socket transport will live in `hmnd` when it ships (see [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)).
 
 > **Note**: `hmnd scan` (the v0 standalone scan subcommand) was removed in 0.2.0. Equivalent behavior is available via `hmn vault rescan [NAME|ID]` against a running daemon. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md).
 
@@ -250,6 +248,43 @@ hmn status [--json]
 
 The output shows the daemon-level info (PID, uptime, registry size) followed by a per-vault block for each registered vault. Exit code 4 if the daemon is not reachable.
 
+#### `mcp`
+
+Serve the MCP surface over stdio. Intended for MCP-capable agent hosts (Claude Code, Iris) that launch the binary as a child process and communicate via stdio. Translates MCP tool calls into HTTP requests against a running `hmnd`.
+
+**Usage**: `hmn mcp [--daemon-url URL]`
+
+**Behavior**:
+- Reads MCP messages from stdin; writes MCP messages to stdout.
+- All tracing/log output goes to stderr (stdout is reserved for the MCP transport).
+- Tool calls are forwarded to `hmnd` over HTTP using the same `DaemonClient` machinery as `hmn search …`.
+- If `hmnd` is not reachable, tool calls return a structured MCP error with `error.code = "daemon_unreachable"`.
+- Process exits when stdin is closed by the parent.
+- The MCP server identifies itself as `serverInfo.name = "hypomnema"`, `serverInfo.version = <crate version>` (brand-identity override per [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)).
+
+The three tools advertised match the three search modes one-for-one (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)):
+
+| Tool | Maps to | Spec |
+|---|---|---|
+| `search_filesystem` | `POST /search/filesystem` | [filesystem-search.md](../specs/filesystem-search.md) |
+| `search_content` | `POST /search/content` | [content-search.md](../specs/content-search.md) |
+| `search_semantic` | `POST /search/semantic` | [semantic-search.md](../specs/semantic-search.md) |
+
+Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
+
+**Example MCP host configuration**:
+
+```json
+{
+  "mcpServers": {
+    "hypomnema": {
+      "command": "/path/to/hmn",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ### Exit Codes (client)
 
 | Code | Meaning |
@@ -288,4 +323,4 @@ The output shows the daemon-level info (PID, uptime, registry size) followed by 
 ## Notes
 
 - Several options marked TBD above are open questions the handoff calls out explicitly; this file is expected to stabilize over steps 1–8 of the v0 plan (see [implementation/tech-stack.md](../implementation/tech-stack.md)).
-- `hmnd --mcp-stdio` is the current placeholder for the stdio-transport mode that agent hosts will use; the flag shape may change to a subcommand (`hmnd mcp-stdio`) or an environment variable once step 8 lands.
+- The MCP-over-stdio surface ships in step 8 as the `hmn mcp` subcommand on the CLI binary (not `hmnd --mcp-stdio` as earlier drafts of this file suggested). The Unix-socket MCP transport is deferred to a follow-on workplan and will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md).

@@ -57,9 +57,9 @@ Hypomnema has no awareness of its consumers. It exposes the same operations to a
 
 | Consumer | Transport | Notes |
 |----------|-----------|-------|
-| AI agents (Iris, Claude Code, others) | MCP | Primary consumer shape; search and vault-management tools |
+| AI agents (Iris, Claude Code, others) | MCP via stdio (`hmn mcp`) | Primary consumer shape. v0 ships MCP through the `hmn mcp` CLI subcommand (a thin stdio shim that translates MCP tool calls into HTTP requests against `hmnd`); the deferred Unix-socket transport will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md). v0 exposes search tools only; vault-management MCP tools land in round 3. |
 | HTTP clients, skills.sh packages, ad-hoc scripts | HTTP | Same operations as MCP |
-| `hmn` CLI | Calls the HTTP endpoint locally | Thin wrapper for humans; covers search, status, **and vault management** ([ADR-0011](../decisions/0011-vault-management-on-hmn.md)) |
+| `hmn` CLI | Calls the HTTP endpoint locally; also serves the MCP-over-stdio shim via `hmn mcp` | Thin wrapper for humans (search, status, **and vault management** — [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) and for agent hosts (the MCP shim) |
 | Event subscribers | Tail the per-vault JSONL outbox | No push, consumers poll the file |
 
 See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing happens in the daemon rather than in consumers, and [ADR-0004](../decisions/0004-three-search-modes-as-peers.md) for why all three search modes are first-class peers. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md) for multi-vault per daemon.
@@ -77,7 +77,7 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 │   ┌──────────────┐         ┌──────────────┐                        │
 │   │  Vault       │◄───────►│ Control-plane│                        │
 │   │  Registry    │ mutate  │ API          │                        │
-│   │  (vaults.    │         │ (HTTP + MCP) │                        │
+│   │  (vaults.    │         │ (HTTP)       │                        │
 │   │   sqlite)    │         └──────────────┘                        │
 │   └──────┬───────┘                                                 │
 │          │ drives lifecycle                                         │
@@ -92,14 +92,22 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 │                                  ▼                                  │
 │   ┌──────────────┐        ┌──────────────┐                         │
 │   │  Search API  │◄──────►│  Store *     │                         │
-│   │  (Axum HTTP +│  read  │  (rusqlite + │                         │
-│   │  rmcp MCP)   │ x-vault│  sqlite-vec, │                         │
+│   │  (Axum HTTP) │  read  │  (rusqlite + │                         │
+│   │              │ x-vault│  sqlite-vec, │                         │
 │   │              │ fan-out│  per vault)  │                         │
-│   └──────────────┘        └──────────────┘                         │
-│                                                                     │
+│   └──────▲───────┘        └──────────────┘                         │
+│          │                                                          │
 │   * = one instance per active vault                                 │
-│                                                                     │
-└────────────────────────────────────────────────────────────────────┘
+│          │                                                          │
+└──────────┼──────────────────────────────────────────────────────────┘
+           │ HTTP (loopback)
+           │
+       ┌───┴────────┐
+       │ hmn mcp    │  rmcp MCP server over stdio (per-session, spawned
+       │ (CLI shim) │  by the agent host: Claude Code, Iris). Forwards
+       └────────────┘  every tool call to hmnd over loopback HTTP. The
+                       deferred Unix-socket MCP transport will live in
+                       hmnd; see ADR-0012.
 ```
 
 ### Container Descriptions
@@ -107,11 +115,11 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 | Container | Technology | Purpose |
 |-----------|------------|---------|
 | Vault Registry | rusqlite | Authoritative list of registered vaults: id, name, path, status, created_at, last_error. Lives at `<data_dir>/vaults.sqlite`. Daemon reconciles on startup. See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md). |
-| Control-plane API | Axum (HTTP) + rmcp (MCP) | Expose vault lifecycle operations (create / list / status / pause / resume / reset / rename / rescan / terminate) over the same transports as search. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md). |
+| Control-plane API | Axum (HTTP); MCP deferred | Expose vault lifecycle operations (create / list / status / pause / resume / reset / rename / rescan / terminate). v0 ships the HTTP surface only; vault-management MCP tools are round-3 work. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md). |
 | Watcher (per vault) | `notify` + `notify-debouncer-full` | Detect Markdown file changes under one watched directory; filter out sync-conflict files; emit debounced change events. One instance per active vault. |
 | Indexer (per vault) | pulldown-cmark, rusqlite, reqwest (to embedding service) | Walk one vault, compute content hashes, split files into heading-aware chunks, embed via local HTTP, persist to that vault's store. One instance per active vault. |
 | Store (per vault) | rusqlite + r2d2 + sqlite-vec | One SQLite file per vault at `<data_dir>/vaults/<vault_id>/index.sqlite`: files table, chunks table (metadata), vec0 virtual table (embeddings). All three indexes (filesystem, content, semantic) per vault live here. |
-| Search API | Axum (HTTP) + rmcp (MCP) | Expose `search_filesystem`, `search_content`, `search_semantic` operations over two transports with identical semantics; cross-vault fan-out by default |
+| Search API | Axum (HTTP) in `hmnd`; rmcp (MCP) via `hmn mcp` stdio shim | Expose `search_filesystem`, `search_content`, `search_semantic` over two transports with identical semantics. v0 binds HTTP in `hmnd` and serves MCP from `hmn mcp` (a per-session stdio shim that forwards to `hmnd` over HTTP). The deferred Unix-socket MCP transport will live in `hmnd` when it ships — see [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md). Cross-vault fan-out by default. |
 | Outbox writer (per vault) | Plain file append | Append change events as JSONL to `<data_dir>/vaults/<vault_id>/outbox.jsonl`; consumers tail the per-vault file. One instance per active vault. |
 
 ---

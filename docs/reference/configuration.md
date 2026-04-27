@@ -110,8 +110,10 @@ See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md) for why 
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | How MCP clients connect |
-| `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path |
+| `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | Forward-compat knob describing how MCP clients reach the daemon. **v0 implements only `transport = "stdio"`, served by the `hmn mcp` subcommand on the CLI binary** (not by `hmnd`). Setting `transport = "socket"` parses and validates but is **not bound** in v0; `hmnd` emits a `WARN`-level log at startup and continues running. The deferred socket transport will live in `hmnd` when it ships. See [step-08 workplan § Resolution D](../roadmap/step-08-workplan.md#d-connection-lifecycle-stdio-process-per-connection-vs-socket-long-lived) for the deferral rationale and binary-placement reasoning, and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) for the formal record. |
+| `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path. **Parsed and validated in v0 but not bound** — see `transport` above. When the socket transport ships, the file will be created with mode `0600` (owner-only) per the deferred forward-compat decision in [step-08 workplan § Resolution E](../roadmap/step-08-workplan.md#e-authentication-on-the-socket-transport). |
+
+> **MCP via the CLI**: the v0 MCP entry point is `hmn mcp` — see [`cli.md` § `hmn mcp`](./cli.md#mcp) and [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) for the binary-placement reasoning. Agent hosts (Claude Code, Iris) configure `hmn` as the MCP command; `hmn mcp` translates MCP tool calls into HTTP requests against the running `hmnd`.
 
 ---
 
