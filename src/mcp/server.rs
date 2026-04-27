@@ -1,6 +1,7 @@
+use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
-use rmcp::{tool, tool_router};
+use rmcp::{tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 
 use crate::api::types::{ContentQueryJson, FilesystemQueryJson, SemanticQueryJson};
@@ -11,7 +12,14 @@ pub struct HypomnemaMcpServer {
     pub client: DaemonClient,
 }
 
-#[tool_router(server_handler)]
+// Brand-identity override: surface "hypomnema" as the MCP serverInfo.name to MCP hosts
+// (Claude Code, Iris) instead of the auto-derived "rmcp". Version is auto-filled by
+// the tool_handler macro from `env!("CARGO_PKG_VERSION")` when `name` is provided
+// without an explicit `version`. See ADR-0012.
+#[tool_handler(name = "hypomnema")]
+impl ServerHandler for HypomnemaMcpServer {}
+
+#[tool_router]
 impl HypomnemaMcpServer {
     #[tool(description = "List vault files matching a path prefix and/or glob. \
                        Cheapest of the three search modes; the typical first step \

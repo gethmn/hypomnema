@@ -358,17 +358,20 @@ async fn mcp_initialize_returns_server_info() {
 
     let resp = client.handshake().await;
     let result = &resp["result"];
-    // Auto-derived from the rmcp crate via `Implementation::from_build_env()`.
-    // Task 8.3 smoke pinned this to (`rmcp`, `1.5.0`); revisit if Task 8.5
-    // adds a `#[tool_handler(name=…, version=…)]` override on the impl block.
+    // Brand-identity override (ADR-0012): the `#[tool_handler(name = "hypomnema")]`
+    // attribute on `impl ServerHandler for HypomnemaMcpServer` overrides rmcp's
+    // auto-derived `Implementation::from_build_env()` so MCP hosts (Claude Code,
+    // Iris) see "hypomnema" rather than "rmcp" in their tool listing. Version is
+    // auto-filled by the macro from `env!("CARGO_PKG_VERSION")` when `name` is
+    // provided without an explicit `version`.
     assert_eq!(
         result["serverInfo"]["name"],
-        json!("rmcp"),
+        json!("hypomnema"),
         "unexpected serverInfo: {result}"
     );
     assert_eq!(
         result["serverInfo"]["version"],
-        json!("1.5.0"),
+        json!(env!("CARGO_PKG_VERSION")),
         "unexpected serverInfo: {result}"
     );
     assert_eq!(
