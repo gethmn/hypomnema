@@ -1,12 +1,13 @@
-# Manual testing — Hypomnema through step 7
+# Manual testing — Hypomnema through step 8
 
 Hand-driven runbook for verifying everything Hypomnema has shipped so far
-(steps 1–7: skeleton, scan + hash, watcher, outbox, HTTP filesystem +
-content search, chunking + embedding, semantic search). The automated
-test suite (`cargo nextest run`) is the primary regression net; this
-directory is its complement — what to run end-to-end when something
-feels off, when bringing the daemon up on a new machine, or when wiring
-in a new capability and you want to feel the surface.
+(steps 1–8: skeleton, scan + hash, watcher, outbox, HTTP filesystem +
+content search, chunking + embedding, semantic search, MCP-over-stdio
+wrapper). The automated test suite (`cargo nextest run`) is the primary
+regression net; this directory is its complement — what to run
+end-to-end when something feels off, when bringing the daemon up on a
+new machine, or when wiring in a new capability and you want to feel
+the surface.
 
 ## Reading order
 
@@ -21,6 +22,9 @@ in a new capability and you want to feel the surface.
 4. [`03-search.md`](./03-search.md) — run all three search modes
    (filesystem, content, semantic) against the fixture vault and check
    results against [`fixtures/README.md`](./fixtures/README.md).
+5. [`04-mcp.md`](./04-mcp.md) — drive `hmn mcp` via JSON-RPC, run the
+   Claude Code agent-host integration test, verify the daemon-side
+   non-stdio `mcp.transport` warning.
 
 ## Fixture vault
 
@@ -30,7 +34,7 @@ outcomes. [`fixtures/README.md`](./fixtures/README.md) is the
 expected-results contract for every example query. Treat that table as
 canonical for this runbook.
 
-## Surface covered as of step 7
+## Surface covered as of step 8
 
 | Area | Covered | Notes |
 |---|---|---|
@@ -41,7 +45,7 @@ canonical for this runbook.
 | `/search/content` + `hmn search content` (substring) | ✅ | `03` |
 | `/search/content` regex + case modes (curl only) | ✅ | `03` — CLI flags not yet exposed |
 | `/search/semantic` + `hmn search semantic` | ✅ | `03` (requires TEI) |
-| MCP transport (step 8) | ❌ | not yet shipped |
+| MCP transport (step 8) | ✅ | `04` — `hmn mcp` stdio + Claude Code agent-host path |
 | `hmn vault …` subcommands (round 3) | ❌ | not yet shipped |
 
 ## Version-skew warning
@@ -50,10 +54,10 @@ canonical for this runbook.
 and [`docs/reference/cli.md`](../../docs/reference/cli.md) are at
 version `0.2.0` and describe the **future** multi-vault state
 (`hmn vault create`, top-level `vault =` removed, runtime vault
-registry). The shipped code through step 7 is still single-vault — it
-reads the top-level `vault` key from `config.toml` and `hmn` only has
-`status` and `search {filesystem,content,semantic}` subcommands. The
-docs in this directory target the shipped reality.
+registry). The shipped code through step 8 is still single-vault — it
+reads the top-level `vault` key from `config.toml` and `hmn` has
+`status`, `search {filesystem,content,semantic}`, and `mcp` subcommands
+only. The docs in this directory target the shipped reality.
 
 When round 3 (multi-vault) lands, this directory will need updating
 alongside.
