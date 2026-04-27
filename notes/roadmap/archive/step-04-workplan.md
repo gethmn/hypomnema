@@ -1,7 +1,7 @@
 # Step 4 Workplan — Outbox
 
-**Roadmap step**: [Step 4 — Outbox](./roadmap.md#step-4--outbox)
-**Status**: drafted, awaiting review
+**Roadmap step**: [Step 4 — Outbox](./roadmap-1.md#step-4--outbox)
+**Status**: Shipped 2026-04-25
 **Created**: 2026-04-26
 
 ---
@@ -51,7 +51,7 @@ daemon. The roadmap's risk-grade for this step is "low," and the simplest
 durability shape is also the strongest.
 
 The spec's existing crash-safety promise ([§ Edge Cases / Crash during
-write](../specs/change-events.md#edge-cases)) — "the daemon on restart picks
+write](../../../docs/specs/change-events.md#edge-cases)) — "the daemon on restart picks
 up from the end-of-file; no duplicate is emitted for events that made it
 through before the crash" — is consistent with per-event durability. A
 periodic-fsync alternative would require either a flush-on-shutdown contract
@@ -84,7 +84,7 @@ serializes whatever the indexer produced: one `deleted` line, one `created`
 (or `modified`) line. No coalescing into a single `renamed` event.
 
 **Why**: this matches the language [step 3 tightened in
-`docs/specs/change-events.md` line 42](../specs/change-events.md): "v0
+`docs/specs/change-events.md` line 42](../../../docs/specs/change-events.md): "v0
 behavior, confirmed in step 3: renames are observed as a `deleted` +
 `created` pair. Fused rename detection remains open (line 98)." Step 4 has
 nothing new to decide here — the watcher already produced the v0 shape; the
@@ -98,7 +98,7 @@ event type to the outbox envelope; that path is documented but not pursued.
 
 The roadmap shipping criterion 3 says deletes append "with the last known
 content_hash." The current spec column note
-([change-events.md table](../specs/change-events.md#data-schema)) says
+([change-events.md table](../../../docs/specs/change-events.md#data-schema)) says
 content_hash is "yes for create/modify, null for delete." These are in
 mild conflict; resolving in favour of the roadmap.
 
@@ -414,7 +414,7 @@ DELETE pattern stays inside one transaction.
     is already updated; the outbox simply has a missing line for that one
     event. We do not roll back the index on outbox failure (the spec
     already accepts that consumers may have to skip bad/missing lines —
-    [§ Edge Cases / Crash during write](../specs/change-events.md#edge-cases)).
+    [§ Edge Cases / Crash during write](../../../docs/specs/change-events.md#edge-cases)).
   - The drain branch (`drain_remaining`) is updated to take `&Outbox` too,
     so events still in the channel at shutdown also get persisted.
 - `src/bin/hmnd.rs` — `run_daemon` extended:
@@ -579,16 +579,16 @@ v0.
     "After the watcher applies an indexer outcome, the outbox writer
     appends a JSONL line for each real change. Tail
     `~/.local/share/hypomnema/outbox.jsonl` to subscribe; see [the
-    change-events spec](../specs/change-events.md) for envelope shape."
+    change-events spec](../../../docs/specs/change-events.md) for envelope shape."
 
 - `docs/reference/configuration.md`:
   - § Storage `outbox_file` row: keep the existing default; append one
     prose line to the section: "The outbox file is created at daemon
     startup if missing. Consumers that tail it should reopen on `ENOENT` or
     inode change — see [the change-events spec § Edge
-    Cases](../specs/change-events.md#edge-cases)."
+    Cases](../../../docs/specs/change-events.md#edge-cases)."
 
-- `docs/roadmap/roadmap.md`:
+- `notes/roadmap/archive/roadmap-1.md`:
   - Step 4 gets `**Status**: shipped <date>` at the top of its section
     (filled in at the actual ship moment, not at workplan time).
 
@@ -671,28 +671,28 @@ stable cross-platform in std (`fsync`/`fdatasync` on Unix,
 ## Cross-references
 
 **Specs / decisions**:
-- [`specs/change-events.md`](../specs/change-events.md) — primary spec for
+- [`specs/change-events.md`](../../../docs/specs/change-events.md) — primary spec for
   this step. Table row for `content_hash` updated in Task 4.6 (deleted
   events now carry prior hash); line 97 (fsync policy) resolved in Task
   4.6; lines 98–100 stay open per the roadmap.
-- [ADR-0006: Outbox outside watched dir](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0006: Outbox outside watched dir](../../../docs/decisions/0006-outbox-outside-watched-directory.md)
   — already enforced by the config validator (step 1) and re-asserted by
   this step's runtime: the outbox writer opens its file inside `data_dir`,
   by construction.
-- [ADR-0003: Indexing in the daemon](../decisions/0003-indexing-in-the-daemon.md)
+- [ADR-0003: Indexing in the daemon](../../../docs/decisions/0003-indexing-in-the-daemon.md)
   — the outbox is the change-event projection of "indexing in the daemon."
 
 **Reference docs (updated by this step)**:
-- [Change-events spec](../specs/change-events.md) — table + open-question
+- [Change-events spec](../../../docs/specs/change-events.md) — table + open-question
   resolution.
-- [Architecture overview](../architecture/overview.md) — § Outbox Writer
+- [Architecture overview](../../../docs/architecture/overview.md) — § Outbox Writer
   one-line confirmation.
-- [CLI reference](../reference/cli.md) — `hmnd` no-subcommand prose.
-- [Configuration reference](../reference/configuration.md) — § Storage
+- [CLI reference](../../../docs/reference/cli.md) — `hmnd` no-subcommand prose.
+- [Configuration reference](../../../docs/reference/configuration.md) — § Storage
   outbox_file note.
 
 **Pitfalls touched** (from
-[`docs/implementation/appendices/tech-stack/pitfalls.md`](../implementation/appendices/tech-stack/pitfalls.md)):
+[`docs/implementation/appendices/tech-stack/pitfalls.md`](../../../docs/implementation/appendices/tech-stack/pitfalls.md)):
 - #1 *Blocking the async runtime with rusqlite* — extended in spirit: the
   same `spawn_blocking` discipline applies to outbox file I/O.
 - #5 *Putting state in the watched directory* — already enforced by the
@@ -739,7 +739,7 @@ stable cross-platform in std (`fsync`/`fdatasync` on Unix,
 
 If review surfaces a strong reason to pull any of the above forward, that's
 a roadmap revision per the
-[mid-step roadmap revision](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
+[mid-step roadmap revision](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
 open question.
 
 ---

@@ -1,7 +1,7 @@
 # Step 1 Workplan — Skeleton
 
-**Roadmap step**: [Step 1 — Skeleton](./roadmap.md#step-1--skeleton)
-**Status**: drafted, awaiting review
+**Roadmap step**: [Step 1 — Skeleton](./roadmap-1.md#step-1--skeleton)
+**Status**: Shipped 2026-04-25
 **Created**: 2026-04-25
 
 ---
@@ -25,9 +25,9 @@ proposal and rationale; the build follows the resolutions.
 ### 1. CLI subcommand naming
 
 The `hmn start / hmn scan / hmn search / hmn status` shape from
-[`vision.md` line 115](../product/vision.md) predates [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md).
+[`vision.md` line 115](../../../docs/product/vision.md) predates [ADR-0008](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md).
 With the daemon split into its own binary, `start` and `scan` belong on `hmnd`,
-not `hmn`. The draft [`reference/cli.md`](../reference/cli.md) already encodes
+not `hmn`. The draft [`reference/cli.md`](../../../docs/reference/cli.md) already encodes
 the post-ADR-0008 shape — adopt it as final for v0:
 
 **`hmnd`** (daemon binary)
@@ -49,7 +49,7 @@ the post-ADR-0008 shape — adopt it as final for v0:
 - `hmn search <mode>` as a nested subcommand keeps each search mode's flags
   scoped to its own help block — easier to document, easier for clap-derive to
   validate, lines up with the three peer modes from
-  [ADR-0004](../decisions/0004-three-search-modes-as-peers.md).
+  [ADR-0004](../../../docs/decisions/0004-three-search-modes-as-peers.md).
 - `hmnd config-validate` lets us land config validation logic in step 1 with a
   user-visible surface (rather than a hidden `--check-config` flag).
 - Stays compatible with the `hmnd --mcp-stdio` flag ADR-0008 contemplates;
@@ -65,7 +65,7 @@ without dragging step 5 forward.
 
 ### 2. TOML config schema
 
-The schema documented in [`reference/configuration.md`](../reference/configuration.md)
+The schema documented in [`reference/configuration.md`](../../../docs/reference/configuration.md)
 was drafted with all eight v0 steps in mind. Adopt it verbatim as the canonical
 schema; step 1 *parses* the whole thing but only *uses* the subset relevant to
 the skeleton (vault path, data_dir, logging levels, http.bind for the
@@ -112,7 +112,7 @@ tokio_level = "error"                # default
 **Validation rules implemented in step 1**:
 - `vault` is required, must exist, must be a directory, must be readable.
 - `storage.data_dir` must not be under `vault` — the
-  [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) invariant,
+  [ADR-0006](../../../docs/decisions/0006-outbox-outside-watched-directory.md) invariant,
   enforced as an absolute-path comparison after canonicalization.
 - `logging.level` / `notify_level` / `tokio_level` must parse as
   `tracing::Level`.
@@ -139,7 +139,7 @@ sanity bounds (step 3).
   else `$HOME/.config/hypomnema/config.toml`.
 - On macOS we deliberately use the Linux XDG layout (`~/.config/...`,
   `~/.local/share/...`), matching what
-  [`reference/configuration.md`](../reference/configuration.md) already
+  [`reference/configuration.md`](../../../docs/reference/configuration.md) already
   documents. Reasoning: keeps platform branches out of the path code, matches
   what most `tracing`/`serde`-shaped Rust CLIs do on macOS, and
   `~/Library/Application Support` adds nothing for a single-user developer
@@ -157,7 +157,7 @@ sanity bounds (step 3).
 
 ### 3. Default logging verbosity per module
 
-Adopt the [`vision.md` line 113](../product/vision.md) lean as final, with the
+Adopt the [`vision.md` line 113](../../../docs/product/vision.md) lean as final, with the
 per-binary tweak that's natural for a daemon-vs-CLI split:
 
 **`hmnd` (daemon)** — defaults from `[logging]`:
@@ -183,7 +183,7 @@ per-binary tweak that's natural for a daemon-vs-CLI split:
 - Compact format on a TTY; JSON-per-line when `HYPOMNEMA_LOG_FORMAT=json` is
   set (cheap to add now, useful when a supervisor captures logs). No file
   output yet — the "log to a file in `data_dir`" line in
-  [`architecture/overview.md`](../architecture/overview.md) is deferred until
+  [`architecture/overview.md`](../../../docs/architecture/overview.md) is deferred until
   there's something other than the startup banner to capture.
 
 The `[logging]` config table's three keys (`level`, `notify_level`,
@@ -197,7 +197,7 @@ process start.
 
 Each task lands as its own commit, and the set is intended to be a single PR
 unless any one balloons. Granularity follows the per-logical-unit instinct from
-[`project-planning-workflow-notes.md` open question 1](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself).
+[`project-planning-workflow-notes.md` open question 1](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself).
 
 ### Task 1.1 — Config module: parse + defaults + validation
 
@@ -288,7 +288,7 @@ shape we choose here propagates everywhere.
   - on shutdown: logs `"hmnd: shutdown signal received, exiting cleanly"` at
     `info`, returns `Ok(())`
 - `main` maps anyhow errors to exit codes per
-  [`reference/cli.md`](../reference/cli.md):
+  [`reference/cli.md`](../../../docs/reference/cli.md):
   - configuration error → 3
   - other → 1
   - clap parse error → 2 (clap handles this for us)
@@ -362,9 +362,9 @@ the same crate — we can rely on that without `assert_cmd`.
 - `docs/reference/cli.md` — flip "draft" header, remove "subcommand names not
   finalized" warning, mark resolved.
 - `docs/reference/configuration.md` — same treatment for "format not finalized."
-- `docs/roadmap/roadmap.md` — add `**Status**: shipped <date>` to the Step 1
+- `notes/roadmap/archive/roadmap-1.md` — add `**Status**: shipped <date>` to the Step 1
   section per the step-boundary ritual in
-  [`project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md#step-boundary-ritual)
+  [`project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md#step-boundary-ritual)
   *(this happens at the end of the step, not the start)*.
 
 **What does *not* land here**: ADRs. The three deferred decisions resolved
@@ -372,7 +372,7 @@ above are encoded in this workplan and in the reference docs they update.
 None of them are load-bearing enough to outlive the step (per the
 "workplan turns each TBD into either a code-level decision or a new ADR"
 rubric in
-[`project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md#tbd-handling)).
+[`project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md#tbd-handling)).
 If review surfaces a different read on any of the three, that's the moment to
 promote it to an ADR.
 
@@ -418,7 +418,7 @@ promote it to an ADR.
 - [ ] No new dependencies added to `Cargo.toml`.
 - [ ] `docs/reference/cli.md` and `docs/reference/configuration.md` drop their
       "draft" warnings and reflect the resolved decisions.
-- [ ] Step 1 marked shipped in `docs/roadmap/roadmap.md` with the ship date.
+- [ ] Step 1 marked shipped in `notes/roadmap/archive/roadmap-1.md` with the ship date.
 - [ ] Step 1 retrospective appended to
       `notes/project-planning-workflow-notes.md` (one paragraph minimum).
 
@@ -427,15 +427,15 @@ promote it to an ADR.
 ## Cross-references
 
 **Specs / decisions**:
-- [ADR-0002: Rust over Python](../decisions/0002-rust-over-python.md) — language
-- [ADR-0006: Outbox outside watched directory](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0002: Rust over Python](../../../docs/decisions/0002-rust-over-python.md) — language
+- [ADR-0006: Outbox outside watched directory](../../../docs/decisions/0006-outbox-outside-watched-directory.md)
   — `data_dir`-under-`vault` rejection
-- [ADR-0008: Two binaries (hmnd + hmn)](../decisions/0008-two-binary-daemon-plus-cli.md)
+- [ADR-0008: Two binaries (hmnd + hmn)](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md)
   — binary shape
 
 **Reference docs (updated by this step)**:
-- [CLI reference](../reference/cli.md)
-- [Configuration reference](../reference/configuration.md)
+- [CLI reference](../../../docs/reference/cli.md)
+- [Configuration reference](../../../docs/reference/configuration.md)
 
 **Pitfalls touched**:
 - #9 *Ungraceful shutdown and torn writes* — the shutdown helper from task 1.3
@@ -464,5 +464,5 @@ promote it to an ADR.
 
 If review surfaces a strong reason to pull any of the above forward, that's a
 roadmap revision — see the
-[mid-step roadmap revision](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
+[mid-step roadmap revision](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
 open question.

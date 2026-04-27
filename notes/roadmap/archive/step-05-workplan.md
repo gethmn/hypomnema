@@ -1,7 +1,7 @@
 # Step 5 Workplan — HTTP Filesystem + Content Search (Shipping Gate)
 
-**Roadmap step**: [Step 5 — HTTP filesystem + content search (shipping gate)](./roadmap.md#step-5--http-filesystem--content-search-shipping-gate)
-**Status**: drafted, awaiting review
+**Roadmap step**: [Step 5 — HTTP filesystem + content search (shipping gate)](./roadmap-1.md#step-5--http-filesystem--content-search-shipping-gate)
+**Status**: Shipped 2026-04-25
 **Created**: 2026-04-25
 
 ---
@@ -262,7 +262,7 @@ A match that spans multiple lines is reported once, anchored at its start.
 **Why**: Markdown prose soft-wraps. A user looking for "long phrase" in a
 note where the phrase happens to wrap across two lines would otherwise see
 zero matches and be silently misled. The spec's open question
-([content-search.md line 86](../specs/content-search.md)) leans yes for
+([content-search.md line 86](../../../docs/specs/content-search.md)) leans yes for
 exactly this reason. Implementation cost is low — *not* splitting by line
 is the default; the alternative would require us to add splitting logic.
 Closes the spec open question.
@@ -323,7 +323,7 @@ of substring matching; regex `case_sensitive` interaction.
 ### 5. Regex alternative to glob
 
 **Resolution**: **no for v0.** `/search/filesystem` ships glob-only; the
-spec open question ([filesystem-search.md line 92](../specs/filesystem-search.md))
+spec open question ([filesystem-search.md line 92](../../../docs/specs/filesystem-search.md))
 **stays open**. The workplan does not add a `regex: bool` field to the
 filesystem-search request shape, since adding it later is additive (the
 forward-compat is achieved by *not* shipping it now, not by pre-allocating
@@ -351,7 +351,7 @@ is symmetric but optional. Defer.
 The current `files` table (migration 0001) has columns `path, size, mtime,
 content_hash, indexed_at`. Content search needs the file body in the store
 — per
-[`docs/specs/content-search.md`](../specs/content-search.md): "File text is
+[`docs/specs/content-search.md`](../../../docs/specs/content-search.md): "File text is
 stored inside the SQLite store as part of the indexer's work — content
 search does not re-read files on every query." This shape was deferred
 from step 2's schema work because nothing before step 5 needed it.
@@ -393,7 +393,7 @@ is UTF-8 by spec; vault hygiene problems become searchable-but-noisy
 rather than indexer crashes. The hash continues to be computed over the
 **raw bytes** (`hash_file`'s current behavior) — lossy decode for storage,
 lossless hash for change detection. Document this in
-[`docs/specs/content-search.md`](../specs/content-search.md) edge cases.
+[`docs/specs/content-search.md`](../../../docs/specs/content-search.md) edge cases.
 
 #### B. Indexer body-storage wiring
 
@@ -1372,7 +1372,7 @@ task 3.5, step 4 task 4.5).
   - `[http].bind` row: keep the existing prose; append: "Step 5 binds
     the Axum router on this address; failure to bind is fatal at
     daemon startup."
-- `docs/roadmap/roadmap.md`:
+- `notes/roadmap/archive/roadmap-1.md`:
   - Step 5 gets `**Status**: shipped <date>` at the top of its section
     (filled in at the actual ship moment, not at workplan time).
 
@@ -1487,49 +1487,49 @@ Task 5.7 before reporting done.
 - [ ] **End-of-round retrospective** appended to the same file —
       Step 5 is the last step in this roadmap round; the retro covers
       both step 5 and the round as a whole (per
-      [`roadmap.md` § After step 5](./roadmap.md#after-step-5)).
+      [`roadmap.md` § After step 5](./roadmap-1.md#after-step-5)).
 
 ---
 
 ## Cross-references
 
 **Specs / decisions**:
-- [`specs/filesystem-search.md`](../specs/filesystem-search.md) — primary
+- [`specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md) — primary
   spec for `/search/filesystem`. Open question on line 92 (regex
   alternative) stays open per
   [§ Deferred decision 5](#5-regex-alternative-to-glob).
-- [`specs/content-search.md`](../specs/content-search.md) — primary
+- [`specs/content-search.md`](../../../docs/specs/content-search.md) — primary
   spec for `/search/content`. Open question on line 86 (phrase across
   lines) resolved in this step; line 87 (frontmatter-only) stays open.
-- [`specs/change-events.md`](../specs/change-events.md) — gains the
+- [`specs/change-events.md`](../../../docs/specs/change-events.md) — gains the
   `vault` field row in this step's doc-update task. Open questions on
   lines 100, 101, 102 stay open.
-- [`specs/semantic-search.md`](../specs/semantic-search.md) — gains the
+- [`specs/semantic-search.md`](../../../docs/specs/semantic-search.md) — gains the
   `vault` field row in this step's doc-update task; the rest of the
   spec ships in step 7.
-- [ADR-0004: Three search modes as peers](../decisions/0004-three-search-modes-as-peers.md)
+- [ADR-0004: Three search modes as peers](../../../docs/decisions/0004-three-search-modes-as-peers.md)
   — the v0 plan ships filesystem + content first, semantic in step 7;
   this step is the *peer* shape's first concrete realization.
-- [ADR-0008: Two binaries (hmnd + hmn) in one crate](../decisions/0008-two-binary-daemon-plus-cli.md)
+- [ADR-0008: Two binaries (hmnd + hmn) in one crate](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md)
   — `hmn`'s HTTP client is the first time this step lights up the
   hmn-only side of the binary split. Both binaries link the full
   library; the runtime restriction is an organizational concern.
-- [ADR-0006: Outbox outside the watched directory](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0006: Outbox outside the watched directory](../../../docs/decisions/0006-outbox-outside-watched-directory.md)
   — the outbox `vault` field is forward-compat only; the field stays
   optional and omitted, so the ADR's read-only-vault invariant is
   unchanged.
 
 **Reference docs (updated by this step)**:
-- [Filesystem-search spec](../specs/filesystem-search.md)
-- [Content-search spec](../specs/content-search.md)
-- [Change-events spec](../specs/change-events.md)
-- [Semantic-search spec](../specs/semantic-search.md)
-- [Architecture overview](../architecture/overview.md)
-- [CLI reference](../reference/cli.md)
-- [Configuration reference](../reference/configuration.md)
+- [Filesystem-search spec](../../../docs/specs/filesystem-search.md)
+- [Content-search spec](../../../docs/specs/content-search.md)
+- [Change-events spec](../../../docs/specs/change-events.md)
+- [Semantic-search spec](../../../docs/specs/semantic-search.md)
+- [Architecture overview](../../../docs/architecture/overview.md)
+- [CLI reference](../../../docs/reference/cli.md)
+- [Configuration reference](../../../docs/reference/configuration.md)
 
 **Pitfalls touched** (from
-[`docs/implementation/appendices/tech-stack/pitfalls.md`](../implementation/appendices/tech-stack/pitfalls.md)):
+[`docs/implementation/appendices/tech-stack/pitfalls.md`](../../../docs/implementation/appendices/tech-stack/pitfalls.md)):
 - #1 *Blocking the async runtime with rusqlite* — every search handler
   goes through `spawn_blocking`. The pattern carries over from steps
   2–4.
@@ -1555,13 +1555,13 @@ Task 5.7 before reporting done.
   that. A future paginated mode is additive (new request fields,
   optional response fields) and not pursued in v0.
 - **Frontmatter summaries in filesystem results** ([filesystem-search.md
-  line 93](../specs/filesystem-search.md)). Spec open question stays
+  line 93](../../../docs/specs/filesystem-search.md)). Spec open question stays
   open.
-- **Regex alternative to glob** ([filesystem-search.md line 92](../specs/filesystem-search.md)).
+- **Regex alternative to glob** ([filesystem-search.md line 92](../../../docs/specs/filesystem-search.md)).
   Spec open question stays open per
   [§ Deferred decision 5](#5-regex-alternative-to-glob).
 - **Frontmatter-only-match distinguishing** ([content-search.md line
-  87](../specs/content-search.md)). Spec open question stays open.
+  87](../../../docs/specs/content-search.md)). Spec open question stays open.
 - **Health metrics beyond reachability.** `/health` returns
   `{"status":"ok"}` and nothing else. A future endpoint can carry
   index-fresh-vs-stale, watcher-running, embedding-service-reachable
@@ -1587,7 +1587,7 @@ Task 5.7 before reporting done.
 
 If review surfaces a strong reason to pull any of the above forward,
 that's a roadmap revision per the
-[mid-step roadmap revision](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
+[mid-step roadmap revision](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
 open question.
 
 ---
@@ -1639,7 +1639,7 @@ away (`features = ["rustls-tls"]`), additive.
 
 Step 4's retro left no playbook-level cleanups for step 5 to gate on.
 Two open items in the playbook (in
-[`notes/coordinator-playbook.md` § Open questions](../../notes/coordinator-playbook.md))
+[`notes/coordinator-playbook.md` § Open questions](../../coordinator-playbook.md))
 will get fresh evidence from this step but do not need to be settled
 before it starts:
 
@@ -1667,11 +1667,11 @@ completion — is the *current* shape and is expected to hold.
 ## End-of-round acknowledgement
 
 Step 5 is the last step in this roadmap round; per
-[`roadmap.md` § After step 5](./roadmap.md#after-step-5):
+[`roadmap.md` § After step 5](./roadmap-1.md#after-step-5):
 1. Tag the milestone in git.
 2. Capture any ADRs that hardened during the build.
 3. Write a short **end-of-round retrospective** into
-   [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) —
+   [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) —
    on top of the regular per-step retro — answering: did the
    roadmap→workplan→build cadence work? What would we change for the
    next round (steps 6–8)?
@@ -1680,6 +1680,6 @@ Step 5 is the last step in this roadmap round; per
 
 These are step-boundary actions, executed by the coordinator at the
 end of step 5's build (per
-[`coordinator-playbook.md` § Step boundary](../../notes/coordinator-playbook.md)).
+[`coordinator-playbook.md` § Step boundary](../../coordinator-playbook.md)).
 The workplan acknowledges them so the build does not surprise the
 boundary; nothing to do here at workplan-write time.

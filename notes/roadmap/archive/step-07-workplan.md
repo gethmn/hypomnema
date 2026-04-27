@@ -2,9 +2,9 @@
 
 **Step**: 7 of 8 (round 2 of 2). Second step of round 2 — see [`roadmap-2.md`](./roadmap-2.md) for the round and [`step-06-workplan.md`](./step-06-workplan.md) for the immediately prior step (which produced the `chunks` and `chunks_vec` substrate this step queries).
 
-**Status**: shipped 2026-04-26. See [§ Build-time amendments](#build-time-amendments) at the end of this file for the items the build surfaced.
+**Status**: Shipped 2026-04-26. See [§ Build-time amendments](#build-time-amendments) at the end of this file for the items the build surfaced.
 
-**Round-2 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 retro):
+**Round-2 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 6 retro):
 
 - Risk grade is honest: step 7 is **medium**. The schema introduced in step 6 is immutable per ADR-0007; this step composes the existing surfaces (embedding client, chunks_vec table, HTTP router) plus one new schema migration (0004 — see resolution F). The load-bearing risk is the **embedding-service-at-query-time** path, pulled forward in resolution E.
 - Five deferred decisions from the roadmap are resolved here at workplan-write time. One additional fall-out resolution (cosine distance metric) surfaced during task design and is resolved as a small additive migration.
@@ -16,7 +16,7 @@
 
 ## Goal recap
 
-Axum exposes `POST /search/semantic` returning the response shape from [`docs/specs/semantic-search.md`](../specs/semantic-search.md). The handler embeds the query via the same [`EmbeddingClient`](../../src/embedding.rs) that step 6 wired into the indexer, runs a `chunks_vec` nearest-neighbor query (cosine distance via the schema-baked metric — see resolution F), joins back to `chunks` for path / heading / text metadata, and returns the top-N results with similarity scores in `[0.0, 1.0]`.
+Axum exposes `POST /search/semantic` returning the response shape from [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md). The handler embeds the query via the same [`EmbeddingClient`](../../../src/embedding.rs) that step 6 wired into the indexer, runs a `chunks_vec` nearest-neighbor query (cosine distance via the schema-baked metric — see resolution F), joins back to `chunks` for path / heading / text metadata, and returns the top-N results with similarity scores in `[0.0, 1.0]`.
 
 `hmn search semantic <query>` lights up — the round-1 stub (`src/bin/hmn.rs:69-72` "lands in step 7") becomes a real HTTP-backed command parallel to `hmn search filesystem` and `hmn search content`.
 
@@ -38,7 +38,7 @@ The five TBDs from [`roadmap-2.md`](./roadmap-2.md) § Step 7 are resolved below
 
 **How to apply**: `SemanticQuery::min_similarity` defaults to `0.0` in `src/search/semantic.rs`. The handler in `src/api/search.rs` clamps to `[0.0, 1.0]` after deserialization; the SQL projects `score` and filters `WHERE score >= ?min_similarity` after the kNN match. Filtering happens after kNN, not before — the kNN search itself uses `k = ?limit` and surfaces the top-`limit` regardless of similarity; the `min_similarity` filter is then applied to that result set. Consumers thus see at most `limit` results, possibly fewer if `min_similarity` removes some.
 
-**References**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) line 56 (`min_similarity: 0.3` example, "default 0.0").
+**References**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) line 56 (`min_similarity: 0.3` example, "default 0.0").
 
 ### B. Behavior when `chunks_vec` is empty but `files` is not
 
@@ -52,7 +52,7 @@ The two-table count is two short SQL statements, both `O(1)` against SQLite's ro
 
 **How to apply**: `search_semantic()` runs the kNN query first; if the result set is empty, runs `SELECT count(*) FROM chunks_vec` and `SELECT count(*) FROM files` (both inside the same `spawn_blocking`). Sets `hint = Some("semantic index is building".to_string())` if `chunks_vec_count == 0 && files_count > 0`. Returns the `(Vec<SemanticResult>, Option<String>)` pair to the handler.
 
-**References**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Empty index (line 90–92); [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 7 shipping criterion 3.
+**References**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) § Edge Cases — Empty index (line 90–92); [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 7 shipping criterion 3.
 
 ### C. Result ordering across ties
 
@@ -64,7 +64,7 @@ Alternative considered: `ORDER BY v.distance ASC, c.id ASC`. Cheaper (one column
 
 **How to apply**: the SELECT in `src/search/semantic.rs` projects `v.distance`, `c.file_path`, `c.chunk_index`, etc., and orders by all three. The kNN's `k = ?limit` clause caps the candidate set before the ORDER BY runs.
 
-**References**: [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 7 deferred decision 3 ("by file path? by `chunks.chunk_index`?").
+**References**: [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 7 deferred decision 3 ("by file path? by `chunks.chunk_index`?").
 
 ### D. Query embedding caching strategy
 
@@ -76,7 +76,7 @@ The decision is reversible: a future step can wrap `EmbeddingClient` with an LRU
 
 **How to apply**: nothing to add in v0. The handler holds an `Arc<dyn Embedder>` (per the wiring in resolution / Task 7.3) and calls `embed_text()` per request. Future-step note: if real-world latency justifies it, a `CachingEmbedder` wraps the underlying client and is constructed in `hmnd.rs` between `EmbeddingClient::new()` and the `Scanner`/`ApiState` wiring.
 
-**References**: [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 7 deferred decision 4 ("per-process, per-query, none").
+**References**: [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 7 deferred decision 4 ("per-process, per-query, none").
 
 ### E. Error envelope code for embedding-service-unavailable
 
@@ -99,7 +99,7 @@ Alternative considered: separate codes (`embedding_dimension_mismatch` 503 vs `e
 
 **How to apply**: extend `src/api/error.rs::From<anyhow::Error>` (or — likely cleaner — add a new `From<SemanticSearchError>` impl) to map `SemanticSearchError::EmbeddingUnavailable { .. }` → `ApiError { status: 503, code: "embedding_unavailable", message: <detail> }` and `SemanticSearchError::Internal { .. }` → `ApiError::internal()`. The `SemanticSearchError` enum lives in `src/search/semantic.rs` and is the contract the HTTP handler maps from.
 
-**References**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Embedding service unavailable (line 92–96); [`docs/roadmap/step-06-workplan.md`](./step-06-workplan.md) § Build-time amendment 3 (Task 6.4r1 reclassified DimensionMismatch as skip-and-log at index time); [`src/api/error.rs:46-77`](../../src/api/error.rs) for the existing error-envelope shape and pattern.
+**References**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) § Edge Cases — Embedding service unavailable (line 92–96); [`notes/roadmap/archive/step-06-workplan.md`](./step-06-workplan.md) § Build-time amendment 3 (Task 6.4r1 reclassified DimensionMismatch as skip-and-log at index time); [`src/api/error.rs:46-77`](../../../src/api/error.rs) for the existing error-envelope shape and pattern.
 
 ### Resolved as part of this step (not pre-flagged in the roadmap)
 
@@ -107,7 +107,7 @@ Alternative considered: separate codes (`embedding_dimension_mismatch` 503 vs `e
 
 **Resolution**: a new migration 0004 recreates `chunks_vec` with `distance_metric=cosine`, truncates `chunks`, and clears `files.content_hash` to force the next watcher event or scan cycle to re-read content and re-chunk. Score conversion at query time: `score = 1.0 - (distance / 2.0)`, clamped to `[0.0, 1.0]` as a defensive guard against floating-point edge cases. Score = 1.0 for identical vectors (distance 0); score = 0.5 for orthogonal vectors (distance 1, cos_sim 0); score = 0.0 for opposite vectors (distance 2, cos_sim −1).
 
-Migration 0004 SQL shape (the agent verifies the exact `distance_metric` clause syntax against upstream sqlite-vec at task time per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill smell about "MATCH and k pseudo-column are sqlite-vec idioms; the API has moved around"):
+Migration 0004 SQL shape (the agent verifies the exact `distance_metric` clause syntax against upstream sqlite-vec at task time per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill smell about "MATCH and k pseudo-column are sqlite-vec idioms; the API has moved around"):
 
 ```sql
 DROP TABLE chunks_vec;
@@ -133,7 +133,7 @@ This is a step-6 schema decision that's being amended at step-7 workplan time. T
 
 **Score conversion in code**: `src/search/semantic.rs` projects `v.distance` from the kNN query and computes `score = (1.0 - (distance as f32) / 2.0).clamp(0.0, 1.0)` per row. The conversion is a one-line helper for testability.
 
-**References**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) line 11 ("cosine similarity") and the response field table (line 75–82 — score as cosine in `[0.0, 1.0]`); [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../decisions/0007-sqlite-vec-over-alternatives.md) lines 27–28 (dimension is schema-level — same shape as distance metric); [`.claude/skills/sqlite-vec-extension/SKILL.md`](../../.claude/skills/sqlite-vec-extension/SKILL.md) line 105 ("MATCH and k pseudo-column are sqlite-vec idioms; the API has moved around — verify against upstream"); upstream sqlite-vec docs at https://github.com/asg017/sqlite-vec (the agent verifies the `distance_metric=cosine` clause syntax at Task 7.1 time).
+**References**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) line 11 ("cosine similarity") and the response field table (line 75–82 — score as cosine in `[0.0, 1.0]`); [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../../../docs/decisions/0007-sqlite-vec-over-alternatives.md) lines 27–28 (dimension is schema-level — same shape as distance metric); [`.claude/skills/sqlite-vec-extension/SKILL.md`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) line 105 ("MATCH and k pseudo-column are sqlite-vec idioms; the API has moved around — verify against upstream"); upstream sqlite-vec docs at https://github.com/asg017/sqlite-vec (the agent verifies the `distance_metric=cosine` clause syntax at Task 7.1 time).
 
 ---
 
@@ -183,7 +183,7 @@ Six tasks. Each landing as its own commit per the round-1/round-2 convention (on
     1. Validate the prefix via `super::normalize_prefix` (returns `InvalidPrefix` on absolute or `..` paths — match the existing precedent from `src/search/mod.rs:9-24`).
     2. Embed the query: `let v = embedder.embed_text(&q.query).await.map_err(classify_embedding_error)?` — see classification table below.
     3. Defense-in-depth: assert `v.len() == dimension as usize`; if not, return `EmbeddingUnavailable { detail: "..." }` (the production `EmbeddingClient` already validates this; the assert covers stub embedders or future custom impls).
-    4. Run the kNN SQL inside `spawn_blocking` (per the [`rusqlite-in-async`](../../.claude/skills/rusqlite-in-async/SKILL.md) skill). The SQL projects `chunks` columns + the score conversion + applies prefix filter + `ORDER BY ... LIMIT ...`. After the kNN result is in hand and is empty, the same `spawn_blocking` runs the two count queries (resolution B) and decides whether to return a hint.
+    4. Run the kNN SQL inside `spawn_blocking` (per the [`rusqlite-in-async`](../../../.claude/skills/rusqlite-in-async/SKILL.md) skill). The SQL projects `chunks` columns + the score conversion + applies prefix filter + `ORDER BY ... LIMIT ...`. After the kNN result is in hand and is empty, the same `spawn_blocking` runs the two count queries (resolution B) and decides whether to return a hint.
 - `src/search/mod.rs` (extend) — `mod semantic;` and `pub use semantic::{SemanticQuery, SemanticResult, SemanticSearchError, search_semantic};`.
 - `src/lib.rs` (touch — likely no change since `pub mod search;` is already there from step 5).
 
@@ -239,9 +239,9 @@ WHERE (?3 = '' OR (c.file_path >= ?3 AND c.file_path < ?4))
 ORDER BY knn.distance ASC, c.file_path ASC, c.chunk_index ASC;
 ```
 
-Bind parameters: `?1` = `bytemuck::cast_slice::<f32, u8>(&query_vec)` (per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill line 72); `?2` = `q.limit as i64` (the kNN's `k`; we use `min_similarity`-filtering after kNN so `k = limit` is right); `?3` = normalized prefix or `""`; `?4` = `prefix_successor(prefix)` if non-empty else `""`. The score is computed in Rust (`1.0 - distance / 2.0`, clamped) and `min_similarity` is filtered in Rust as well — keeping the SQL focused and the math testable in isolation.
+Bind parameters: `?1` = `bytemuck::cast_slice::<f32, u8>(&query_vec)` (per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill line 72); `?2` = `q.limit as i64` (the kNN's `k`; we use `min_similarity`-filtering after kNN so `k = limit` is right); `?3` = normalized prefix or `""`; `?4` = `prefix_successor(prefix)` if non-empty else `""`. The score is computed in Rust (`1.0 - distance / 2.0`, clamped) and `min_similarity` is filtered in Rust as well — keeping the SQL focused and the math testable in isolation.
 
-The agent verifies the exact `MATCH` / `k` / parameter-binding syntax against upstream sqlite-vec at task time per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 105). The CTE shape is one option; an inline `WHERE ... MATCH ... AND k = ...` with a JOIN to `chunks` is another. Whichever ships, the test in `chunk_count_matches_chunker_for_known_fixture` (Task 7.5) is the end-to-end correctness check.
+The agent verifies the exact `MATCH` / `k` / parameter-binding syntax against upstream sqlite-vec at task time per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 105). The CTE shape is one option; an inline `WHERE ... MATCH ... AND k = ...` with a JOIN to `chunks` is another. Whichever ships, the test in `chunk_count_matches_chunker_for_known_fixture` (Task 7.5) is the end-to-end correctness check.
 
 **Note on prefix filtering and kNN**: prefix filtering happens *after* kNN (in the WHERE clause of the outer SELECT, not as a constraint inside the kNN MATCH). This means if the user specifies a prefix and there are many non-matching chunks, the top-`limit` kNN candidates may include some that get filtered out — leaving fewer than `limit` results in the response. This is acceptable for v0 (the spec doesn't promise exactly `limit` results post-prefix), and the alternative (over-fetch from kNN, then filter, then re-bound) is a v0+ optimization. The SQL above uses `k = ?limit`; if the prefix is highly selective, a future step can over-fetch (e.g. `k = limit * 10` capped at some ceiling) and trim.
 
@@ -467,8 +467,8 @@ Smoke verification documented in the task's results comment, with `curl` transcr
 - [ ] `docs/reference/cli.md` reflects working `hmn search semantic` (no longer a stub).
 - [ ] `docs/architecture/overview.md` reflects the new `/search/semantic` route and `embedding_unavailable` envelope code.
 - [ ] `docs/decisions/0007-sqlite-vec-over-alternatives.md` § Amendments reflects the cosine distance metric (resolution F).
-- [ ] Step 7 retrospective appended to [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) following the retro template.
-- [ ] [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 7 marked `**Status**: shipped <date>`.
+- [ ] Step 7 retrospective appended to [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) following the retro template.
+- [ ] [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 7 marked `**Status**: shipped <date>`.
 - [ ] No fall-out resolutions or in-build TBDs left undocumented (workplan and code agree at the end; soft flags routed to coordinator at boundary).
 
 ---
@@ -476,26 +476,26 @@ Smoke verification documented in the task's results comment, with `curl` transcr
 ## Cross-references
 
 **Skills (load-bearing)**:
-- [`.claude/skills/sqlite-vec-extension/`](../../.claude/skills/sqlite-vec-extension/SKILL.md) — Tasks 7.1 and 7.2; cited at the migration text (resolution F + Task 7.1), at the `MATCH` / `k` query syntax (Task 7.2), and at the `bytemuck::cast_slice` blob conversion for the query-vector parameter binding. *Note*: skill currently uses the table name `chunk_vectors` (line 49) but the codebase and spec settle on `chunks_vec` per step-6 resolution A — the workplan and this step's code use `chunks_vec` consistently. The skill should be re-aligned in a follow-on edit (carryover from step 6).
-- [`.claude/skills/rusqlite-in-async/`](../../.claude/skills/rusqlite-in-async/SKILL.md) — Task 7.2's load-bearing contract for the async/blocking boundary. The kNN SQL goes inside `spawn_blocking`; the embedding HTTP call lives on the runtime — same pattern as step 6's indexer pipeline. Cited at the `search_semantic` function body.
+- [`.claude/skills/sqlite-vec-extension/`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) — Tasks 7.1 and 7.2; cited at the migration text (resolution F + Task 7.1), at the `MATCH` / `k` query syntax (Task 7.2), and at the `bytemuck::cast_slice` blob conversion for the query-vector parameter binding. *Note*: skill currently uses the table name `chunk_vectors` (line 49) but the codebase and spec settle on `chunks_vec` per step-6 resolution A — the workplan and this step's code use `chunks_vec` consistently. The skill should be re-aligned in a follow-on edit (carryover from step 6).
+- [`.claude/skills/rusqlite-in-async/`](../../../.claude/skills/rusqlite-in-async/SKILL.md) — Task 7.2's load-bearing contract for the async/blocking boundary. The kNN SQL goes inside `spawn_blocking`; the embedding HTTP call lives on the runtime — same pattern as step 6's indexer pipeline. Cited at the `search_semantic` function body.
 
 **ADRs**:
-- [`docs/decisions/0003-indexing-in-the-daemon.md`](../decisions/0003-indexing-in-the-daemon.md) — semantic search is served from the daemon's index, not from a separate vector DB.
-- [`docs/decisions/0004-three-search-modes-as-peers.md`](../decisions/0004-three-search-modes-as-peers.md) — semantic is the third peer, alongside filesystem and content; same router shape, same envelope shape, same CLI shape.
-- [`docs/decisions/0005-local-everything.md`](../decisions/0005-local-everything.md) — query embeddings call the same local embedding service step 6 wired in; no cloud calls.
-- [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../decisions/0007-sqlite-vec-over-alternatives.md) — schema is the authority for vector storage; resolution F's amendment adds "distance metric is also schema-baked" to the existing "dimension is schema-baked" claim.
+- [`docs/decisions/0003-indexing-in-the-daemon.md`](../../../docs/decisions/0003-indexing-in-the-daemon.md) — semantic search is served from the daemon's index, not from a separate vector DB.
+- [`docs/decisions/0004-three-search-modes-as-peers.md`](../../../docs/decisions/0004-three-search-modes-as-peers.md) — semantic is the third peer, alongside filesystem and content; same router shape, same envelope shape, same CLI shape.
+- [`docs/decisions/0005-local-everything.md`](../../../docs/decisions/0005-local-everything.md) — query embeddings call the same local embedding service step 6 wired in; no cloud calls.
+- [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../../../docs/decisions/0007-sqlite-vec-over-alternatives.md) — schema is the authority for vector storage; resolution F's amendment adds "distance metric is also schema-baked" to the existing "dimension is schema-baked" claim.
 
 **Specs**:
-- [`docs/specs/semantic-search.md`](../specs/semantic-search.md) — the public response shape this step's handler implements. Task 7.6 amends the spec with the `hint` field, `min_similarity` clamping, score conversion, and cosine metric resolution.
+- [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) — the public response shape this step's handler implements. Task 7.6 amends the spec with the `hint` field, `min_similarity` clamping, score conversion, and cosine metric resolution.
 
 **Prior workplans / retros**:
-- [`docs/roadmap/step-06-workplan.md`](./step-06-workplan.md) — the step-6 substrate this step queries. Resolutions to step-6 (A: `chunks_vec` table name, B: `chunk_index` column, C: slash-separated `heading_path`) are all consumed by step 7's query and JSON-projection layers.
-- [`docs/roadmap/step-05-workplan.md`](./step-05-workplan.md) — the HTTP/CLI/error-envelope shape this step extends. The `vault: Option<String>` forward-compat field, the error-envelope token-prefix mapping in `src/api/error.rs`, and the human-vs-JSON CLI rendering all follow step 5's precedent.
-- [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 retro — three patterns feeding into this step: (a) coordinator-spawned in-build follow-up for cross-task design tensions surfaced via smoke (the act-now decision rule); (b) manual smoke verification on medium-risk wiring tasks; (c) workplan-prose accuracy heuristic at ~1000-line threshold (this workplan is ~720 lines, under threshold; voluntary spot-check ran).
+- [`notes/roadmap/archive/step-06-workplan.md`](./step-06-workplan.md) — the step-6 substrate this step queries. Resolutions to step-6 (A: `chunks_vec` table name, B: `chunk_index` column, C: slash-separated `heading_path`) are all consumed by step 7's query and JSON-projection layers.
+- [`notes/roadmap/archive/step-05-workplan.md`](./step-05-workplan.md) — the HTTP/CLI/error-envelope shape this step extends. The `vault: Option<String>` forward-compat field, the error-envelope token-prefix mapping in `src/api/error.rs`, and the human-vs-JSON CLI rendering all follow step 5's precedent.
+- [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 6 retro — three patterns feeding into this step: (a) coordinator-spawned in-build follow-up for cross-task design tensions surfaced via smoke (the act-now decision rule); (b) manual smoke verification on medium-risk wiring tasks; (c) workplan-prose accuracy heuristic at ~1000-line threshold (this workplan is ~720 lines, under threshold; voluntary spot-check ran).
 
 **Roadmap and tech-stack**:
-- [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 7 — the contract this workplan resolves.
-- [`docs/implementation/tech-stack.md`](../implementation/tech-stack.md) — semantic search composes the same SQLite + sqlite-vec stack steps 1–6 built; no new top-level components.
+- [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 7 — the contract this workplan resolves.
+- [`docs/implementation/tech-stack.md`](../../../docs/implementation/tech-stack.md) — semantic search composes the same SQLite + sqlite-vec stack steps 1–6 built; no new top-level components.
 
 ---
 
@@ -533,14 +533,14 @@ This workplan came in at ~720 lines, under the ~1000-line threshold of the Phase
 
 **Claims that were re-checked**:
 
-- sqlite-vec's `MATCH` / `k = ?` query shape and `distance_metric=cosine` clause syntax — confirmed against the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill, which itself directs the agent to verify against upstream (line 105). The workplan defers final syntax to Task 7.1's verification step (acknowledged in resolution F and Task 7.1 prose). This is a *narrow* prose-accuracy escape hatch — the verification gate is in the task itself, not deferred to soft-flag.
+- sqlite-vec's `MATCH` / `k = ?` query shape and `distance_metric=cosine` clause syntax — confirmed against the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill, which itself directs the agent to verify against upstream (line 105). The workplan defers final syntax to Task 7.1's verification step (acknowledged in resolution F and Task 7.1 prose). This is a *narrow* prose-accuracy escape hatch — the verification gate is in the task itself, not deferred to soft-flag.
 - Cosine distance range `[0, 2]` and the score conversion `score = 1 - distance/2` — confirmed against the standard `cos_distance = 1 - cos_similarity` definition where `cos_similarity ∈ [-1, 1]`. The score conversion's `[0, 1]` codomain is exact for the standard formula; the `clamp` in code is defensive against floating-point edge cases, not against incorrect math.
 - `EmbeddingClient` already validates its own returned vector's dimension at `src/embedding.rs:139-144` — confirmed by reading the source. The workplan's defense-in-depth check in `search_semantic` covers stub embedders that bypass `EmbeddingClient` (e.g. `StubEmbedder` and the per-test custom embedders in Task 7.2's tests).
-- `bytemuck::cast_slice::<f32, u8>` for embedding blob — confirmed against `src/store/chunks.rs:55` (production usage from step 6) and the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 72).
+- `bytemuck::cast_slice::<f32, u8>` for embedding blob — confirmed against `src/store/chunks.rs:55` (production usage from step 6) and the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 72).
 - `ApiState` shape and the `From<anyhow::Error> for ApiError` mapping — confirmed by reading `src/api/mod.rs:17-22` and `src/api/error.rs:46-77`.
 - The existing `StubEmbedder` returns a fixed zero-filled vector — confirmed by reading `src/embedding.rs:182-197`.
 - `tests/embedding.rs` already has a stub-service + live-daemon harness — confirmed by reading lines 1–295. Reuse is the right shape.
-- Step-6 resolution C (slash-separated `heading_path`) and the orphan-H3 encoding (`"Setup//Prereqs"`) — confirmed against [`docs/roadmap/step-06-workplan.md`](./step-06-workplan.md) lines 120–127.
+- Step-6 resolution C (slash-separated `heading_path`) and the orphan-H3 encoding (`"Setup//Prereqs"`) — confirmed against [`notes/roadmap/archive/step-06-workplan.md`](./step-06-workplan.md) lines 120–127.
 - The kNN ordering syntax — `ORDER BY v.distance ASC, c.file_path ASC, c.chunk_index ASC` is standard SQL; the question of whether sqlite-vec's `distance` column ordering interacts with `MATCH` / `k` is the same kind of upstream-syntax dependency flagged in resolution F. The agent verifies at Task 7.2 time.
 
 **Workplan-internal consistency**:

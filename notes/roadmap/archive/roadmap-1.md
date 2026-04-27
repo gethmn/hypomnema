@@ -1,10 +1,10 @@
 # Hypomnema Roadmap — Initial Implementation Kick-Off
 
-**Scope**: First five of the eight steps enumerated in [`docs/implementation/tech-stack.md`](../implementation/tech-stack.md). Step 5 is the **shipping gate** — a usable daemon with HTTP-based filesystem and content search. Steps 6–8 (chunking + embedding, semantic search, MCP) are deliberately out of scope for this round and will get their own roadmap when this one ships.
+**Scope**: First five of the eight steps enumerated in [`docs/implementation/tech-stack.md`](../../../docs/implementation/tech-stack.md). Step 5 is the **shipping gate** — a usable daemon with HTTP-based filesystem and content search. Steps 6–8 (chunking + embedding, semantic search, MCP) are deliberately out of scope for this round and will get their own roadmap when this one ships.
 
-**Status**: Not started. Repo is near-greenfield (binary stubs, empty `lib.rs`, foundational deps in `Cargo.toml`).
+**Status**: Shipped 2026-04-25.
 
-**Process**: Each step gets a short workplan (`step-NN-workplan.md` in this directory) created **just before** that step is implemented. TBDs flagged in the docs are resolved at or before the step that needs them. See [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) for the working description of the planning process itself.
+**Process**: Each step gets a short workplan (`step-NN-workplan.md` in this directory) created **just before** that step is implemented. TBDs flagged in the docs are resolved at or before the step that needs them. See [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) for the working description of the planning process itself.
 
 ---
 
@@ -21,9 +21,9 @@
 - `cargo test` passes (at least one smoke test exists)
 
 **Deferred decisions to resolve here**:
-- CLI subcommand naming ([`vision.md` line 115](../product/vision.md))
+- CLI subcommand naming ([`vision.md` line 115](../../../docs/product/vision.md))
 - TOML config schema (top-level keys, defaults, validation)
-- Default logging verbosity per module ([`vision.md` line 113](../product/vision.md))
+- Default logging verbosity per module ([`vision.md` line 113](../../../docs/product/vision.md))
 
 **New deps**: none beyond what's already in `Cargo.toml`.
 
@@ -44,9 +44,9 @@
 - All SQL goes through `tokio::task::spawn_blocking` (per `.claude/skills/rusqlite-in-async`)
 
 **Deferred decisions**:
-- Auto-rescan-on-startup default ([`vision.md` line 116](../product/vision.md))
-- Default ignore-pattern set, including VCS awareness ([`vision.md` line 117](../product/vision.md))
-- Symlink handling ([`specs/filesystem-search.md` line 91](../specs/filesystem-search.md))
+- Auto-rescan-on-startup default ([`vision.md` line 116](../../../docs/product/vision.md))
+- Default ignore-pattern set, including VCS awareness ([`vision.md` line 117](../../../docs/product/vision.md))
+- Symlink handling ([`specs/filesystem-search.md` line 91](../../../docs/specs/filesystem-search.md))
 - SQLite schema migration strategy
 
 **New deps**: `rusqlite`, `r2d2`, `r2d2_sqlite`, `walkdir`, `sha2`, `chrono`, `globset` (pulled forward from step 5).
@@ -70,7 +70,7 @@
 
 **Deferred decisions**:
 - Debounce window tuning (start with skill's recommended default)
-- Rename-as-distinct-event vs. delete+create pair ([`specs/change-events.md` line 98](../specs/change-events.md))
+- Rename-as-distinct-event vs. delete+create pair ([`specs/change-events.md` line 98](../../../docs/specs/change-events.md))
 
 **New deps**: `notify`, `notify-debouncer-full`.
 
@@ -92,12 +92,12 @@
 - Outbox file is never written under the watched vault directory
 
 **Deferred decisions**:
-- fsync policy: per-event vs. periodic ([`specs/change-events.md` line 97](../specs/change-events.md))
-- Rename handling ([`specs/change-events.md` line 98](../specs/change-events.md))
+- fsync policy: per-event vs. periodic ([`specs/change-events.md` line 97](../../../docs/specs/change-events.md))
+- Rename handling ([`specs/change-events.md` line 98](../../../docs/specs/change-events.md))
 
 **Explicitly out of shipping-gate scope**:
-- Outbox rotation ([line 99](../specs/change-events.md))
-- Consumer byte-offset checkpoint API ([line 100](../specs/change-events.md))
+- Outbox rotation ([line 99](../../../docs/specs/change-events.md))
+- Consumer byte-offset checkpoint API ([line 100](../../../docs/specs/change-events.md))
 
 **New deps**: none (`serde_json` already present).
 
@@ -121,13 +121,13 @@
 **Deferred decisions**:
 - Precise JSON response shapes for `/search/filesystem` and `/search/content`
 - Regex vs. glob behavior boundaries
-- Phrase search across line boundaries ([`specs/content-search.md` line 86](../specs/content-search.md))
-- Regex alternative to glob ([`specs/filesystem-search.md` line 92](../specs/filesystem-search.md))
-- **Multi-vault forward-compat** ([`vision.md` Open Questions](../product/vision.md#open-questions)): should v0 response shapes carry an optional `vault: string` field (omit-when-null in v0) so that adding multi-vault support later is additive rather than a versioned migration? **Current lean: yes.** Step 5 is the inflection point — once consumers wire to vault-less shapes at the shipping gate, adding the field later breaks them. The workplan author should resolve this inline alongside the JSON-response-shape decisions and apply consistently across `/search/filesystem`, `/search/content`, the outbox event envelope (a doc-only spec table flip in `specs/change-events.md` would land in this step's doc-update task), and the future semantic-search response shape (so step 6+ inherits the contract).
+- Phrase search across line boundaries ([`specs/content-search.md` line 86](../../../docs/specs/content-search.md))
+- Regex alternative to glob ([`specs/filesystem-search.md` line 92](../../../docs/specs/filesystem-search.md))
+- **Multi-vault forward-compat** ([`vision.md` Open Questions](../../../docs/product/vision.md#open-questions)): should v0 response shapes carry an optional `vault: string` field (omit-when-null in v0) so that adding multi-vault support later is additive rather than a versioned migration? **Current lean: yes.** Step 5 is the inflection point — once consumers wire to vault-less shapes at the shipping gate, adding the field later breaks them. The workplan author should resolve this inline alongside the JSON-response-shape decisions and apply consistently across `/search/filesystem`, `/search/content`, the outbox event envelope (a doc-only spec table flip in `specs/change-events.md` would land in this step's doc-update task), and the future semantic-search response shape (so step 6+ inherits the contract).
 
 **Explicitly out of shipping-gate scope**:
 - Pagination (specs prescribe truncate + flag)
-- Frontmatter summaries in filesystem results ([`specs/filesystem-search.md` line 93](../specs/filesystem-search.md))
+- Frontmatter summaries in filesystem results ([`specs/filesystem-search.md` line 93](../../../docs/specs/filesystem-search.md))
 - Health metrics beyond basic reachability
 - **Multi-vault implementation itself** — the `vault` field in v0 is forward-compat scaffolding only; actual support for more than one vault per daemon is post-v0.
 
@@ -142,5 +142,5 @@
 When step 5 ships:
 1. Tag the milestone in git
 2. Capture any ADRs that hardened during the build
-3. Write a short retrospective into [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) on what worked and what didn't about the roadmap→workplan process
+3. Write a short retrospective into [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) on what worked and what didn't about the roadmap→workplan process
 4. Open a fresh roadmap doc for steps 6–8 (chunking + embedding, semantic search, MCP)

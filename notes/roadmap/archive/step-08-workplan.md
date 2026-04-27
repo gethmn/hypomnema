@@ -2,9 +2,9 @@
 
 **Step**: 8 of 8 (round 2 of 2). Final step of round 2 — see [`roadmap-2.md`](./roadmap-2.md) for the round and [`step-07-workplan.md`](./step-07-workplan.md) for the immediately prior step (whose `search_filesystem` / `search_content` / `search_semantic` HTTP surfaces this step wraps over MCP). This is the round-2 shipping gate; on shipping the full **after-step-8 boundary ritual** runs (milestone tag, ADRs, per-step + end-of-round retros — see [`roadmap-2.md`](./roadmap-2.md) § "After step 8").
 
-**Status**: not started.
+**Status**: Shipped 2026-04-27.
 
-**Round-2 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 retro and § Step 7 retro):
+**Round-2 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 6 retro and § Step 7 retro):
 
 - Risk grade is honest: step 8 is **medium-high overall**, with an unevenly-distributed risk surface. The pure transport-wiring tasks (Tasks 8.1–8.3) are medium; the agent-integration manual test (Task 8.5, criterion 2 — Claude Code or Iris in the loop) is the load-bearing risk and is *qualitatively new* — round 1 and round 2 step 6/7 had no analogous external-host-in-the-loop dependency.
 - All five deferred decisions from the roadmap are resolved here at workplan-write time per round-1 lesson 2 ("pull deferred decisions forward into workplan-time"). One is a workplan-time **scope rescope of shipping criterion 4** (deferring the Unix-socket transport to a follow-on); see Resolution D and the rescoped criterion in [§ Shipping criteria (rescoped)](#shipping-criteria-rescoped) below.
@@ -33,7 +33,7 @@ The five TBDs from [`roadmap-2.md`](./roadmap-2.md) § Step 8 are resolved below
 
 ### A. Final flag shape and binary placement: `hmnd --mcp-stdio` vs. `hmnd mcp-stdio` vs. `hmn mcp` vs. env-var
 
-**Resolution**: subcommand on `hmn`, not `hmnd`. The shape is `hmn mcp`, a new variant of the existing `Command` enum in [`src/cli.rs`](../../src/cli.rs) (parallel to the existing `Command::Search` and `Command::Status`). The previously-documented `hmnd --mcp-stdio` flag form is dropped; the documentation in [`docs/reference/cli.md`](../reference/cli.md) (lines 54, 62, 77) and [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md) § Decision is amended in Task 8.5 to resolve a pre-existing internal inconsistency in the ADR (see "ADR-0008 inconsistency" below).
+**Resolution**: subcommand on `hmn`, not `hmnd`. The shape is `hmn mcp`, a new variant of the existing `Command` enum in [`src/cli.rs`](../../../src/cli.rs) (parallel to the existing `Command::Search` and `Command::Status`). The previously-documented `hmnd --mcp-stdio` flag form is dropped; the documentation in [`docs/reference/cli.md`](../../../docs/reference/cli.md) (lines 54, 62, 77) and [ADR-0008](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md) § Decision is amended in Task 8.5 to resolve a pre-existing internal inconsistency in the ADR (see "ADR-0008 inconsistency" below).
 
 The agent host's MCP configuration shape — already a one-liner — becomes:
 
@@ -72,13 +72,13 @@ Line 40's rationale ("the daemon running over stdio") was implicitly assuming a 
 
 **Subcommand suffix — `mcp` vs. `mcp-stdio`**: the bare `mcp` form. Stdio is implied as the v0 transport; if a future `--transport socket` flag ever lands (where `hmn mcp` dials the daemon's deferred-socket transport and bridges to the user's stdio), it's a flag on this same subcommand, not a sibling subcommand. Avoids the `mcp-stdio` / `mcp-socket` / `mcp-…` proliferation.
 
-**How to apply**: in [`src/cli.rs`](../../src/cli.rs), add `Command::Mcp` to the `Command` enum (line 30–38). Route in [`src/bin/hmn.rs`](../../src/bin/hmn.rs) `main()` (line 38–87) to a new `cmd_mcp(&config, override_url)` function. The new function lives in `src/bin/hmn.rs` (top-level, parallel to `cmd_search_filesystem` / `cmd_search_content` / `cmd_search_semantic` / `cmd_status`); it constructs an `rmcp` server over stdio and `await`s it. Body sketch in Task 8.3.
+**How to apply**: in [`src/cli.rs`](../../../src/cli.rs), add `Command::Mcp` to the `Command` enum (line 30–38). Route in [`src/bin/hmn.rs`](../../../src/bin/hmn.rs) `main()` (line 38–87) to a new `cmd_mcp(&config, override_url)` function. The new function lives in `src/bin/hmn.rs` (top-level, parallel to `cmd_search_filesystem` / `cmd_search_content` / `cmd_search_semantic` / `cmd_status`); it constructs an `rmcp` server over stdio and `await`s it. Body sketch in Task 8.3.
 
-**References**: [ADR-0008 § Decision](../decisions/0008-two-binary-daemon-plus-cli.md#decision) (lines 29 and 40 — the inconsistency this resolution settles); [`docs/reference/cli.md`](../reference/cli.md) lines 54–77 (currently documents `--mcp-stdio` on `hmnd`; gets fully restructured in Task 8.5 to put MCP on the `hmn` section); [`src/cli.rs:30-38`](../../src/cli.rs) (existing `Command` enum); [`src/bin/hmn.rs:38-87`](../../src/bin/hmn.rs) (existing dispatch).
+**References**: [ADR-0008 § Decision](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md#decision) (lines 29 and 40 — the inconsistency this resolution settles); [`docs/reference/cli.md`](../../../docs/reference/cli.md) lines 54–77 (currently documents `--mcp-stdio` on `hmnd`; gets fully restructured in Task 8.5 to put MCP on the `hmn` section); [`src/cli.rs:30-38`](../../../src/cli.rs) (existing `Command` enum); [`src/bin/hmn.rs:38-87`](../../../src/bin/hmn.rs) (existing dispatch).
 
 ### B. MCP tool names
 
-**Resolution**: keep `search_filesystem` / `search_content` / `search_semantic` — exactly as named in [ADR-0004 § Decision](../decisions/0004-three-search-modes-as-peers.md#decision) and the architecture overview ([`docs/architecture/overview.md`](../architecture/overview.md) line 114). No flatter or shorter naming.
+**Resolution**: keep `search_filesystem` / `search_content` / `search_semantic` — exactly as named in [ADR-0004 § Decision](../../../docs/decisions/0004-three-search-modes-as-peers.md#decision) and the architecture overview ([`docs/architecture/overview.md`](../../../docs/architecture/overview.md) line 114). No flatter or shorter naming.
 
 **Why**: ADR-0004 is the canon and was written specifically with the MCP tool surface in mind. The verb_noun ordering matches MCP convention (`read_file`, `search_files`, `list_directory` in the upstream `@modelcontextprotocol/server-filesystem` and similar reference implementations). Renaming at MCP-time would create a wire-shape divergence between HTTP (`/search/filesystem`) and MCP (`filesystem_search` or similar) for no upside; agents reading the architecture overview would see one set of names in prose and a different set in their tool list.
 
@@ -86,7 +86,7 @@ The flatter-naming alternative (e.g. `filesystem_search`, `content_search`, `sem
 
 **How to apply**: in the `#[tool_router(server_handler)] impl HypomnemaMcpServer` block (Task 8.2), the three methods are named `search_filesystem`, `search_content`, `search_semantic`. The `#[tool(description = "...")]` macro on each takes a description string but the tool *name* derives from the method name. Verify at task time that rmcp 1.5.0's `#[tool]` macro doesn't apply any name-mangling (snake_case → camelCase, etc.); upstream's calculator example (`fn sum`, `fn sub`) uses the method name verbatim.
 
-**References**: [ADR-0004 § Decision](../decisions/0004-three-search-modes-as-peers.md#decision); [`docs/architecture/overview.md`](../architecture/overview.md) line 114; rmcp 1.5.0 calculator example (`examples/servers/src/common/calculator.rs` upstream).
+**References**: [ADR-0004 § Decision](../../../docs/decisions/0004-three-search-modes-as-peers.md#decision); [`docs/architecture/overview.md`](../../../docs/architecture/overview.md) line 114; rmcp 1.5.0 calculator example (`examples/servers/src/common/calculator.rs` upstream).
 
 ### C. Tool parameter schemas — derive vs hand-author
 
@@ -96,7 +96,7 @@ The flatter-naming alternative (e.g. `filesystem_search`, `content_search`, `sem
 - `ContentQueryJson` (existing — `src/api/types.rs:31-46`)
 - `SemanticQueryJson` (existing — `src/api/types.rs:73-82`)
 
-Per-field `#[schemars(description = "...")]` annotations are added alongside the existing `#[serde(...)]` attributes — agents read these descriptions at tool-list time to understand each parameter. Suggested descriptions track the spec language in [`docs/specs/filesystem-search.md`](../specs/filesystem-search.md), [`docs/specs/content-search.md`](../specs/content-search.md), and [`docs/specs/semantic-search.md`](../specs/semantic-search.md); concrete strings drafted in Task 8.1.
+Per-field `#[schemars(description = "...")]` annotations are added alongside the existing `#[serde(...)]` attributes — agents read these descriptions at tool-list time to understand each parameter. Suggested descriptions track the spec language in [`docs/specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md), [`docs/specs/content-search.md`](../../../docs/specs/content-search.md), and [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md); concrete strings drafted in Task 8.1.
 
 Response types (`FilesystemSearchResponse`, `ContentSearchResponse`, `SemanticSearchResponse` and their per-result shapes) **also** receive `#[derive(schemars::JsonSchema)]` so the same types can be used to populate tool *output* schemas if rmcp 1.5.0 supports tool-output-schema declaration. (rmcp 1.5.0's `#[tool]` macro takes only a description in the calculator example; the agent verifies at Task 8.1 time whether the macro accepts an output-schema attribute, and if not, the response derives are still useful for client-side typing in `tests/mcp.rs`.)
 
@@ -108,7 +108,7 @@ Re-exporting `schemars::JsonSchema` via `rmcp::schemars` (the path used in upstr
 
 **How to apply**: edit `src/api/types.rs` (Task 8.1) — add `#[derive(schemars::JsonSchema)]` (or the verified upstream path) to the three request types and the three response/per-result types. Add `#[schemars(description = "...")]` per field on the request types only (response fields are agent-consumed but don't need descriptions for tool-schema purposes). Add a unit test that calls `schemars::schema_for!(FilesystemQueryJson)` and asserts the schema's `properties` object contains the expected field names; one such test per request type.
 
-**References**: rmcp 1.5.0 upstream `examples/servers/src/common/calculator.rs` (`#[derive(... schemars::JsonSchema)]` on input structs, `rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router}` import path); [ADR-0004 § Decision](../decisions/0004-three-search-modes-as-peers.md#decision).
+**References**: rmcp 1.5.0 upstream `examples/servers/src/common/calculator.rs` (`#[derive(... schemars::JsonSchema)]` on input structs, `rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router}` import path); [ADR-0004 § Decision](../../../docs/decisions/0004-three-search-modes-as-peers.md#decision).
 
 ### D. Connection lifecycle: stdio (process-per-connection) vs socket (long-lived)
 
@@ -147,7 +147,7 @@ if config.mcp.transport != "stdio" {
 
 The warning is one-shot at startup; no runtime behavior change. The warning lives in `hmnd::run_daemon()` because `mcp.transport` is the long-running daemon's config — the deferred socket transport, when it lands, will be a daemon-side feature. Test in Task 8.3.
 
-**References**: [ADR-0008 § Decision](../decisions/0008-two-binary-daemon-plus-cli.md#decision); [`roadmap-2.md`](./roadmap-2.md) § Step 8 deferred decision 4; round-1 retro § "End-of-round retrospective" point 1 ("the system held"); [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 7 retro § Notes (last bullet, "step 8's MCP transport is structurally similar to step 5's filesystem/content handlers; the load-bearing risk is the agent-integration test").
+**References**: [ADR-0008 § Decision](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md#decision); [`roadmap-2.md`](./roadmap-2.md) § Step 8 deferred decision 4; round-1 retro § "End-of-round retrospective" point 1 ("the system held"); [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 7 retro § Notes (last bullet, "step 8's MCP transport is structurally similar to step 5's filesystem/content handlers; the load-bearing risk is the agent-integration test").
 
 ### E. Authentication on the socket transport
 
@@ -174,7 +174,7 @@ let listener = tokio::net::UnixListener::bind(&config.mcp.socket.0)?;
 
 (Verify against current tokio + std semantics at the future task time.)
 
-**References**: [`docs/reference/configuration.md`](../reference/configuration.md) line 103 ("Loopback-only by default; v0 does not implement auth"); [`docs/decisions/0005-local-everything.md`](../decisions/0005-local-everything.md) § Decision (the local-everything trust boundary).
+**References**: [`docs/reference/configuration.md`](../../../docs/reference/configuration.md) line 103 ("Loopback-only by default; v0 does not implement auth"); [`docs/decisions/0005-local-everything.md`](../../../docs/decisions/0005-local-everything.md) § Decision (the local-everything trust boundary).
 
 ### Resolved as part of this step (not pre-flagged in the roadmap)
 
@@ -201,7 +201,7 @@ match self.client.search_filesystem(&input).await {
 
 Where `error_envelope_from_anyhow` parses the `anyhow::Error`'s `Display` to recover the `{code, message}` shape. The existing `decode_response` in `src/client.rs:73-90` already produces an `anyhow!("{}: {}", env.error.code, env.error.message)` chain; the MCP shim does the inverse (split on the first `": "`). For connect errors (per `is_connect_error()`), synthesize `{ code: "daemon_unreachable", message: format!("{} did not respond: {err:#}", self.client.base_url()) }`.
 
-**References**: rmcp 1.5.0 `CallToolResult` (`structured` / `structured_error` constructors); `src/client.rs:73-98` (existing HTTP error decoding); [ADR-0004 § Decision](../decisions/0004-three-search-modes-as-peers.md#decision) (HTTP and MCP are peers — same wire shapes).
+**References**: rmcp 1.5.0 `CallToolResult` (`structured` / `structured_error` constructors); `src/client.rs:73-98` (existing HTTP error decoding); [ADR-0004 § Decision](../../../docs/decisions/0004-three-search-modes-as-peers.md#decision) (HTTP and MCP are peers — same wire shapes).
 
 #### G. Logging during `hmn mcp` mode — stderr-only
 
@@ -211,7 +211,7 @@ Concretely: the `cmd_mcp()` function (or `main()` itself, before any other initi
 
 **Why**: the rmcp upstream calculator example (`examples/servers/src/calculator_stdio.rs`) explicitly does this: `tracing_subscriber::fmt().with_writer(std::io::stderr).with_ansi(false).init()`. The pattern is load-bearing for stdio MCP servers — it's not optional.
 
-**How to apply**: the existing [`src/logging.rs::init`](../../src/logging.rs) takes a `BinaryKind` parameter (currently `Hmnd` or `Hmn`) and uses `tracing_subscriber::fmt().try_init()` — which silently no-ops if a subscriber is already installed (`init_is_idempotent_within_a_process` test confirms). The fmt builder defaults to stdout. To support stderr-only for the new `hmn mcp` mode, add a `BinaryKind::HmnMcp` variant whose branch in `init`'s fmt-builder chain calls `.with_writer(std::io::stderr).with_ansi(false)` before `.try_init()`. In `src/bin/hmn.rs::main()` (line 27 today), select the variant based on the parsed `cli.command` *before* calling `logging::init` — so the MCP-mode subscriber is the first one installed.
+**How to apply**: the existing [`src/logging.rs::init`](../../../src/logging.rs) takes a `BinaryKind` parameter (currently `Hmnd` or `Hmn`) and uses `tracing_subscriber::fmt().try_init()` — which silently no-ops if a subscriber is already installed (`init_is_idempotent_within_a_process` test confirms). The fmt builder defaults to stdout. To support stderr-only for the new `hmn mcp` mode, add a `BinaryKind::HmnMcp` variant whose branch in `init`'s fmt-builder chain calls `.with_writer(std::io::stderr).with_ansi(false)` before `.try_init()`. In `src/bin/hmn.rs::main()` (line 27 today), select the variant based on the parsed `cli.command` *before* calling `logging::init` — so the MCP-mode subscriber is the first one installed.
 
 ```rust
 // In src/bin/hmn.rs::main, after `Cli::parse()` and `Config::load`:
@@ -718,7 +718,7 @@ The test helper for MCP framing lives inline in `tests/mcp.rs` (no new shared `t
 - `notes/project-planning-workflow-notes.md` (extend at boundary) — Task 8.5 doesn't write the retro itself, but the boundary ritual (post-shipping, before the round-2 retro) appends:
   - Step 8 retrospective (per the retro template; coordinator + human collaborate per the playbook).
   - End-of-round-2 retrospective (after the per-step retro). The end-of-round retro answers: *did the roadmap → workplan → build cadence still work at higher risk?* and *what surprised us about embedding/sqlite-vec/MCP that the docs did not predict?* (per `roadmap-2.md` § "After step 8" line 98).
-- `docs/roadmap/roadmap-2.md` (touch) — mark step 8 as `**Status**: shipped <date>`; add the link to step-08-workplan.md and the relevant retro section.
+- `notes/roadmap/archive/roadmap-2.md` (touch) — mark step 8 as `**Status**: shipped <date>`; add the link to step-08-workplan.md and the relevant retro section.
 
 **Manual agent-integration test (the round-2 shipping gate's load-bearing test — criterion 2 of `roadmap-2.md` § Step 8)**:
 
@@ -828,7 +828,7 @@ This test runs at boundary, after the unit and integration tests are green and b
 - [ ] `docs/decisions/0008-two-binary-daemon-plus-cli.md` § Amendments records both the subcommand resolution AND the binary-placement (`hmn` not `hmnd`) resolution that settles the line-29-vs-line-40 inconsistency (Task 8.5).
 - [ ] New ADR (likely `0012-mcp-transport-stdio-v0.md`) records the stdio-on-`hmn` shipped / socket-on-`hmnd` deferred decision (Task 8.5).
 - [ ] Step 8 retrospective and end-of-round-2 retrospective appended to `notes/project-planning-workflow-notes.md` (per the retro template; coordinator + human collaborate per the playbook).
-- [ ] `docs/roadmap/roadmap-2.md` § Step 8 marked `**Status**: shipped <date>`.
+- [ ] `notes/roadmap/archive/roadmap-2.md` § Step 8 marked `**Status**: shipped <date>`.
 - [ ] Manual agent-integration test (Claude Code via MCP) passes per the Task 8.5 procedure; transcripts attached.
 - [ ] **Round-2 milestone tag created in git** (likely `v0.1.0` or `v0`, per `roadmap-2.md` § "After step 8" line 96). The exact tag name is decided at boundary.
 - [ ] No fall-out resolutions or in-build TBDs left undocumented (workplan and code agree at the end; soft flags routed to coordinator at boundary).
@@ -839,28 +839,28 @@ This test runs at boundary, after the unit and integration tests are green and b
 
 **Skills (load-bearing)**:
 - *No in-tree skill covers `rmcp` / MCP transport.* The rmcp upstream docs at https://docs.rs/rmcp/latest/rmcp/ and the upstream `examples/servers/` directory are the agent's references. If `rmcp`-shaped patterns become load-bearing for round 3 or beyond, write a skill at the round-2 boundary per the step-7 retro recommendation.
-- [`.claude/skills/rusqlite-in-async/`](../../.claude/skills/rusqlite-in-async/SKILL.md) — not directly relevant to step 8 (the MCP shim doesn't touch SQLite — that's the daemon's job, accessed via HTTP). Carrying forward as a project-wide standing reference.
+- [`.claude/skills/rusqlite-in-async/`](../../../.claude/skills/rusqlite-in-async/SKILL.md) — not directly relevant to step 8 (the MCP shim doesn't touch SQLite — that's the daemon's job, accessed via HTTP). Carrying forward as a project-wide standing reference.
 
 **ADRs**:
-- [`docs/decisions/0001-adopt-layered-documentation-system.md`](../decisions/0001-adopt-layered-documentation-system.md) — the LDS framing under which the new ADR-0012 (Resolution D) lands.
-- [`docs/decisions/0004-three-search-modes-as-peers.md`](../decisions/0004-three-search-modes-as-peers.md) — the canonical names for the three tools (Resolution B); the canonical claim that HTTP and MCP are peers (Resolutions C and F).
-- [`docs/decisions/0005-local-everything.md`](../decisions/0005-local-everything.md) — the local-everything trust boundary that justifies mode-0600 socket auth (Resolution E, deferred).
-- [`docs/decisions/0008-two-binary-daemon-plus-cli.md`](../decisions/0008-two-binary-daemon-plus-cli.md) — the daemon-shape framing; amended in Task 8.5 with the subcommand resolution (Resolution A).
-- [`docs/decisions/0011-vault-management-on-hmn.md`](../decisions/0011-vault-management-on-hmn.md) — extends ADR-0008's `hmn`-as-CLI claim; informs the round-3 forward-compat thinking on what the *next* MCP tool surface looks like.
+- [`docs/decisions/0001-adopt-layered-documentation-system.md`](../../../docs/decisions/0001-adopt-layered-documentation-system.md) — the LDS framing under which the new ADR-0012 (Resolution D) lands.
+- [`docs/decisions/0004-three-search-modes-as-peers.md`](../../../docs/decisions/0004-three-search-modes-as-peers.md) — the canonical names for the three tools (Resolution B); the canonical claim that HTTP and MCP are peers (Resolutions C and F).
+- [`docs/decisions/0005-local-everything.md`](../../../docs/decisions/0005-local-everything.md) — the local-everything trust boundary that justifies mode-0600 socket auth (Resolution E, deferred).
+- [`docs/decisions/0008-two-binary-daemon-plus-cli.md`](../../../docs/decisions/0008-two-binary-daemon-plus-cli.md) — the daemon-shape framing; amended in Task 8.5 with the subcommand resolution (Resolution A).
+- [`docs/decisions/0011-vault-management-on-hmn.md`](../../../docs/decisions/0011-vault-management-on-hmn.md) — extends ADR-0008's `hmn`-as-CLI claim; informs the round-3 forward-compat thinking on what the *next* MCP tool surface looks like.
 
 **Specs**:
-- [`docs/specs/filesystem-search.md`](../specs/filesystem-search.md), [`docs/specs/content-search.md`](../specs/content-search.md), [`docs/specs/semantic-search.md`](../specs/semantic-search.md) — the three response/error wire shapes the MCP tools round-trip. No structural changes expected; minor doc updates possible at Task 8.5.
+- [`docs/specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md), [`docs/specs/content-search.md`](../../../docs/specs/content-search.md), [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) — the three response/error wire shapes the MCP tools round-trip. No structural changes expected; minor doc updates possible at Task 8.5.
 
 **Prior workplans / retros**:
-- [`docs/roadmap/step-07-workplan.md`](./step-07-workplan.md) — the immediately prior step. The `search_*` HTTP handlers this MCP shim wraps; the `embedding_unavailable` error envelope (step-7 Resolution E) flows through unchanged. Step 7's retro recommended a workplan-time decision on flag shape and tool names (both pulled forward here in Resolutions A and B).
-- [`docs/roadmap/step-06-workplan.md`](./step-06-workplan.md) — the chunking + embedding substrate. Not directly touched by step 8; cited for context.
-- [`docs/roadmap/step-05-workplan.md`](./step-05-workplan.md) — the HTTP/CLI/error-envelope shape this step's MCP layer mirrors. The error-envelope token-prefix mapping in `src/api/error.rs` (Resolution F's pass-through) is the load-bearing precedent.
-- [`docs/roadmap/step-01-workplan.md`](./step-01-workplan.md) — line 82–84 establishes the existing `[mcp]` config block. Resolution D's "non-stdio transport produces a warning" preserves the config knob's parse-and-validate behavior unchanged.
-- [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 retro and § Step 7 retro — three patterns feeding into this step: (a) coordinator-spawned in-build follow-up for cross-task design tensions (act-now decision rule); (b) manual smoke verification on medium-high-risk wiring tasks (Task 8.3 here); (c) workplan-prose accuracy heuristic at ~1000-line threshold (this workplan is at or above the threshold; full self-review ran).
+- [`notes/roadmap/archive/step-07-workplan.md`](./step-07-workplan.md) — the immediately prior step. The `search_*` HTTP handlers this MCP shim wraps; the `embedding_unavailable` error envelope (step-7 Resolution E) flows through unchanged. Step 7's retro recommended a workplan-time decision on flag shape and tool names (both pulled forward here in Resolutions A and B).
+- [`notes/roadmap/archive/step-06-workplan.md`](./step-06-workplan.md) — the chunking + embedding substrate. Not directly touched by step 8; cited for context.
+- [`notes/roadmap/archive/step-05-workplan.md`](./step-05-workplan.md) — the HTTP/CLI/error-envelope shape this step's MCP layer mirrors. The error-envelope token-prefix mapping in `src/api/error.rs` (Resolution F's pass-through) is the load-bearing precedent.
+- [`notes/roadmap/archive/step-01-workplan.md`](./step-01-workplan.md) — line 82–84 establishes the existing `[mcp]` config block. Resolution D's "non-stdio transport produces a warning" preserves the config knob's parse-and-validate behavior unchanged.
+- [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 6 retro and § Step 7 retro — three patterns feeding into this step: (a) coordinator-spawned in-build follow-up for cross-task design tensions (act-now decision rule); (b) manual smoke verification on medium-high-risk wiring tasks (Task 8.3 here); (c) workplan-prose accuracy heuristic at ~1000-line threshold (this workplan is at or above the threshold; full self-review ran).
 
 **Roadmap and tech-stack**:
-- [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 8 — the contract this workplan resolves. Shipping criterion 4 is rescoped at workplan time per Resolution D; see [§ Shipping criteria (rescoped)](#shipping-criteria-rescoped) below for the full rescoped list.
-- [`docs/implementation/tech-stack.md`](../implementation/tech-stack.md) — semantic search composes the same SQLite + sqlite-vec stack steps 1–6 built; the MCP wrapper composes the HTTP surface step 5/7 built. No new top-level components.
+- [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 8 — the contract this workplan resolves. Shipping criterion 4 is rescoped at workplan time per Resolution D; see [§ Shipping criteria (rescoped)](#shipping-criteria-rescoped) below for the full rescoped list.
+- [`docs/implementation/tech-stack.md`](../../../docs/implementation/tech-stack.md) — semantic search composes the same SQLite + sqlite-vec stack steps 1–6 built; the MCP wrapper composes the HTTP surface step 5/7 built. No new top-level components.
 
 ---
 

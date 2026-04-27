@@ -1,10 +1,10 @@
 # Hypomnema Roadmap — Round 2: Semantic + MCP
 
-**Scope**: Steps 6–8 of the eight enumerated in [`docs/implementation/tech-stack.md`](../implementation/tech-stack.md). Step 8 (the MCP wrapper) is the natural shipping gate for this round — it puts the daemon's full search surface in front of the agent host (Claude Code, Iris) it was built for.
+**Scope**: Steps 6–8 of the eight enumerated in [`docs/implementation/tech-stack.md`](../../../docs/implementation/tech-stack.md). Step 8 (the MCP wrapper) is the natural shipping gate for this round — it puts the daemon's full search surface in front of the agent host (Claude Code, Iris) it was built for.
 
-**Status**: Not started. Round 1 (steps 1–5, the v0 HTTP shipping gate) shipped 2026-04-26 — see [`roadmap.md`](./roadmap.md) for the prior round, [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) for the per-step retrospectives and the round-1 end-of-round retro that motivates this doc.
+**Status**: Shipped 2026-04-27.
 
-**Process**: Same as round 1. Each step gets a short workplan (`step-NN-workplan.md`) created **just before** that step is implemented. TBDs flagged in the docs are resolved at or before the step that needs them. The orchestration shape (orchestrator + per-step coordinator + ephemeral task agents, see [`notes/coordinator-playbook.md`](../../notes/coordinator-playbook.md)) carries forward unchanged.
+**Process**: Same as round 1. Each step gets a short workplan (`step-NN-workplan.md`) created **just before** that step is implemented. TBDs flagged in the docs are resolved at or before the step that needs them. The orchestration shape (orchestrator + per-step coordinator + ephemeral task agents, see [`notes/coordinator-playbook.md`](../../coordinator-playbook.md)) carries forward unchanged.
 
 **Round-1 lessons feeding into this round** (see end-of-round retro for full text):
 - Risk grades stay useful for predicting wall-clock; grade steps 6 and 7 honestly (likely **high** — embedding-service contract and sqlite-vec extension loading are the round's two new failure surfaces).
@@ -16,7 +16,7 @@
 
 ## Step 6 — Chunking and embedding
 
-**Status**: shipped 2026-04-26. See [`step-06-workplan.md`](./step-06-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 6 for the retrospective.
+**Status**: shipped 2026-04-26. See [`step-06-workplan.md`](./step-06-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 6 for the retrospective.
 
 **Goal**: On each real change, `hmnd` parses the changed file with `pulldown-cmark`, splits it into heading-aware chunks (per the `markdown-chunking` skill), embeds each chunk via HTTP to a local OpenAI-compatible embedding service (default: a TEI sidecar), and persists the chunk metadata + vector to a `chunks` metadata table and a sibling `chunks_vec` virtual table (per the `sqlite-vec-extension` skill). The vec0 dimension is baked at schema creation; mismatch with config fails the daemon at startup.
 
@@ -42,9 +42,9 @@
 
 ## Step 7 — Semantic search
 
-**Status**: shipped 2026-04-26. See [`step-07-workplan.md`](./step-07-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 7 for the retrospective.
+**Status**: shipped 2026-04-26. See [`step-07-workplan.md`](./step-07-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 7 for the retrospective.
 
-**Goal**: Axum exposes `/search/semantic` with the response shape from [`docs/specs/semantic-search.md`](../specs/semantic-search.md). The handler embeds the query via the same embedding service, runs a `chunks_vec` nearest-neighbor query (cosine similarity), joins back to `chunks` for path / heading / text metadata, and returns the top-N results. `hmn search semantic <query>` lights up.
+**Goal**: Axum exposes `/search/semantic` with the response shape from [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md). The handler embeds the query via the same embedding service, runs a `chunks_vec` nearest-neighbor query (cosine similarity), joins back to `chunks` for path / heading / text metadata, and returns the top-N results. `hmn search semantic <query>` lights up.
 
 **Shipping criteria**:
 - `hmn search semantic 'how do we prevent spurious reindexes'` against an indexed vault returns sensibly-ranked chunks with similarity scores.
@@ -68,7 +68,7 @@
 
 ## Step 8 — MCP wrapper (round shipping gate)
 
-**Status**: shipped 2026-04-27. See [`step-08-workplan.md`](./step-08-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 8 for the retrospective. Round-2 milestone tag: `v0.1.0`.
+**Status**: shipped 2026-04-27. See [`step-08-workplan.md`](./step-08-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 8 for the retrospective. Round-2 milestone tag: `v0.1.0`.
 
 **Goal**: `hmnd` exposes the same three search operations (`search_filesystem`, `search_content`, `search_semantic`) over MCP via the `rmcp` crate, transported either over stdio (default — agent hosts spawn `hmnd --mcp-stdio`) or over a Unix socket. The MCP layer is a thin wrapper over the same query functions in `src/search/`. Test against an actual agent (Claude Code or Iris) end-to-end.
 
@@ -97,14 +97,14 @@
 When step 8 ships:
 1. Tag the milestone in git (likely `v0.1.0` or `v0`).
 2. Capture any ADRs that hardened during the build.
-3. Write a short retrospective for steps 6–8 in [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md), and an end-of-round retro answering: did the roadmap → workplan → build cadence still work at higher risk? What surprised us about embedding/sqlite-vec/MCP that the docs did not predict?
+3. Write a short retrospective for steps 6–8 in [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md), and an end-of-round retro answering: did the roadmap → workplan → build cadence still work at higher risk? What surprised us about embedding/sqlite-vec/MCP that the docs did not predict?
 4. Move on to round 3 (Multi-vault) below, or close the project's "open in scope" list. The handoff doc's "Out of scope" list is the natural source for additional follow-on work.
 
 ---
 
 ## Round 3 — Multi-vault (post-v0)
 
-**Scope**: Implement the multi-vault adoption settled in [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), and [ADR-0011](../decisions/0011-vault-management-on-hmn.md). The canon was amended on 2026-04-26 (immediately after round 1 shipped), pre-staging this round so its scope is settled before round 2 (steps 6–8) lands.
+**Scope**: Implement the multi-vault adoption settled in [ADR-0009](../../../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../../../docs/decisions/0010-vault-definitions-as-runtime-state.md), and [ADR-0011](../../../docs/decisions/0011-vault-management-on-hmn.md). The canon was amended on 2026-04-26 (immediately after round 1 shipped), pre-staging this round so its scope is settled before round 2 (steps 6–8) lands.
 
 **Status**: Not started. Round 2 (steps 6–8) has not yet begun; this round queues behind it. Workplan(s) created just before implementation per the round-1/2 cadence.
 
@@ -124,7 +124,7 @@ When step 8 ships:
 - Removal of top-level `vault` config key; addition of `default_vault_name`
 
 **Deferred decisions to resolve at the round-3 workplan**:
-- Cross-vault search semantics: result ordering, pagination/cursor, fan-out execution, `limit` semantics, partial-failure handling, paused/errored vault inclusion (see [`vault-management.md` § Open Questions](../specs/vault-management.md#open-questions))
+- Cross-vault search semantics: result ordering, pagination/cursor, fan-out execution, `limit` semantics, partial-failure handling, paused/errored vault inclusion (see [`vault-management.md` § Open Questions](../../../docs/specs/vault-management.md#open-questions))
 - Surrogate ID format (`vault_<base32>` vs. UUIDv7 vs. ULID)
 - Compose-style declarative provisioning: ship inline with this round, or queue as a follow-on workplan
 - Which subset of vault-management MCP tools ships in this round (read-only vs. full)
@@ -147,4 +147,4 @@ When step 8 ships:
 
 ## After round 3
 
-Decide whether v0 is *done done* (publish the binary; close the "open in scope" list) or whether a fourth round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, Compose-style declarative provisioning if it didn't ship in round 3, MCP write-tool gating, push notifications, the agent-host integration / MCP-tool-discoverability work). [`notes/backlog.md`](../../notes/backlog.md) is the round-agnostic queue to pull from; `docs/product/vision.md` § Non-Goals is the canonical "real, planned, but not v0" list backing it.
+Decide whether v0 is *done done* (publish the binary; close the "open in scope" list) or whether a fourth round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, Compose-style declarative provisioning if it didn't ship in round 3, MCP write-tool gating, push notifications, the agent-host integration / MCP-tool-discoverability work). [`notes/backlog.md`](../../backlog.md) is the round-agnostic queue to pull from; `docs/product/vision.md` § Non-Goals is the canonical "real, planned, but not v0" list backing it.

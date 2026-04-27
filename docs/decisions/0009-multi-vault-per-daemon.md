@@ -79,7 +79,7 @@ Storage layout: `<data_dir>/vaults/<vault_id>/` holds each vault's
 vault state isolates vault lifecycle from peers (terminate = stop
 watcher/indexer + remove the per-vault subdirectory).
 
-Implementation lands as round 3 of the roadmap (`docs/roadmap/roadmap-2.md`),
+Implementation lands as round 3 of the roadmap (`notes/roadmap/archive/roadmap-2.md`),
 after step 8's MCP wrapper. The v0 single-vault implementation continues
 to ship through steps 6–8 unchanged; round 3 refactors the watcher /
 indexer / store modules to be per-vault and adds the control-plane API

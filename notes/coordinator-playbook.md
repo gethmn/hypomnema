@@ -46,7 +46,7 @@ A fresh agent that finds itself at the top of the hierarchy — talking directly
 
 ### Per-step kickoff (on "start step N")
 
-1. Read the step N todo (from the original 17–21 set) and the relevant section of `docs/roadmap/roadmap.md`.
+1. Read the step N todo (from the original 17–21 set) and the relevant section of `notes/roadmap/roadmap-<RN>.md` for the current round.
 2. **Spawn a fresh coordinator**: `spawn_process(kind="agent", agent_tool_id=<id>, name="step-NN-coordinator")`. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
 3. Send the workplan-phase prompt to the new coordinator (template in [§ Workplan-phase prompt](#workplan-phase-prompt)). The coordinator's first piece of work is writing the workplan; the build phase follows on human approval, in the same process.
 4. Set an idle timer to wake when the coordinator finishes its workplan-phase output: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator went idle in workplan phase, check workplan>")`.
@@ -101,7 +101,7 @@ You are the step N coordinator from the moment the orchestrator spawned you. You
 
 Your work falls into two sequential phases within this one lifecycle:
 
-1. **Workplan phase** (your first turn through "stop and wait for review"). You write the step's workplan at `docs/roadmap/step-NN-workplan.md`, post a short summary back to the human, and stop. During this phase you are still the coordinator — you just haven't started orchestrating task agents yet.
+1. **Workplan phase** (your first turn through "stop and wait for review"). You write the step's workplan at `notes/roadmap/step-NN-workplan.md`, post a short summary back to the human, and stop. During this phase you are still the coordinator — you just haven't started orchestrating task agents yet.
 2. **Build phase** (begins when the human says "build" / "go" / "approved" on the workplan you wrote). You stop writing code yourself and start orchestrating task agents per the rest of this section.
 
 On entering the build phase:
@@ -224,7 +224,7 @@ The eval output goes directly into the per-step retro entry in `notes/project-pl
 
 After the last task completes (and shipping criteria pass — verify against the roadmap):
 
-1. Mark the step done in `docs/roadmap/roadmap.md` (add `**Status**: shipped <date>` line at the top of the step's section).
+1. Mark the step done in `notes/roadmap/roadmap-<RN>.md` (add `**Status**: shipped <date>` line at the top of the step's section).
 2. Capture any ADRs that hardened during the build into `docs/decisions/`.
 3. Run § Post-build evaluation. The eval populates the structured-data portion of the retro entry.
 4. Append the per-step retrospective to `notes/project-planning-workflow-notes.md` using the template at the top of that file's Retrospectives section. The eval data goes in the Structured Eval subsection; subjective notes go in the Notes subsection.
@@ -244,7 +244,7 @@ You are an ephemeral worker. You exist to execute one task (or a small batch) an
 1. **Read the playbook's TASK AGENT section** (`notes/coordinator-playbook.md` — this section). Required.
 2. **Read your todo(s)** with `todo_get(id, include_comments=true)`. The todo body has the task description; comments may have prior attempts or coordinator notes.
 3. **Read the step-context scratchpad** (id given in your bootstrap prompt). Read in `mode=full` if it's small, `mode=headings` first if it's large then `mode=section` for the parts you need. This is your authoritative context for what's been done so far.
-4. **Read the workplan task** in `docs/roadmap/step-NN-workplan.md` for the full task description.
+4. **Read the workplan task** in `notes/roadmap/step-NN-workplan.md` for the full task description.
 5. Then execute.
 
 ### Reporting (mandatory)
@@ -363,7 +363,7 @@ When the human asks for status, anything related, or just a vague "what's going 
 # Step N — Rolling Context
 
 **Coordinator**: <process name and id>
-**Workplan**: docs/roadmap/step-NN-workplan.md
+**Workplan**: notes/roadmap/step-NN-workplan.md
 **Build started**: <ISO timestamp>
 
 ## Batching plan
@@ -393,7 +393,7 @@ When the human asks for status, anything related, or just a vague "what's going 
 
 Used by the orchestrator at "start step N" when spawning the step coordinator. This is the prompt that kicks off the coordinator's workplan phase; the same coordinator continues into its build phase later, on the human's "build." Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
 
-> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as the STEP \<NN\> COORDINATOR. Solo process ID: \<coordinator-pid\>, name: step-\<NN\>-coordinator, project: Hypomnema, project ID: 4. Your orchestrator is Solo process \<orchestrator-pid\>. [END SOLO ORCHESTRATION CONTEXT] You are the step \<NN\> coordinator from this moment onward. Your work has two sequential phases in this same Solo process: a workplan phase (now) and a build phase (after the human reviews). Your job right now, in the workplan phase, is to write the workplan for step \<NN\> at docs/roadmap/step-\<NN\>-workplan.md. Read in this order: (1) docs/roadmap/roadmap.md § Step \<NN\>; (2) the relevant ADRs in docs/decisions/ for this step's deferred decisions; (3) the relevant specs in docs/specs/; (4) any skills surfaced by the step's scope; (5) notes/project-planning-workflow-notes.md for the workplan format expectations. Then write the workplan and post a short summary back to the human; stop and wait for review. When the human says "build" / "go" / "approved", you will transition into your build phase — at that point read notes/coordinator-playbook.md § COORDINATOR section in full (the TASK AGENT section can wait until you're spawning task agents). Do NOT read the ORCHESTRATOR section — that's the role of the agent that spawned you, not yours.
+> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as the STEP \<NN\> COORDINATOR. Solo process ID: \<coordinator-pid\>, name: step-\<NN\>-coordinator, project: Hypomnema, project ID: 4. Your orchestrator is Solo process \<orchestrator-pid\>. [END SOLO ORCHESTRATION CONTEXT] You are the step \<NN\> coordinator from this moment onward. Your work has two sequential phases in this same Solo process: a workplan phase (now) and a build phase (after the human reviews). Your job right now, in the workplan phase, is to write the workplan for step \<NN\> at notes/roadmap/step-\<NN\>-workplan.md. Read in this order: (1) notes/roadmap/roadmap-\<RN\>.md § Step \<NN\>; (2) the relevant ADRs in docs/decisions/ for this step's deferred decisions; (3) the relevant specs in docs/specs/; (4) any skills surfaced by the step's scope; (5) notes/project-planning-workflow-notes.md for the workplan format expectations. Then write the workplan and post a short summary back to the human; stop and wait for review. When the human says "build" / "go" / "approved", you will transition into your build phase — at that point read notes/coordinator-playbook.md § COORDINATOR section in full (the TASK AGENT section can wait until you're spawning task agents). Do NOT read the ORCHESTRATOR section — that's the role of the agent that spawned you, not yours.
 
 ---
 
@@ -401,7 +401,7 @@ Used by the orchestrator at "start step N" when spawning the step coordinator. T
 
 Use this template when sending the first prompt to a freshly-spawned task agent. Fill in the angle-bracket slots. Send as a single line via `send_input(submit=true)`.
 
-> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as a TASK AGENT. Solo process ID: \<task-agent-pid\>, name: \<task-agent-name\>, project: Hypomnema, project ID: 4. Your coordinator is Solo process step-\<NN\>-coordinator. [END SOLO ORCHESTRATION CONTEXT]  You are executing Solo todo(s) \<comma-separated todo IDs\> (workplan task(s) \<comma-separated task numbers\> from docs/roadmap/step-\<NN\>-workplan.md). Before you start, read in this order: (1) notes/coordinator-playbook.md — TASK AGENT section is your reporting and escalation contract; (2) Solo todo(s) \<ids\> with todo_get(include_comments=true); (3) the step's rolling-context scratchpad id \<context-scratchpad-id\> — if the previous task left a `Forward note for Task <M>` paragraph at the end of its entry in § Per-task outcomes, that paragraph is intended for you; (4) your workplan task section. Then execute. Follow the playbook for reporting and escalation. When done (success or escalation), stop — the coordinator will close you. Do not advance to the next task.
+> [SOLO ORCHESTRATION CONTEXT] You are running inside Solo as a TASK AGENT. Solo process ID: \<task-agent-pid\>, name: \<task-agent-name\>, project: Hypomnema, project ID: 4. Your coordinator is Solo process step-\<NN\>-coordinator. [END SOLO ORCHESTRATION CONTEXT]  You are executing Solo todo(s) \<comma-separated todo IDs\> (workplan task(s) \<comma-separated task numbers\> from notes/roadmap/step-\<NN\>-workplan.md). Before you start, read in this order: (1) notes/coordinator-playbook.md — TASK AGENT section is your reporting and escalation contract; (2) Solo todo(s) \<ids\> with todo_get(include_comments=true); (3) the step's rolling-context scratchpad id \<context-scratchpad-id\> — if the previous task left a `Forward note for Task <M>` paragraph at the end of its entry in § Per-task outcomes, that paragraph is intended for you; (4) your workplan task section. Then execute. Follow the playbook for reporting and escalation. When done (success or escalation), stop — the coordinator will close you. Do not advance to the next task.
 
 ---
 
@@ -422,7 +422,7 @@ When the human says…
 | User says… | Orchestrator does |
 |---|---|
 | "What do I do to start step N?" / "How do I kick off step N?" (a *meta* question) | Per ORCHESTRATOR § Response style for ambiguous start questions: describe the spawn you'd perform ("I'll spawn `step-NN-coordinator` and send it the workplan-phase prompt — want me to go ahead?"). Do **not** answer "just type 'start step N'" — that hides the spawn and invites silently skipping it. |
-| "Start step N" | Per ORCHESTRATOR § Per-step kickoff: read the step N todo and `docs/roadmap/roadmap.md` § Step N; **spawn a fresh** `step-NN-coordinator` Solo agent (never reuse an existing process — the orchestrator never becomes the coordinator); send the workplan-phase prompt; set an idle timer to wake when the coordinator finishes its workplan-phase output. |
+| "Start step N" | Per ORCHESTRATOR § Per-step kickoff: read the step N todo and `notes/roadmap/roadmap-<RN>.md` § Step N; **spawn a fresh** `step-NN-coordinator` Solo agent (never reuse an existing process — the orchestrator never becomes the coordinator); send the workplan-phase prompt; set an idle timer to wake when the coordinator finishes its workplan-phase output. |
 | "Build" / "Approved, build it" / "Go" (after workplan review) | Forward "build" to the same coordinator process you spawned at "start step N" (don't spawn a new one — the coordinator transitions from its workplan phase to its build phase in place). The coordinator takes it from there. |
 | "Status" / "Any updates?" / "What's going on?" | `todo_list(tags=["needs-human"], completed=false)` first. Also `get_process_status` on the active coordinator. Surface both. |
 | "Approve option A" (in response to an escalation) | `todo_comment_create` on the escalation todo with the resolution. `todo_remove_tag(needs-human)` on both the escalation todo and the task todo it references. The coordinator's escalation poll picks it up. |

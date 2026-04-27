@@ -1,7 +1,7 @@
 # Step 3 Workplan — Watcher
 
-**Roadmap step**: [Step 3 — Watcher](./roadmap.md#step-3--watcher)
-**Status**: drafted, awaiting review
+**Roadmap step**: [Step 3 — Watcher](./roadmap-1.md#step-3--watcher)
+**Status**: Shipped 2026-04-25
 **Created**: 2026-04-25
 
 ---
@@ -40,7 +40,7 @@ The roadmap flagged two TBDs for this step.
 
 **Resolution**: bump the default `watcher.debounce_ms` from `400` (set
 defensively in step 1) to **`500`**, matching the
-[`filesystem-watching` skill's](../../.claude/skills/filesystem-watching/SKILL.md)
+[`filesystem-watching` skill's](../../../.claude/skills/filesystem-watching/SKILL.md)
 recommended default. Keep it configurable; do not tune it speculatively further.
 
 **Why**: the roadmap explicitly directs this step to "start with skill's
@@ -68,7 +68,7 @@ before pushing them onto the channel. The downstream consumer sees two events
 and processes them as two independent updates against the index.
 
 **Why**: this matches the existing language in
-[`docs/specs/change-events.md`](../specs/change-events.md) (line 42:
+[`docs/specs/change-events.md`](../../../docs/specs/change-events.md) (line 42:
 "Renames are observed as a `deleted` + `created` pair in v0; fused rename
 detection is an open question") and avoids introducing a third
 `WatchEvent::Renamed` variant whose only consumer in v0 would be the indexer
@@ -394,7 +394,7 @@ covered; Windows out of v0.
 - `docs/architecture/overview.md`
   - § Watcher: keep the existing prose; add one short line confirming
     step 3 ships the implementation behind it.
-- `docs/roadmap/roadmap.md`
+- `notes/roadmap/archive/roadmap-1.md`
   - Step 3 gets `**Status**: shipped <date>` at the top of its section
     (filled in at the actual ship moment, not at workplan time).
 
@@ -470,20 +470,20 @@ v0 scope; rename / symlink tests gate on `#[cfg(unix)]` per step 2.
 ## Cross-references
 
 **Specs / decisions**:
-- [`specs/change-events.md`](../specs/change-events.md) — line 42 (rename
+- [`specs/change-events.md`](../../../docs/specs/change-events.md) — line 42 (rename
   v0 behavior, tightened in Task 3.6); line 98 (fused-rename open question,
   unchanged).
-- [ADR-0003: Indexing in the daemon](../decisions/0003-indexing-in-the-daemon.md)
+- [ADR-0003: Indexing in the daemon](../../../docs/decisions/0003-indexing-in-the-daemon.md)
   — the watcher is the streaming half of "indexing in the daemon."
-- [ADR-0006: Outbox outside watched dir](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0006: Outbox outside watched dir](../../../docs/decisions/0006-outbox-outside-watched-directory.md)
   — the watcher reads from the vault and writes only to the data-dir
   SQLite file, by construction.
 
 **Reference docs (updated by this step)**:
-- [Configuration reference](../reference/configuration.md)
-- [CLI reference](../reference/cli.md)
-- [Change-events spec](../specs/change-events.md)
-- [Architecture overview](../architecture/overview.md)
+- [Configuration reference](../../../docs/reference/configuration.md)
+- [CLI reference](../../../docs/reference/cli.md)
+- [Change-events spec](../../../docs/specs/change-events.md)
+- [Architecture overview](../../../docs/architecture/overview.md)
 
 **Pitfalls touched**:
 - #1 *Blocking the async runtime with rusqlite* — single-file ops also use
@@ -532,7 +532,7 @@ v0 scope; rename / symlink tests gate on `#[cfg(unix)]` per step 2.
 
 If review surfaces a strong reason to pull any of the above forward,
 that's a roadmap revision per the
-[mid-step roadmap revision](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
+[mid-step roadmap revision](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
 open question.
 
 ---

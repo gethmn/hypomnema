@@ -12,7 +12,7 @@
 
 ### Phase A — Roadmap
 
-A short, scannable document covering the full scope of a planning round (here: steps 1–5). Lives at `docs/roadmap/roadmap.md`.
+A short, scannable document covering the full scope of a planning round (here: steps 1–5). Lives at `notes/roadmap/roadmap-N.md` while the round is active and `notes/roadmap/archive/roadmap-N.md` after it ships.
 
 **Per step it answers**:
 - **Goal** — what is demonstrably working at the end
@@ -31,7 +31,7 @@ A short, scannable document covering the full scope of a planning round (here: s
 
 ### Phase B — Workplan (per step, just-in-time)
 
-A concrete task list for **the step being started next**, written immediately before implementation begins. Lives at `docs/roadmap/step-NN-workplan.md` while active.
+A concrete task list for **the step being started next**, written immediately before implementation begins. Lives at `notes/roadmap/step-NN-workplan.md` while active.
 
 **Per step it answers**:
 - Ordered task list (each task should be mergeable on its own)
@@ -89,16 +89,17 @@ When a step ships:
 
 | Artifact | Location | Lifecycle |
 |----------|----------|-----------|
-| Roadmap | `docs/roadmap/roadmap.md` | Long-lived; revised at step boundaries |
-| Workplan (active step) | `docs/roadmap/step-NN-workplan.md` | Short-lived; one file per step, while active |
-| Workplan (archived) | TBD — see open questions | After the step ships |
+| Roadmap (active round) | `notes/roadmap/roadmap-N.md` | Long-lived; revised at step boundaries |
+| Roadmap (archived) | `notes/roadmap/archive/roadmap-N.md` | Long-lived; frozen historical record after the round ships |
+| Workplan (active step) | `notes/roadmap/step-NN-workplan.md` | Short-lived; one file per step, while active |
+| Workplan (archived) | `notes/roadmap/archive/step-NN-workplan.md` | Long-lived; frozen historical record after the step ships |
 | In-flight proposals | `notes/proposals/<slug>.md` | Short/medium-lived; moves to `archive/` after approval and decomposition |
 | Archived proposals | `notes/proposals/archive/<slug>.md` | Long-lived; frozen historical record |
 | LDS gaps | `notes/lds-evaluation.md` | Long-lived; appended as new gaps surface |
 | Process notes (this file) | `notes/project-planning-workflow-notes.md` | Long-lived; revised continuously |
 | Plan-mode plans | `.claude/plans/` | Harness-scoped; not a project artifact |
 
-`docs/roadmap/` is intentionally **outside** LDS's seven canonical layers. See [`lds-evaluation.md`](./lds-evaluation.md) for why.
+`notes/roadmap/` lives **outside** LDS's seven canonical layers, alongside `notes/proposals/` and the other in-flight planning artifacts. See [`lds-evaluation.md`](./lds-evaluation.md) for why.
 
 ---
 
@@ -107,7 +108,7 @@ When a step ships:
 These are gaps in the process we'll have to answer through use:
 
 1. **Workplan task granularity**: per-PR? per-coding-session? per-logical-unit (one task = one function/module)? My instinct is per-logical-unit, with rough PR boundaries marked, but we'll see what feels right after step 1.
-2. **Archiving policy**: When step N ships, do we delete its workplan, move it to `docs/roadmap/archive/`, or keep it in place with a `**Status**: shipped` header? Pro of keeping: we can look back at what we planned vs. what we built. Pro of deleting: less clutter; the git history has the artifact anyway.
+2. **Archiving policy**: ~~When step N ships, do we delete its workplan, move it to `notes/roadmap/archive/`, or keep it in place with a `**Status**: shipped` header?~~ **Resolved 2026-04-27** (Solo todo 85; executed in todo 86): shipped step-NN workplans move to `notes/roadmap/archive/` with `**Status**: Shipped <date>` overwritten on the file. Round-level `roadmap-N.md` files archive immediately when the round ships (no waiting for the next round to open). The round-1 file was renamed `roadmap.md` → `roadmap-1.md` during the move for naming consistency with `roadmap-2.md`.
 3. **Mid-step roadmap revision**: If I learn during step 3 that step 4's plan is wrong, do I revise the roadmap immediately, or wait for the step boundary? Probably revise immediately, but flag the change in the next step-boundary retro.
 4. **Per-step retrospectives**: live in this file (one section per step), or as a separate `notes/retrospectives.md`? Starting in this file; split out if it gets unwieldy.
 5. **What if a step proves wrong?** If step 3 reveals that step 4's goal is mis-specified, does that mean re-roadmapping? I think yes — pause, revise the roadmap, get user signoff, resume.
@@ -376,7 +377,7 @@ Every per-step retro follows this shape so the structured data accumulates compa
 2. *Workplan-prose accuracy review.* Step 5 surfaced two workplan-prose slips (globset semantics, architecture-overview wording) that the workplan author shipped accidentally. The pattern likely scales with workplan size — step 5's workplan is ~1685 lines vs. step 4's ~793. Two mitigations to consider for the step-6 workplan: (a) a brief self-review pass after the workplan is written, looking specifically for testable claims about external library semantics (anything of the form "X library does Y"); (b) for the longer workplans (6 will likely be similarly long), consider a heuristic that a workplan over ~1000 lines should be re-read end-to-end after writing to look for prose-accuracy drift. The cost is small (5–10 minutes); the benefit is preventing build-time soft-flag detours.
 3. *Coordinator scratchpad organization.* The step-5 scratchpad (now archived) accumulated ~10 revisions and ~3000 lines of per-task outcomes + forward notes + decisions-made-during-build entries. It was readable end-to-end but it would not have been if the build had had retries or escalations adding more entries. Consider a minor template change for steps 6–8: a brief table-of-contents at the top of the scratchpad that updates each time a section is appended (one line per section). The append-only invariant can be relaxed for the TOC (it is metadata, not historical record). Cost: a few seconds per task completion; benefit: faster re-read on wake-up if the build runs longer.
 
-**End of round.** The v0 shipping gate has been hit: a daemon that indexes a Markdown vault, watches it, emits change events to a durable outbox, and serves filesystem + content search over HTTP with a real CLI client. The next roadmap doc covers steps 6–8 (chunking + embedding, semantic search, MCP) and lives at `docs/roadmap/roadmap-2.md` (created at this boundary). The workflow notes file continues; the next round will add per-step retros and an end-of-round retro for steps 6–8 below.
+**End of round.** The v0 shipping gate has been hit: a daemon that indexes a Markdown vault, watches it, emits change events to a durable outbox, and serves filesystem + content search over HTTP with a real CLI client. The next roadmap doc covers steps 6–8 (chunking + embedding, semantic search, MCP) and lives at `notes/roadmap/archive/roadmap-2.md` (created at this boundary, archived alongside this one after round 2 shipped). The workflow notes file continues; the next round will add per-step retros and an end-of-round retro for steps 6–8 below.
 
 #### Step 6 (shipped 2026-04-26)
 
@@ -585,4 +586,4 @@ Every per-step retro follows this shape so the structured data accumulates compa
 
 *Otherwise, the orchestration shape held.* Solo agents as ephemeral workers, Solo todos as the communication channel, Solo scratchpads as rolling-context — all three matched expectation. No structural surprises in the round; the workflow is producing the kind of legibility the human originally wanted from it.
 
-**End of round.** The round-2 shipping gate has been hit: the daemon now indexes a Markdown vault with semantic search (768-dim embeddings + sqlite-vec cosine similarity), serves all three search modes over HTTP, and exposes the same three modes as MCP tools to agent hosts via `hmn mcp`. The MCP `serverInfo.name = "hypomnema"` brand-identity override (ADR-0012) means MCP host UIs surface the project's name to users. The next roadmap doc (likely `docs/roadmap/roadmap-3.md`, to be written at the round-2 → round-3 transition) covers multi-vault management, vault-management MCP tools, and cross-vault search semantics. The workflow notes file continues; round 3 will add per-step retros and an end-of-round retro for steps N+1..N+M below.
+**End of round.** The round-2 shipping gate has been hit: the daemon now indexes a Markdown vault with semantic search (768-dim embeddings + sqlite-vec cosine similarity), serves all three search modes over HTTP, and exposes the same three modes as MCP tools to agent hosts via `hmn mcp`. The MCP `serverInfo.name = "hypomnema"` brand-identity override (ADR-0012) means MCP host UIs surface the project's name to users. The next roadmap doc (likely `notes/roadmap/roadmap-3.md`, to be written at the round-2 → round-3 transition) covers multi-vault management, vault-management MCP tools, and cross-vault search semantics. The workflow notes file continues; round 3 will add per-step retros and an end-of-round retro for steps N+1..N+M below.

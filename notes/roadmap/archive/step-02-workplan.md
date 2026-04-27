@@ -1,7 +1,7 @@
 # Step 2 Workplan — Scan + hash
 
-**Roadmap step**: [Step 2 — Scan + hash](./roadmap.md#step-2--scan--hash)
-**Status**: drafted, awaiting review
+**Roadmap step**: [Step 2 — Scan + hash](./roadmap-1.md#step-2--scan--hash)
+**Status**: Shipped 2026-04-25
 **Created**: 2026-04-25
 
 ---
@@ -39,7 +39,7 @@ present in the index but missing from disk are deleted from the index. The
 result is auto-incremental: the cost scales with the change set, not the vault.
 
 The `--rescan` flag from
-[`reference/cli.md`](../reference/cli.md) is **deferred to a later step**
+[`reference/cli.md`](../../../docs/reference/cli.md) is **deferred to a later step**
 (it would force re-hashing every file regardless of stat — useful as a bitrot
 sweep, not as a startup default). Step 2 does not implement it; the doc gets a
 small edit to clarify "deferred" rather than "TBD."
@@ -69,8 +69,8 @@ ignore_patterns = [
 ```
 
 **Why**: v0 deliberately doesn't load `.gitignore` (per
-[`vision.md`](../product/vision.md) open question and the "Future direction"
-note already in [`reference/configuration.md`](../reference/configuration.md)).
+[`vision.md`](../../../docs/product/vision.md) open question and the "Future direction"
+note already in [`reference/configuration.md`](../../../docs/reference/configuration.md)).
 Adding `.git/**` to defaults is one line; a user with `.git` inside the vault
 gets the right behavior without per-vault configuration. Other VCS (`.svn`,
 `.hg`) are skipped from defaults — rare in note vaults, easily added by the
@@ -85,7 +85,7 @@ detection is delegated to `walkdir`'s built-in mechanism (it tracks
 returns a loop error on cycles — log and skip).
 
 **Why**: matches the v0 spec line in
-[`specs/filesystem-search.md`](../specs/filesystem-search.md) ("symlinks within
+[`specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md) ("symlinks within
 the vault are followed; symlinks pointing outside the vault are not"). The
 defensive "outside-the-vault" check uses `fs::canonicalize` per file entry —
 modest cost, well worth the safety. Files that fail canonicalization (broken
@@ -126,11 +126,11 @@ No secondary index in step 2 — `path` is the primary key; lookups by prefix
 
 `mtime` is stored as ISO-8601 text so it sorts correctly under TEXT comparison
 and is grep-friendly when debugging the DB. The
-[`specs/filesystem-search.md`](../specs/filesystem-search.md) response shape
+[`specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md) response shape
 also describes ISO-8601, so storage and wire match.
 
 `content_hash` carries the `sha256:` prefix per
-[`specs/change-events.md`](../specs/change-events.md) so the value can be
+[`specs/change-events.md`](../../../docs/specs/change-events.md) so the value can be
 forwarded to the outbox unchanged in step 4.
 
 ---
@@ -370,7 +370,7 @@ weight.
   - § Edge Cases / Symlinks: tighten "v0: symlinks within the vault are
     followed" with one line confirming canonicalization-based outside-vault
     rejection.
-- `docs/roadmap/roadmap.md`
+- `notes/roadmap/archive/roadmap-1.md`
   - At step boundary, add `**Status**: shipped <date>` to Step 2.
   - Step 5's `New deps:` line drops `globset` (it landed in step 2).
 
@@ -437,20 +437,20 @@ out of v0 scope; tests that touch symlinks gate on `#[cfg(unix)]`.
 ## Cross-references
 
 **Specs / decisions**:
-- [ADR-0003: Indexing in the daemon](../decisions/0003-indexing-in-the-daemon.md)
+- [ADR-0003: Indexing in the daemon](../../../docs/decisions/0003-indexing-in-the-daemon.md)
   — this step is the first concrete instance.
-- [ADR-0006: Outbox outside watched dir](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0006: Outbox outside watched dir](../../../docs/decisions/0006-outbox-outside-watched-directory.md)
   — `data_dir`-under-`vault` rejection (already enforced in step 1; the SQLite
   file lands in `data_dir` per the same invariant).
-- [`specs/filesystem-search.md`](../specs/filesystem-search.md) — the response
+- [`specs/filesystem-search.md`](../../../docs/specs/filesystem-search.md) — the response
   schema this step's `files` table feeds (step 5).
-- [`specs/change-events.md`](../specs/change-events.md) — `content_hash` format
+- [`specs/change-events.md`](../../../docs/specs/change-events.md) — `content_hash` format
   ("sha256:" prefix) used in the row.
 
 **Reference docs (updated by this step)**:
-- [Configuration reference](../reference/configuration.md)
-- [CLI reference](../reference/cli.md)
-- [Filesystem search spec](../specs/filesystem-search.md) (small symlink edit)
+- [Configuration reference](../../../docs/reference/configuration.md)
+- [CLI reference](../../../docs/reference/cli.md)
+- [Filesystem search spec](../../../docs/specs/filesystem-search.md) (small symlink edit)
 
 **Pitfalls touched**:
 - #1 *Blocking the async runtime with rusqlite* — first real exercise.
@@ -492,7 +492,7 @@ out of v0 scope; tests that touch symlinks gate on `#[cfg(unix)]`.
 
 If review surfaces a strong reason to pull any of the above forward, that's a
 roadmap revision — see the
-[mid-step roadmap revision](../../notes/project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
+[mid-step roadmap revision](../../project-planning-workflow-notes.md#open-questions-about-the-workflow-itself)
 open question.
 
 ---

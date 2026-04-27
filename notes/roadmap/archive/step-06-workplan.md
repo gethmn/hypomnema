@@ -1,10 +1,10 @@
 # Step 6 Workplan — Chunking and embedding
 
-**Step**: 6 of 8 (round 2 of 2). First step of round 2 — see [`roadmap-2.md`](./roadmap-2.md) for the round and [`roadmap.md`](./roadmap.md) for round 1.
+**Step**: 6 of 8 (round 2 of 2). First step of round 2 — see [`roadmap-2.md`](./roadmap-2.md) for the round and [`roadmap.md`](./roadmap-1.md) for round 1.
 
-**Status**: shipped 2026-04-26. See [§ Build-time amendments](#build-time-amendments) at the end of this file for the prose-accuracy edits the build surfaced.
+**Status**: Shipped 2026-04-26. See [§ Build-time amendments](#build-time-amendments) at the end of this file for the prose-accuracy edits the build surfaced.
 
-**Round-1 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) end-of-round retro):
+**Round-1 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) end-of-round retro):
 
 - Risk grade is honest: step 6 is **high** (new external contract via the embedding service; new SQLite extension; immutable schema dimension).
 - Five deferred decisions from the roadmap are pulled forward into this workplan-write phase rather than left to build-time. Three additional fall-out resolutions surfaced during task design (table naming, `chunk_index` column, `heading_path` storage shape) and are also resolved here.
@@ -15,7 +15,7 @@
 
 ## Goal recap
 
-On each real change to a watched file, `hmnd` parses the changed file with `pulldown-cmark`, splits it into heading-aware chunks (per the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill), embeds each chunk via HTTP to a local OpenAI-compatible embedding service (default: a local TEI sidecar at `http://127.0.0.1:8080/v1/embeddings`), and persists the chunk metadata to a `chunks` table and the vector to a sibling `chunks_vec` virtual table (per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill).
+On each real change to a watched file, `hmnd` parses the changed file with `pulldown-cmark`, splits it into heading-aware chunks (per the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill), embeds each chunk via HTTP to a local OpenAI-compatible embedding service (default: a local TEI sidecar at `http://127.0.0.1:8080/v1/embeddings`), and persists the chunk metadata to a `chunks` table and the vector to a sibling `chunks_vec` virtual table (per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill).
 
 The vec0 dimension is baked at schema creation. Mismatch between `config.embedding.dimension` and the schema-baked value fails the daemon at startup with a structured error.
 
@@ -42,11 +42,11 @@ The five TBDs from [`roadmap-2.md`](./roadmap-2.md) § Step 6 are resolved below
 
 **How to apply**: the embedding client returns a typed error on failure. The indexer's per-file pipeline catches that error class specifically (HTTP / transport), logs it, leaves the `files` row untouched (no `content_hash` advance), and returns. Other error classes (chunking panic, SQL error) propagate normally as they would in step 2's scanner.
 
-**References**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Embedding service unavailable (line 92–94) describes the *query-time* response (HTTP 503; that's step 7's concern). This step's resolution covers the *index-time* response.
+**References**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) § Edge Cases — Embedding service unavailable (line 92–94) describes the *query-time* response (HTTP 503; that's step 7's concern). This step's resolution covers the *index-time* response.
 
 ### 2. Chunk size cap and overflow rule
 
-**Resolution**: target `~500` tokens per chunk; hard cap `~800` tokens. v0 approximates tokens as `bytes / 4` per the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill (§ Size targets). The cap is enforced as a byte threshold (`3200` bytes) to avoid per-chunk tokenizer setup; the threshold is checked at paragraph boundaries within the current chunk's heading scope. When the running chunk's byte length crosses the target threshold (`2000` bytes), the chunker breaks at the next paragraph end. If the cap (`3200` bytes) is reached without a paragraph end (e.g. one very long paragraph), break at the cap regardless — finishing the current chunk at the next event boundary that pulldown-cmark surfaces (paragraph end, list-item end, blockquote end, code-block end). Code blocks are preserved as a unit per the skill's "Tests to write" line ("Code blocks spanning many lines → preserved as a unit, not split mid-block") — they will not trigger a mid-block break.
+**Resolution**: target `~500` tokens per chunk; hard cap `~800` tokens. v0 approximates tokens as `bytes / 4` per the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill (§ Size targets). The cap is enforced as a byte threshold (`3200` bytes) to avoid per-chunk tokenizer setup; the threshold is checked at paragraph boundaries within the current chunk's heading scope. When the running chunk's byte length crosses the target threshold (`2000` bytes), the chunker breaks at the next paragraph end. If the cap (`3200` bytes) is reached without a paragraph end (e.g. one very long paragraph), break at the cap regardless — finishing the current chunk at the next event boundary that pulldown-cmark surfaces (paragraph end, list-item end, blockquote end, code-block end). Code blocks are preserved as a unit per the skill's "Tests to write" line ("Code blocks spanning many lines → preserved as a unit, not split mid-block") — they will not trigger a mid-block break.
 
 The thresholds are constants in `src/chunk.rs`, not config knobs:
 
@@ -59,7 +59,7 @@ const CHUNK_HARD_CAP_BYTES: usize = 3200;
 
 **How to apply**: the chunker holds a running `usize` byte-length counter for the current chunk. After each `Event::End(Tag::Paragraph)`, the counter is checked against `CHUNK_TARGET_BYTES`. If exceeded, the current chunk closes and a new chunk starts on the next event. If the counter exceeds `CHUNK_HARD_CAP_BYTES` mid-paragraph, the next event-boundary that closes any block-level container forces a chunk break.
 
-**References**: [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) § Size targets and § Tests to write.
+**References**: [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) § Size targets and § Tests to write.
 
 ### 3. Frontmatter handling on chunks
 
@@ -69,7 +69,7 @@ const CHUNK_HARD_CAP_BYTES: usize = 3200;
 
 **How to apply**: `src/chunk.rs::chunk_file()` calls `split_frontmatter()` first, threads only the body into the event walker. The returned `Chunk` records have `start_byte` / `end_byte` offsets into the **original file** (not the body slice) so step 7's "jump to this location" projection lands in the right place when the file has frontmatter.
 
-**References**: [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) § Frontmatter first (lines 14–28) and § Tests to write line "Frontmatter only, no body → zero chunks."
+**References**: [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) § Frontmatter first (lines 14–28) and § Tests to write line "Frontmatter only, no body → zero chunks."
 
 ### 4. Dimension lock-in mechanism
 
@@ -87,7 +87,7 @@ The probe lives in `src/store/mod.rs::Store::open()` after `apply_migrations()` 
 
 **How to apply**: implement `Store::validate_dimension(expected: u32) -> Result<()>`. Called once during `Store::open()`. Never re-checked after startup — the schema is immutable per ADR-0007.
 
-**References**: [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../decisions/0007-sqlite-vec-over-alternatives.md) lines 27–28 (dimension is schema-level commitment); [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Model dimension mismatch (line 96–98) (fail loudly at startup); [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) § Smells last bullet ("Mismatched embedding dimensions between config and schema — fail loudly at startup if these disagree").
+**References**: [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../../../docs/decisions/0007-sqlite-vec-over-alternatives.md) lines 27–28 (dimension is schema-level commitment); [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) § Model dimension mismatch (line 96–98) (fail loudly at startup); [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) § Smells last bullet ("Mismatched embedding dimensions between config and schema — fail loudly at startup if these disagree").
 
 ### 5. sqlite-vec extension binary location
 
@@ -97,7 +97,7 @@ The probe lives in `src/store/mod.rs::Store::open()` after `apply_migrations()` 
 
 **How to apply**: extend `EmbeddingConfig` in `src/config.rs` with `extension_path: ConfigPath` (default via `default_embedding_extension_path()`). At pool build time (`build_pool()` in `src/store/pool.rs`), pass the resolved path into `with_init`'s closure; resolve env-var override before passing. The resolution helper lives next to the other path-resolution helpers in `src/config.rs`.
 
-**References**: [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) § Loading the extension (lines 14–29); [`src/config.rs`](../../src/config.rs) `ConfigPath` and `expand_tilde` precedent (used for `mcp.socket`).
+**References**: [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) § Loading the extension (lines 14–29); [`src/config.rs`](../../../src/config.rs) `ConfigPath` and `expand_tilde` precedent (used for `mcp.socket`).
 
 ### Resolved as part of this step (not pre-flagged in the roadmap)
 
@@ -105,7 +105,7 @@ The probe lives in `src/store/mod.rs::Store::open()` after `apply_migrations()` 
 
 **Resolution**: the vec0 virtual table is named `chunks_vec` everywhere in code and SQL. The metadata table is `chunks`.
 
-**Why**: roadmap-2 line 22 and [`docs/specs/semantic-search.md`](../specs/semantic-search.md) line 28 both use `chunks_vec`. The [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill currently uses `chunk_vectors` (line 49) — this is the outlier. Per the LDS authority order (spec > skill), the spec wins and the skill is the one that should be re-aligned later (a small skill-author edit, not blocking step 6). The workplan body uses `chunks_vec` consistently throughout.
+**Why**: roadmap-2 line 22 and [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) line 28 both use `chunks_vec`. The [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill currently uses `chunk_vectors` (line 49) — this is the outlier. Per the LDS authority order (spec > skill), the spec wins and the skill is the one that should be re-aligned later (a small skill-author edit, not blocking step 6). The workplan body uses `chunks_vec` consistently throughout.
 
 **How to apply**: migration 0003 creates `chunks_vec`. Insert/delete patterns in `src/indexer/mod.rs` reference `chunks_vec`. The semantic search query in step 7 (`SELECT ... FROM chunks_vec v JOIN chunks c ...`) inherits this name.
 
@@ -113,13 +113,13 @@ The probe lives in `src/store/mod.rs::Store::open()` after `apply_migrations()` 
 
 **Resolution**: the `chunks` table includes a column `chunk_index INTEGER NOT NULL` — the 0-based ordinal of the chunk within its file (i.e. the first chunk emitted by the chunker is `chunk_index = 0`, the second is `1`, etc.). The chunker assigns this during emission; the indexer writes it into the row. There is a `UNIQUE (file_path, chunk_index)` constraint so the (file, ordinal) tuple is the natural deduplication key.
 
-**Why**: [`docs/specs/semantic-search.md`](../specs/semantic-search.md) lines 39 and 77 expose `chunk_index` as a public response field. Computing it at query time (`ROW_NUMBER() OVER (PARTITION BY file_path ORDER BY start_byte)`) is brittle (relies on `start_byte` ordering for ties; expensive on large vaults). Storing it as a column is `O(N)` extra space per chunk for `O(1)` query-time projection — clearly the right side of the trade-off.
+**Why**: [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) lines 39 and 77 expose `chunk_index` as a public response field. Computing it at query time (`ROW_NUMBER() OVER (PARTITION BY file_path ORDER BY start_byte)`) is brittle (relies on `start_byte` ordering for ties; expensive on large vaults). Storing it as a column is `O(N)` extra space per chunk for `O(1)` query-time projection — clearly the right side of the trade-off.
 
 **How to apply**: chunker emits `Vec<Chunk>` where each `Chunk` has `chunk_index: u32` set as it iterates. Indexer transaction inserts the column directly. Step 7's `/search/semantic` handler projects this column straight to the response.
 
 #### C. `heading_path` stored as slash-separated TEXT
 
-**Resolution**: the `chunks.heading_path` column is `TEXT NOT NULL` storing the slash-separated heading breadcrumb (e.g. `"Architecture/Load-bearing rules"`), per the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill (line 46). Empty segments (the H3-without-H2 edge case) are encoded as empty strings between slashes (e.g. `"Setup//Prereqs"`). The HTTP and MCP layers in step 7 split this string on `/` to produce the spec's array shape (line 40: `["Architecture", "Containers"]`).
+**Resolution**: the `chunks.heading_path` column is `TEXT NOT NULL` storing the slash-separated heading breadcrumb (e.g. `"Architecture/Load-bearing rules"`), per the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill (line 46). Empty segments (the H3-without-H2 edge case) are encoded as empty strings between slashes (e.g. `"Setup//Prereqs"`). The HTTP and MCP layers in step 7 split this string on `/` to produce the spec's array shape (line 40: `["Architecture", "Containers"]`).
 
 **Why**: TEXT is cheaper than a JSON-encoded array column (no parser per row at query time; no JSON1 dependency on the read path). Slash-separated round-trips losslessly to the array form when paired with explicit empty-segment handling. The skill's "decide once and be consistent" guidance (line 64) applies — pinned here.
 
@@ -136,7 +136,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 **Files**:
 - `Cargo.toml` (extend) — add `sqlite-vec` (or its bundled-loading shim, see § Net new dependencies for the exact crate selection); add `bytemuck = "1"` in dependencies if not already present (used by 6.4 for the `f32 → u8` cast).
 - `src/config.rs` (extend) — add `extension_path: ConfigPath` to `EmbeddingConfig` with default `default_embedding_extension_path()` resolving to `~/.local/share/hypomnema/sqlite-vec.<platform-ext>`.
-- `src/store/pool.rs` (extend) — `build_pool()` takes an additional `extension_path: &Path` parameter; the `with_init` closure loads the extension via `unsafe { conn.load_extension_enable()?; conn.load_extension(path, None)?; conn.load_extension_disable()?; }` per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (lines 16–27). The `load_extension` rusqlite feature gets enabled in `Cargo.toml`'s `rusqlite` features list.
+- `src/store/pool.rs` (extend) — `build_pool()` takes an additional `extension_path: &Path` parameter; the `with_init` closure loads the extension via `unsafe { conn.load_extension_enable()?; conn.load_extension(path, None)?; conn.load_extension_disable()?; }` per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (lines 16–27). The `load_extension` rusqlite feature gets enabled in `Cargo.toml`'s `rusqlite` features list.
 - `src/store/schema.rs` (extend) — add migration 0003 to the `MIGRATIONS` array. Migration 0003 SQL:
   ```sql
   CREATE TABLE chunks (
@@ -192,7 +192,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 - `src/lib.rs` (touch) — `pub mod chunk;` and re-export `Chunk` if used by `indexer`.
 
 **What lands**:
-- Pure-logic chunking module. Does **not** call `spawn_blocking` — chunking is CPU over strings and runs on the async runtime per the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill smell line 89 ("Chunking inside `spawn_blocking`").
+- Pure-logic chunking module. Does **not** call `spawn_blocking` — chunking is CPU over strings and runs on the async runtime per the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill smell line 89 ("Chunking inside `spawn_blocking`").
 - Comprehensive unit-test coverage of the nine cases enumerated in the skill (§ Tests to write, lines 70–80). Each test gets a self-contained Markdown literal and asserts the resulting `Vec<Chunk>` shape. Also:
   - `chunk_index_is_zero_based_and_contiguous` — emit several chunks, assert `chunk_index == 0, 1, 2, ...`.
   - `byte_offsets_account_for_frontmatter` — frontmatter present; first body chunk's `start_byte` reflects the original file offset, not the body-slice offset.
@@ -216,7 +216,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 - `src/lib.rs` (touch) — `pub mod embedding;` and re-export `EmbeddingClient` if `hmnd` constructs it.
 
 **What lands**:
-- Async client, no `spawn_blocking` (HTTP calls belong on the runtime per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill smell line 111).
+- Async client, no `spawn_blocking` (HTTP calls belong on the runtime per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill smell line 111).
 - Optional `Authorization: Bearer <api_key>` header when `api_key` is non-empty.
 - Unit tests using `TcpListener::bind("127.0.0.1:0")` to stub the embedding service (pattern from `tests/http.rs` and `tests/cli.rs`):
   - `embed_returns_vector_for_200` — stub returns a fixed-shape JSON body; client returns the `Vec<f32>`.
@@ -237,7 +237,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 **Files**:
 - `src/indexer/mod.rs` (extend) — `Scanner` gains an `EmbeddingClient` field. The per-file pipeline (`reindex_path()` and the bulk-scan loop) extends to: read file → split frontmatter → chunk body → embed each chunk async → spawn_blocking the SQL write transaction (delete-and-reinsert). On embedding failure (the `EmbeddingError::Transport` and `Status { code: 5xx }` classes), log and skip; do not advance `files.content_hash` for that file.
 - `src/indexer/hash.rs` (touch) — no changes expected; chunk-hash computation lives in `src/chunk.rs`.
-- `src/store/` (touch — likely `src/store/chunks.rs` new, or extend an existing module) — `pub fn rewrite_chunks_for_file(conn, file_path, chunks_with_embeddings)` doing delete-then-insert in one transaction per the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (lines 78–88). Uses `bytemuck::cast_slice::<f32, u8>` for the vector blob (skill line 72).
+- `src/store/` (touch — likely `src/store/chunks.rs` new, or extend an existing module) — `pub fn rewrite_chunks_for_file(conn, file_path, chunks_with_embeddings)` doing delete-then-insert in one transaction per the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (lines 78–88). Uses `bytemuck::cast_slice::<f32, u8>` for the vector blob (skill line 72).
 - New tests in `src/indexer/mod.rs::tests`:
   - `reindex_writes_chunks_for_simple_file` — using a real Store (in-memory or temp file) and a stub embedding client, assert `chunks` rows materialized.
   - `reindex_replaces_chunks_for_modified_file` — first reindex writes 2 chunks; second reindex (after content change) writes 3 chunks; assert old 2 are gone.
@@ -263,11 +263,11 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
   ```
 - The `files` row update and the `chunks` rewrite should land in the **same** SQL transaction so a crash mid-way leaves the database consistent (either both old, or both new).
 
-**Why a separate task**: composes 6.1 (storage), 6.2 (chunking), and 6.3 (embedding) at the indexer boundary. The async/blocking dance is the foot-gun the [`rusqlite-in-async`](../../.claude/skills/rusqlite-in-async/SKILL.md) skill names — embedding goes on the async runtime, SQL goes in `spawn_blocking`, chunking stays on the runtime. Splitting from the prior tasks keeps each commit focused on one concern.
+**Why a separate task**: composes 6.1 (storage), 6.2 (chunking), and 6.3 (embedding) at the indexer boundary. The async/blocking dance is the foot-gun the [`rusqlite-in-async`](../../../.claude/skills/rusqlite-in-async/SKILL.md) skill names — embedding goes on the async runtime, SQL goes in `spawn_blocking`, chunking stays on the runtime. Splitting from the prior tasks keeps each commit focused on one concern.
 
 **Risk: high.**
-- *Why high*: this is where step 6's foot-guns concentrate. The async/blocking boundary is well-described by [`rusqlite-in-async`](../../.claude/skills/rusqlite-in-async/SKILL.md) but easy to get wrong (calling `spawn_blocking` from inside a blocking context, or holding a blocking SQL handle across an `.await`). The transactional semantics — `files` update + `chunks` rewrite in one tx — are the load-bearing crash-safety story.
-- *Mitigation*: read the [`rusqlite-in-async`](../../.claude/skills/rusqlite-in-async/SKILL.md) skill at the start of the task. Apply the existing pattern from `src/store/mod.rs::Store::open()` and `Scanner::reindex_path()` (step 2/3/4 precedent). Tests cover the skip-and-log path explicitly — the most common foot-gun (silently advancing content_hash on embedding failure) is gated by an explicit assertion.
+- *Why high*: this is where step 6's foot-guns concentrate. The async/blocking boundary is well-described by [`rusqlite-in-async`](../../../.claude/skills/rusqlite-in-async/SKILL.md) but easy to get wrong (calling `spawn_blocking` from inside a blocking context, or holding a blocking SQL handle across an `.await`). The transactional semantics — `files` update + `chunks` rewrite in one tx — are the load-bearing crash-safety story.
+- *Mitigation*: read the [`rusqlite-in-async`](../../../.claude/skills/rusqlite-in-async/SKILL.md) skill at the start of the task. Apply the existing pattern from `src/store/mod.rs::Store::open()` and `Scanner::reindex_path()` (step 2/3/4 precedent). Tests cover the skip-and-log path explicitly — the most common foot-gun (silently advancing content_hash on embedding failure) is gated by an explicit assertion.
 
 ### Task 6.5 — Wire into `hmnd` (extension load, dimension validation, embedding-service health probe)
 
@@ -328,7 +328,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 **Files**:
 - `docs/reference/configuration.md` (extend) — add `embedding.extension_path`, `embedding.timeout_ms`, `embedding.max_retries`, `embedding.batch_size`. Document the env-var override `HYPOMNEMA_VEC_EXT_PATH`. Update the embedding section example TOML.
 - `docs/reference/cli.md` (touch, if any) — no changes expected; `hmnd` flags don't change in step 6.
-- `docs/architecture/overview.md` (touch) — extend the indexing flow diagram or prose to include the chunk → embed → store path. Cross-reference the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) and [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skills.
+- `docs/architecture/overview.md` (touch) — extend the indexing flow diagram or prose to include the chunk → embed → store path. Cross-reference the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) and [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skills.
 - `docs/specs/semantic-search.md` (touch) — flip the `chunk_id` line (line 37) from "(primary key)" to specifically reference the `chunks.id` column; add a one-line note that semantic search proper ships in step 7 but the data substrate it reads from ships in step 6.
 
 **What lands**:
@@ -343,7 +343,7 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 ## Test strategy
 
 **Unit tests** (`#[cfg(test)]`):
-- `src/chunk.rs::tests` — nine cases from the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill plus the four task-specific cases enumerated in Task 6.2. Pure logic; no async; no I/O.
+- `src/chunk.rs::tests` — nine cases from the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill plus the four task-specific cases enumerated in Task 6.2. Pure logic; no async; no I/O.
 - `src/embedding.rs::tests` — six cases from Task 6.3 using `TcpListener::bind` stub. Async (`#[tokio::test]`); no SQL.
 - `src/store/schema.rs::tests` — five new cases for migration 0003 plus the dimension-validation case from Task 6.1. Synchronous SQLite; in-memory connections.
 - `src/indexer/mod.rs::tests` — four new cases for the chunk-embed-store pipeline from Task 6.4. Uses an in-memory or temp Store and a stub `EmbeddingClient`.
@@ -375,8 +375,8 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 - [ ] All new unit and integration tests pass; `cargo clippy --all-targets -- -D warnings` clean; `cargo fmt --check` clean.
 - [ ] Manual smoke verification per Task 6.5 documented in the task's results comment.
 - [ ] `docs/reference/configuration.md` documents every new `embedding.*` knob with default and brief description, plus the `HYPOMNEMA_VEC_EXT_PATH` env-var override.
-- [ ] Step 6 retrospective appended to [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) following the retro template.
-- [ ] `docs/roadmap/roadmap-2.md` § Step 6 marked `**Status**: shipped <date>`.
+- [ ] Step 6 retrospective appended to [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) following the retro template.
+- [ ] `notes/roadmap/archive/roadmap-2.md` § Step 6 marked `**Status**: shipped <date>`.
 - [ ] No fall-out resolutions or in-build TBDs left undocumented (workplan and code agree at the end; soft flags routed to coordinator at boundary).
 
 ---
@@ -384,25 +384,25 @@ Seven tasks. Each landing as its own commit per the round-1 convention (one task
 ## Cross-references
 
 **Skills (load-bearing)**:
-- [`.claude/skills/markdown-chunking/`](../../.claude/skills/markdown-chunking/SKILL.md) — Task 6.2's contract; cited at every `Event::*` decision in `src/chunk.rs` and at the size-target/cap thresholds.
-- [`.claude/skills/sqlite-vec-extension/`](../../.claude/skills/sqlite-vec-extension/SKILL.md) — Tasks 6.1 and 6.4; cited at the extension load (`with_init`), the schema split (`chunks` vs. `chunks_vec`), the delete-and-reinsert pattern, and the `bytemuck::cast_slice` blob conversion. *Note*: skill currently calls the vec0 table `chunk_vectors` (line 49); workplan resolution A pins it to `chunks_vec`. The skill should be re-aligned in a follow-on edit.
-- [`.claude/skills/rusqlite-in-async/`](../../.claude/skills/rusqlite-in-async/SKILL.md) — Task 6.4's load-bearing contract for the async/blocking boundary; cited at every `spawn_blocking` call site and at the embedding-call site (which deliberately stays on the async runtime).
+- [`.claude/skills/markdown-chunking/`](../../../.claude/skills/markdown-chunking/SKILL.md) — Task 6.2's contract; cited at every `Event::*` decision in `src/chunk.rs` and at the size-target/cap thresholds.
+- [`.claude/skills/sqlite-vec-extension/`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) — Tasks 6.1 and 6.4; cited at the extension load (`with_init`), the schema split (`chunks` vs. `chunks_vec`), the delete-and-reinsert pattern, and the `bytemuck::cast_slice` blob conversion. *Note*: skill currently calls the vec0 table `chunk_vectors` (line 49); workplan resolution A pins it to `chunks_vec`. The skill should be re-aligned in a follow-on edit.
+- [`.claude/skills/rusqlite-in-async/`](../../../.claude/skills/rusqlite-in-async/SKILL.md) — Task 6.4's load-bearing contract for the async/blocking boundary; cited at every `spawn_blocking` call site and at the embedding-call site (which deliberately stays on the async runtime).
 
 **ADRs**:
-- [`docs/decisions/0003-indexing-in-the-daemon.md`](../decisions/0003-indexing-in-the-daemon.md) — chunking and embedding live in the daemon, not delegated.
-- [`docs/decisions/0005-local-everything.md`](../decisions/0005-local-everything.md) — embedding service is local (TEI / Ollama / vLLM); no cloud calls.
-- [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../decisions/0007-sqlite-vec-over-alternatives.md) — sqlite-vec is the vector store; dimension is schema-level; delete-and-reinsert on change.
+- [`docs/decisions/0003-indexing-in-the-daemon.md`](../../../docs/decisions/0003-indexing-in-the-daemon.md) — chunking and embedding live in the daemon, not delegated.
+- [`docs/decisions/0005-local-everything.md`](../../../docs/decisions/0005-local-everything.md) — embedding service is local (TEI / Ollama / vLLM); no cloud calls.
+- [`docs/decisions/0007-sqlite-vec-over-alternatives.md`](../../../docs/decisions/0007-sqlite-vec-over-alternatives.md) — sqlite-vec is the vector store; dimension is schema-level; delete-and-reinsert on change.
 
 **Specs**:
-- [`docs/specs/semantic-search.md`](../specs/semantic-search.md) — pinned the public chunk shape (`chunk_index`, `heading_path`, `text`, `score`, `file_path`, plus the v0-omitted `vault` forward-compat field). Step 6 produces the data shape this spec will consume in step 7. Edge-case § Embedding service unavailable describes the *query-time* behavior (not built here).
+- [`docs/specs/semantic-search.md`](../../../docs/specs/semantic-search.md) — pinned the public chunk shape (`chunk_index`, `heading_path`, `text`, `score`, `file_path`, plus the v0-omitted `vault` forward-compat field). Step 6 produces the data shape this spec will consume in step 7. Edge-case § Embedding service unavailable describes the *query-time* behavior (not built here).
 
 **Prior workplans / retros**:
-- [`docs/roadmap/step-05-workplan.md`](./step-05-workplan.md) — closest-shape precedent (1685 lines, five deferred decisions, first-external-surface step). This workplan mirrors its section structure verbatim.
-- [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) end-of-round retro — three round-1 lessons feeding into this round (risk grading honesty, pull-forward of deferred decisions, workplan-prose accuracy review heuristic).
+- [`notes/roadmap/archive/step-05-workplan.md`](./step-05-workplan.md) — closest-shape precedent (1685 lines, five deferred decisions, first-external-surface step). This workplan mirrors its section structure verbatim.
+- [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) end-of-round retro — three round-1 lessons feeding into this round (risk grading honesty, pull-forward of deferred decisions, workplan-prose accuracy review heuristic).
 
 **Roadmap and tech-stack**:
-- [`docs/roadmap/roadmap-2.md`](./roadmap-2.md) § Step 6 — the contract this workplan resolves.
-- [`docs/implementation/tech-stack.md`](../implementation/tech-stack.md) — naming the chunk + embed step as "the step most likely to surprise you" (round-2 framing); risk grade in this workplan is honest about that.
+- [`notes/roadmap/archive/roadmap-2.md`](./roadmap-2.md) § Step 6 — the contract this workplan resolves.
+- [`docs/implementation/tech-stack.md`](../../../docs/implementation/tech-stack.md) — naming the chunk + embed step as "the step most likely to surprise you" (round-2 framing); risk grade in this workplan is honest about that.
 
 ---
 
@@ -436,19 +436,19 @@ The `reqwest` dep is already in tree from step 5 (`src/client.rs`); Task 6.3 reu
 ## Process dependencies
 
 - Boundary cleanups landed pre-workplan (commits at the round-1/round-2 boundary): playbook edit (a) added the workplan-prose-accuracy soft-flag shape; playbook edit (b) retired the coordinator-context-drift open question; workflow-notes edit (c) added the self-review-for-prose-accuracy heuristic to Phase B. Step 6's build does **not** depend on any further playbook or workflow-notes edits.
-- The skill text in [`.claude/skills/sqlite-vec-extension/SKILL.md`](../../.claude/skills/sqlite-vec-extension/SKILL.md) line 49 currently uses `chunk_vectors`; resolution A pins the table name to `chunks_vec` per the spec/roadmap. The skill should be re-aligned in a follow-on edit, but step 6's build does not block on it — the workplan body is the operative reference for the table name during the build phase.
+- The skill text in [`.claude/skills/sqlite-vec-extension/SKILL.md`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) line 49 currently uses `chunk_vectors`; resolution A pins the table name to `chunks_vec` per the spec/roadmap. The skill should be re-aligned in a follow-on edit, but step 6's build does not block on it — the workplan body is the operative reference for the table name during the build phase.
 
 ---
 
 ## Self-review for prose accuracy
 
-This workplan came in at ~460 lines, under the ~1000-line threshold of the new Phase B heuristic in [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md). The heuristic didn't formally fire, but a voluntary accuracy spot-check was done anyway given the density of external-library claims (pulldown-cmark, sqlite-vec, rusqlite features, reqwest). Results below.
+This workplan came in at ~460 lines, under the ~1000-line threshold of the new Phase B heuristic in [`notes/project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md). The heuristic didn't formally fire, but a voluntary accuracy spot-check was done anyway given the density of external-library claims (pulldown-cmark, sqlite-vec, rusqlite features, reqwest). Results below.
 
 **Claims that were re-checked**:
 
-- pulldown-cmark "streaming parser that emits events" — confirmed against the [`markdown-chunking`](../../.claude/skills/markdown-chunking/SKILL.md) skill (line 12) which is the load-bearing reference.
+- pulldown-cmark "streaming parser that emits events" — confirmed against the [`markdown-chunking`](../../../.claude/skills/markdown-chunking/SKILL.md) skill (line 12) which is the load-bearing reference.
 - pulldown-cmark "doesn't handle frontmatter natively" — confirmed against the skill (line 16); also matches widely-known behavior.
-- sqlite-vec extension API "loaded into a standard SQLite connection at runtime" — confirmed against the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 8).
+- sqlite-vec extension API "loaded into a standard SQLite connection at runtime" — confirmed against the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 8).
 - `vec0` "virtual tables have limited column support" — confirmed against the skill (line 33).
 - `MATCH` operator and `k` pseudo-column "are sqlite-vec idioms" with "exact syntax against upstream docs" — confirmed against the skill (lines 100–105). Step 7 will exercise this; step 6 only writes vectors.
 - `bytemuck::cast_slice` "convert `&[f32]` to `&[u8]` without copying" — confirmed against the skill (line 59).
@@ -457,7 +457,7 @@ This workplan came in at ~460 lines, under the ~1000-line threshold of the new P
 
 **Workplan-internal consistency**:
 
-- The dimension `768` appears in: roadmap-2 § Step 6, ADR-0007, the spec (line 27), the [`sqlite-vec-extension`](../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 51), `default_embedding_dimension()` in `src/config.rs` (line 144), and migration 0003 SQL above. All consistent.
+- The dimension `768` appears in: roadmap-2 § Step 6, ADR-0007, the spec (line 27), the [`sqlite-vec-extension`](../../../.claude/skills/sqlite-vec-extension/SKILL.md) skill (line 51), `default_embedding_dimension()` in `src/config.rs` (line 144), and migration 0003 SQL above. All consistent.
 - The vec0 table name `chunks_vec` (resolution A): used consistently throughout the workplan body, the migration SQL, the cross-references, and the test cases. The skill's `chunk_vectors` is called out as the outlier in resolution A and § Cross-references.
 - Configuration shape: every new knob (`extension_path`, `timeout_ms`, `max_retries`, `batch_size`) appears in resolutions 1 and 5, in Task 6.5, in the DoD, and in Task 6.7's doc updates. No knob mentioned without a default.
 

@@ -6,14 +6,14 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 > **Conventions**
 > - Each item is short. Deeper context lives in the source the item came from (retro, ADR, spec, vision doc). Always link.
-> - Items move out of this file when they land in a roadmap (`docs/roadmap/roadmap-N.md` § Round N) or, for non-roadmap work like playbook edits, when they're applied.
+> - Items move out of this file when they land in a roadmap (`notes/roadmap/roadmap-N.md` § Round N) or, for non-roadmap work like playbook edits, when they're applied.
 > - Items can stay in this file indefinitely — un-scoped is a valid state.
 
 ---
 
 ## Multi-vault — committed to Round 3
 
-Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); roadmap entry in [`docs/roadmap/roadmap-2.md`](../docs/roadmap/roadmap-2.md) § Round 3 (post-v0). Spec work pre-queued in Solo todos 64 (four spec amendments) and 65 (vault-management.md full spec from outline). Five open deferred decisions to be resolved at the round-3 workplan.
+Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); roadmap entry in [`notes/roadmap/archive/roadmap-2.md`](roadmap/archive/roadmap-2.md) § Round 3 (post-v0). Spec work pre-queued in Solo todos 64 (four spec amendments) and 65 (vault-management.md full spec from outline). Five open deferred decisions to be resolved at the round-3 workplan.
 
 ## Agent-host integration — round-3-or-later, no roadmap slot yet
 
