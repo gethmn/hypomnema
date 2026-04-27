@@ -68,6 +68,8 @@
 
 ## Step 8 — MCP wrapper (round shipping gate)
 
+**Status**: shipped 2026-04-27. See [`step-08-workplan.md`](./step-08-workplan.md) for the workplan and [`notes/project-planning-workflow-notes.md`](../../notes/project-planning-workflow-notes.md) § Step 8 for the retrospective. Round-2 milestone tag: `v0.1.0`.
+
 **Goal**: `hmnd` exposes the same three search operations (`search_filesystem`, `search_content`, `search_semantic`) over MCP via the `rmcp` crate, transported either over stdio (default — agent hosts spawn `hmnd --mcp-stdio`) or over a Unix socket. The MCP layer is a thin wrapper over the same query functions in `src/search/`. Test against an actual agent (Claude Code or Iris) end-to-end.
 
 **Shipping criteria**:
