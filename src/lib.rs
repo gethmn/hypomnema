@@ -16,4 +16,5 @@ pub mod outbox;
 pub mod search;
 pub mod shutdown;
 pub mod store;
+pub mod vault_registry;
 pub mod watcher;
