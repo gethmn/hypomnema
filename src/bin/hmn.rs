@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use hypomnema::cli::{Cli, Command, SearchMode};
@@ -24,7 +24,11 @@ async fn main() -> ExitCode {
         }
     };
 
-    if let Err(e) = logging::init(&config.logging, cli.verbose, BinaryKind::Hmn) {
+    let kind = match &cli.command {
+        Command::Mcp => BinaryKind::HmnMcp,
+        _ => BinaryKind::Hmn,
+    };
+    if let Err(e) = logging::init(&config.logging, cli.verbose, kind) {
         eprintln!("hmn: error: {e:#}");
         return ExitCode::from(1);
     }
@@ -84,6 +88,7 @@ async fn main() -> ExitCode {
             }
         },
         Command::Status => cmd_status(&config, cli.daemon_url.as_deref(), cli.json).await,
+        Command::Mcp => cmd_mcp(&config, cli.daemon_url.as_deref()).await,
     };
 
     match result {
@@ -173,6 +178,15 @@ async fn cmd_search_semantic(
         print!("{}", render_semantic_text(&resp));
     }
     Ok(())
+}
+
+async fn cmd_mcp(config: &Config, override_url: Option<&str>) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)
+        .context("constructing DaemonClient for mcp subcommand")?;
+    let server = hypomnema::mcp::HypomnemaMcpServer { client };
+    hypomnema::mcp::serve_stdio(server)
+        .await
+        .context("serving MCP over stdio")
 }
 
 async fn cmd_status(config: &Config, override_url: Option<&str>, json: bool) -> Result<()> {

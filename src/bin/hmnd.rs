@@ -88,6 +88,17 @@ async fn run_daemon(config: Config) -> Result<()> {
     );
     tracing::debug!(?config, "hmnd: full configuration");
 
+    if config.mcp.transport != "stdio" {
+        tracing::warn!(
+            configured = %config.mcp.transport,
+            socket = %config.mcp.socket.0.display(),
+            "mcp.transport = {:?} is not implemented in v0; only stdio via the `hmn mcp` \
+             subcommand on the CLI binary is shipped. The socket file is NOT bound. \
+             To use MCP, invoke `hmn mcp` from the agent host.",
+            config.mcp.transport,
+        );
+    }
+
     let store = Store::open(
         &config.storage.data_dir.0,
         &config.storage.index_file,

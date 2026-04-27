@@ -35,6 +35,10 @@ pub enum Command {
     },
     /// Report daemon health.
     Status,
+    /// Serve the MCP surface over stdio against a running `hmnd` daemon.
+    /// Intended to be invoked by MCP-capable agent hosts (Claude Code,
+    /// Iris). Process exits when its parent (the host) closes stdin.
+    Mcp,
 }
 
 #[derive(Debug, Subcommand)]
@@ -88,6 +92,12 @@ mod tests {
     fn parses_status() {
         let cli = Cli::try_parse_from(["hmn", "status"]).expect("status parses");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parses_mcp_subcommand() {
+        let cli = Cli::try_parse_from(["hmn", "mcp"]).expect("parses");
+        assert!(matches!(cli.command, Command::Mcp));
     }
 
     #[test]

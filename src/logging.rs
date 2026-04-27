@@ -10,6 +10,7 @@ use crate::config::LoggingConfig;
 pub enum BinaryKind {
     Hmnd,
     Hmn,
+    HmnMcp,
 }
 
 pub fn init(config: &LoggingConfig, verbose: u8, binary: BinaryKind) -> Result<()> {
@@ -26,15 +27,28 @@ pub fn init(config: &LoggingConfig, verbose: u8, binary: BinaryKind) -> Result<(
 
     // Discard try_init's error: it fires when a subscriber is already installed,
     // which happens when tests in the same process call init more than once.
-    if json_format {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .json()
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .try_init();
+    match binary {
+        BinaryKind::HmnMcp => {
+            // Stdout is owned by the MCP transport in this mode; route logs to
+            // stderr and disable ANSI to avoid polluting the JSON-RPC framing.
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(env_filter)
+                .with_writer(std::io::stderr)
+                .with_ansi(false)
+                .try_init();
+        }
+        BinaryKind::Hmnd | BinaryKind::Hmn => {
+            if json_format {
+                let _ = tracing_subscriber::fmt()
+                    .with_env_filter(env_filter)
+                    .json()
+                    .try_init();
+            } else {
+                let _ = tracing_subscriber::fmt()
+                    .with_env_filter(env_filter)
+                    .try_init();
+            }
+        }
     }
 
     Ok(())
@@ -61,6 +75,10 @@ pub(crate) fn compose_filter(
             )
         }
         BinaryKind::Hmn => {
+            let bumped = level_str(bump(Level::WARN, verbose));
+            format!("error,hypomnema={bumped},hmn={bumped}")
+        }
+        BinaryKind::HmnMcp => {
             let bumped = level_str(bump(Level::WARN, verbose));
             format!("error,hypomnema={bumped},hmn={bumped}")
         }
@@ -182,8 +200,23 @@ mod tests {
     }
 
     #[test]
+    fn hmn_mcp_filter_matches_hmn() {
+        let s = compose_filter(&default_cfg(), 0, BinaryKind::HmnMcp, None);
+        assert_eq!(s, "error,hypomnema=warn,hmn=warn");
+    }
+
+    #[test]
+    fn composed_directive_parses_for_hmn_mcp() {
+        for v in 0u8..=3 {
+            let directive = compose_filter(&default_cfg(), v, BinaryKind::HmnMcp, None);
+            EnvFilter::try_new(&directive)
+                .unwrap_or_else(|e| panic!("directive {directive:?} failed to parse: {e}"));
+        }
+    }
+
+    #[test]
     fn composed_directive_parses_as_envfilter() {
-        for binary in [BinaryKind::Hmnd, BinaryKind::Hmn] {
+        for binary in [BinaryKind::Hmnd, BinaryKind::Hmn, BinaryKind::HmnMcp] {
             for v in 0u8..=3 {
                 let directive = compose_filter(&default_cfg(), v, binary, None);
                 EnvFilter::try_new(&directive)
@@ -199,7 +232,7 @@ mod tests {
             notify_level: "info".to_string(),
             tokio_level: "debug".to_string(),
         };
-        for binary in [BinaryKind::Hmnd, BinaryKind::Hmn] {
+        for binary in [BinaryKind::Hmnd, BinaryKind::Hmn, BinaryKind::HmnMcp] {
             for v in 0u8..=3 {
                 let directive = compose_filter(&cfg, v, binary, None);
                 EnvFilter::try_new(&directive)
