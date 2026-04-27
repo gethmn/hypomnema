@@ -1,7 +1,7 @@
 # Change Events (Outbox) Specification
 
-**Version**: 0.1.0
-**Date**: 2026-04-23
+**Version**: 0.1.1
+**Date**: 2026-04-26
 **Status**: Draft
 
 ---
@@ -28,6 +28,14 @@ Hypomnema emits a durable stream of change events so consumers can react to vaul
 
 This content-hash gate is the primary defense against editor-save noise and sync-tool mtime churn. An agent tailing the outbox sees only real changes, not every save-triggered filesystem event.
 
+### Cold Start
+
+The outbox records *changes detected after the watcher is running*. The initial indexing walk performed when the daemon starts (or when a vault is first created) is silent — it populates the index but does **not** emit outbox events for files it discovers.
+
+A consumer that subscribes to a freshly-created vault and tails from byte 0 will see no events until a real change occurs (file edit, create, delete observed by the watcher).
+
+To obtain initial state, consumers should query the search / index API once at subscription time, then begin tailing the outbox for subsequent deltas. The two surfaces are complementary: the index answers "what exists now?"; the outbox answers "what changed since I last looked?".
+
 ### Event Envelope (minimum)
 
 ```json
@@ -52,6 +60,20 @@ Hypomnema offers no push, no webhook, no in-process callback in v0. See the hand
 
 ---
 
+## Consumer Model
+
+The outbox is the change-notification surface for **external consumers** — applications and AI agents that subscribe to vault changes by tailing `outbox.jsonl`. Examples: Iris, Claude Code, custom scripts.
+
+The Hypomnema binaries themselves do not consume the event stream:
+- `hmnd` writes events but never tails them.
+- `hmn` displays outbox metadata (path, size) via the `/status` API but does not parse events.
+
+This separation is intentional: per [vision.md §Consumer](../product/vision.md#consumer), "Hypomnema has no awareness of its consumers." The daemon's job ends at producing a durable, ordered event log; reacting to changes is the consumer's job.
+
+**Tail contract**: consumers open the file, read line-by-line, and persist the byte offset they have processed. On restart they reopen and seek to the persisted offset. Lines are JSON-per-line and complete-line-terminated; consumers should treat a partial trailing line (no terminating `\n`) as not-yet-committed and re-read it on next poll.
+
+---
+
 ## Data Schema
 
 | Field | Type | Required | Notes |
@@ -73,6 +95,18 @@ Future fields (additive, optional) will be added as the daemon learns to notice 
 - Location: `~/.local/share/hypomnema/outbox.jsonl` on Linux and macOS; `%APPDATA%\hypomnema\outbox.jsonl` on Windows (see [reference/configuration.md](../reference/configuration.md) for XDG/env overrides)
 - Never rotated by Hypomnema in v0 (rotation is an open question)
 
+### Size & Growth
+
+Each event serializes to ~130–150 bytes typical (path-length dependent; SHA256 hash adds ~50 bytes when present). Rough envelope:
+
+| Events | File size |
+|--------|-----------|
+| 1,000 | ~150 KB |
+| 100,000 | ~15 MB |
+| 1,000,000 | ~150 MB |
+
+v0 never rotates (see Open Questions). Operators on long-running vaults with high churn should plan for unbounded growth or perform manual archival (see [Edge Cases: Intentional reset](#intentional-reset-start-over-with-a-fresh-outbox)).
+
 ---
 
 ## Edge Cases
@@ -93,6 +127,21 @@ Daemon recreates/opens the file on next event. Consumers that were tailing an ol
 
 The write is small (one line). In the worst case a consumer sees a truncated JSON line and must skip it. The daemon on restart picks up from the end-of-file; no duplicate is emitted for events that made it through before the crash.
 
+### Outbox file corrupted (partial trailing line)
+
+Per the [Consumer Model tail contract](#consumer-model), consumers should treat a partial trailing line as not-yet-committed and re-read on next poll. A line is committed when terminated with `\n`. The daemon writes one event per `writeln!` followed by `fdatasync`, so a partial line on disk indicates an in-flight write or a crash mid-write — not corruption to escalate.
+
+### Intentional reset (start over with a fresh outbox)
+
+Operators may need to discard outbox history (e.g., file grew unmanageably; consumer state is unrecoverable). Procedure:
+
+1. Stop `hmnd`.
+2. Delete or move `outbox.jsonl`.
+3. Restart `hmnd`. The daemon recreates the file empty on next event (or on first append).
+4. Reset any consumer-side persisted offsets to 0.
+
+This is safe because the outbox is **not authoritative for vault state** — the index (`index.sqlite`) is. Resetting the outbox loses notification history but does not affect indexed state. A consumer that needs to re-bootstrap after a reset should re-query the index (per [Cold Start](#cold-start)).
+
 ---
 
 ## Open Questions
@@ -109,3 +158,4 @@ The write is small (one line). In the worst case a consumer sees a truncated JSO
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
+| 0.1.1 | 2026-04-26 | Clarify consumer model (external-only), cold-start semantics, size envelope, and recovery procedures. No behavior change. |
