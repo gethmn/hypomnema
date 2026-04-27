@@ -147,4 +147,4 @@ When step 8 ships:
 
 ## After round 3
 
-Decide whether v0 is *done done* (publish the binary; close the "open in scope" list) or whether a fourth round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, Compose-style declarative provisioning if it didn't ship in round 3, MCP write-tool gating, push notifications). The handoff doc's "Out of scope" list is the natural source for such a round.
+Decide whether v0 is *done done* (publish the binary; close the "open in scope" list) or whether a fourth round is justified for follow-on work (e.g., outbox rotation, regex-over-paths, Compose-style declarative provisioning if it didn't ship in round 3, MCP write-tool gating, push notifications, the agent-host integration / MCP-tool-discoverability work). [`notes/backlog.md`](../../notes/backlog.md) is the round-agnostic queue to pull from; `docs/product/vision.md` § Non-Goals is the canonical "real, planned, but not v0" list backing it.

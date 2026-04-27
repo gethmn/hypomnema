@@ -1,5 +1,7 @@
 # Mutagen-like multiple vault shift
 
+> **Archived 2026-04-27 — outcome: CONSUMMATED.** This exploration produced ADR-0009 (multi-vault per daemon), ADR-0010 (vault definitions as runtime state), ADR-0011 (vault management on `hmn`), and the round-3 entry in [`docs/roadmap/roadmap-2.md`](../../../docs/roadmap/roadmap-2.md). The Mutagen-shaped management UX (compose-style declarative provisioning) is preserved in the round-3 deferred-decisions list. Frozen here for the original reasoning trail.
+
 The v0 shipping gate (step 5) happened way quicker than I was expecting. So, I want to take a step back and reevaluate some of the priorities and plans before the implementation gets too far along to course correct on some core ideas. The goal is still similar — keep the scope limited *but usable* — but this particular issue I think deserves more consideration than it was given previously.
 
 The real push for this now is the realization that the UX for maintaining multiple vaults would be far from what I'd want it to be. I realized this pattern of "one instance per thing" is a configuration and state nightmare.

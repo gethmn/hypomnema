@@ -67,7 +67,7 @@ That’s the whole v0. Single directory, single user, single machine, read-only.
 
 ## Out of scope (deferred)
 
-Canonical list lives in [`product/vision.md` → Non-Goals](product/vision.md#non-goals). Implementation-shaped deferrals specific to this handoff (no workspace split, no `thiserror`, no abstraction layers) are documented below under [Crate stack](#crate-stack).
+Canonical "real, planned, but not v0" list lives in [`product/vision.md` → Non-Goals](product/vision.md#non-goals). The round-agnostic backlog of work that *could* land in some future round (multi-vault, agent-host integration, public-presence work, process/playbook edits, operational follow-ups) lives in [`notes/backlog.md`](../notes/backlog.md) — pulled into roadmaps as rounds are written. Implementation-shaped deferrals specific to this handoff (no workspace split, no `thiserror`, no abstraction layers) are documented below under [Crate stack](#crate-stack).
 
 ## Load-bearing decisions
 

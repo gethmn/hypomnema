@@ -1,5 +1,7 @@
 # spec-generator — Handoff
 
+> **Archived 2026-04-27 — outcome: SHIPPED.** The fork was approved; `.claude/skills/spec-generator/` is in tree and was used to draft `docs/specs/vault-management.md` (outline form). Pre-queued for the round-3 spec amendments via Solo todos 64 (four spec amendments) and 65 (full vault-management spec from outline). Frozen here for the original reasoning + open questions discussed at proposal time.
+
 **Status**: Open for review
 **Created**: 2026-04-25
 **Author**: Claude (with Beau)
