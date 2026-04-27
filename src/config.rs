@@ -381,7 +381,7 @@ impl Config {
 
 fn parse_level(s: &str, field: &str) -> Result<Level> {
     s.parse::<Level>()
-        .map_err(|e| anyhow!("{} = \"{}\" is not a valid tracing level: {}", field, s, e))
+        .map_err(|e| anyhow!("{field} = \"{s}\" is not a valid tracing level: {e}"))
 }
 
 fn default_config_path() -> Result<PathBuf> {

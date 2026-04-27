@@ -78,7 +78,7 @@ fn rejects_unknown_top_level_key() {
     );
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected unknown-key rejection");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(
         msg.contains("bogus_key"),
         "error must name unknown key: {msg}"
@@ -99,7 +99,7 @@ fn rejects_unknown_nested_key() {
     );
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected unknown-nested-key rejection");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(
         msg.contains("nonsense"),
         "error must name unknown key: {msg}"
@@ -154,7 +154,7 @@ fn rejects_data_dir_under_vault() {
     );
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(
         msg.contains("data_dir") || msg.contains("ADR-0006"),
         "error must mention data_dir or ADR-0006: {msg}"
@@ -176,7 +176,7 @@ fn rejects_data_dir_equal_to_vault() {
     );
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection when data_dir == vault");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(msg.contains("data_dir"), "{msg}");
 }
 
@@ -194,7 +194,7 @@ fn rejects_bad_logging_level() {
     );
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(
         msg.contains("plaid") || msg.contains("logging.level"),
         "{msg}"
@@ -208,7 +208,7 @@ fn rejects_missing_vault() {
     let cfg_path = write_config(&root.0, &format!("vault = \"{}\"\n", absent.display()));
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection for missing vault");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(msg.contains("vault"), "{msg}");
 }
 
@@ -274,6 +274,6 @@ fn rejects_vault_that_is_a_file() {
     let cfg_path = write_config(&root.0, &format!("vault = \"{}\"\n", file_vault.display()));
 
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection for file vault");
-    let msg = format!("{:#}", err);
+    let msg = format!("{err:#}");
     assert!(msg.contains("directory"), "{msg}");
 }

@@ -316,8 +316,7 @@ async fn sustained_save_loop_completes_with_consistent_row() {
     let elapsed = started.elapsed();
     assert!(
         elapsed < Duration::from_secs(5),
-        "sustained save loop took {:?}, expected < 5s (criterion 5 smoke)",
-        elapsed
+        "sustained save loop took {elapsed:?}, expected < 5s (criterion 5 smoke)"
     );
 
     let final_hash =

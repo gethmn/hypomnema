@@ -86,7 +86,7 @@ async fn decode_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result
         return Err(anyhow!("{}: {}", env.error.code, env.error.message));
     }
     let body = String::from_utf8_lossy(&bytes);
-    Err(anyhow!("daemon returned HTTP {}: {}", status, body))
+    Err(anyhow!("daemon returned HTTP {status}: {body}"))
 }
 
 pub fn is_connect_error(err: &anyhow::Error) -> bool {
@@ -157,7 +157,7 @@ mod tests {
                 .await;
         });
         TestDaemon {
-            base_url: format!("http://{}", addr),
+            base_url: format!("http://{addr}"),
             shutdown: tx,
             handle: Some(handle),
             _dir: dir,
