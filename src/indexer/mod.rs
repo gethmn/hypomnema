@@ -12,7 +12,7 @@ use chrono::{SecondsFormat, Utc};
 use globset::GlobSet;
 use rusqlite::{OptionalExtension, params};
 use tokio::task;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::chunk;
 use crate::config::Config;
@@ -73,6 +73,8 @@ impl Scanner {
         let ignores = self.ignores.clone();
         let pool = self.pool.clone();
 
+        info!(vault = %vault.display(), "scan: walking vault");
+
         // Phase 1 (sync): walk + load existing files into HashMap.
         let (walked, mut existing) = task::spawn_blocking(
             move || -> Result<(walk::WalkOutcome, HashMap<String, StoredFile>)> {
@@ -113,8 +115,21 @@ impl Scanner {
         };
         let mut found: HashSet<String> = HashSet::with_capacity(walked.entries.len());
 
+        let total = walked.entries.len() as u64;
+        info!(
+            total,
+            skipped_outside_vault = walked.skipped_outside_vault,
+            walk_errors = walked.walk_errors,
+            "scan: walk complete, starting per-file processing"
+        );
+
         // Phase 2 (async per-file pipeline): chunk + embed lives on the runtime;
         // each file's SQL write is its own spawn_blocking transaction.
+        let mut processed: u64 = 0;
+        let mut last_log_at = Instant::now();
+        const PROGRESS_EVERY_FILES: u64 = 100;
+        const PROGRESS_EVERY: Duration = Duration::from_secs(5);
+
         for entry in &walked.entries {
             found.insert(entry.rel_path.clone());
             let prior = existing.remove(&entry.rel_path);
@@ -135,6 +150,20 @@ impl Scanner {
                 // no observable work — match the pre-step-6 bulk-scan
                 // accounting (no counter advance).
                 ProcessEffect::StatGateHit | ProcessEffect::EmbeddingSkipped => {}
+            }
+
+            processed += 1;
+            if processed % PROGRESS_EVERY_FILES == 0 || last_log_at.elapsed() >= PROGRESS_EVERY {
+                info!(
+                    processed,
+                    total,
+                    inserted = report.inserted,
+                    updated = report.updated,
+                    hash_unchanged = report.hash_unchanged,
+                    current = %entry.rel_path,
+                    "scan: progress"
+                );
+                last_log_at = Instant::now();
             }
         }
 
@@ -289,10 +318,29 @@ impl Scanner {
         // Plain for-loop per pre-build directive 2 (futures::stream is not in
         // tree and at v0 batch_size = 1 the stream is one-element anyway).
         let chunks = chunk::chunk_file(&body);
-        let mut chunks_with_vecs: Vec<(chunk::Chunk, Vec<f32>)> = Vec::with_capacity(chunks.len());
+        let chunk_count = chunks.len();
+        let mut chunks_with_vecs: Vec<(chunk::Chunk, Vec<f32>)> = Vec::with_capacity(chunk_count);
         for chunk in &chunks {
-            match self.embedder.embed_text(&chunk.content).await {
-                Ok(v) => chunks_with_vecs.push((chunk.clone(), v)),
+            debug!(
+                path = %rel,
+                chunk_index = chunk.chunk_index,
+                chunk_count,
+                bytes = chunk.content.len(),
+                "embedding: starting"
+            );
+            let started = Instant::now();
+            let result = self.embedder.embed_text(&chunk.content).await;
+            match result {
+                Ok(v) => {
+                    debug!(
+                        path = %rel,
+                        chunk_index = chunk.chunk_index,
+                        chunk_count,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "embedding: complete"
+                    );
+                    chunks_with_vecs.push((chunk.clone(), v));
+                }
                 Err(EmbeddingError::Transport(_))
                 | Err(EmbeddingError::Status {
                     code: 500..=599, ..
