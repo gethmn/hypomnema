@@ -11,6 +11,7 @@ pub mod config;
 pub mod embedding;
 pub mod indexer;
 pub mod logging;
+pub mod mcp;
 pub mod outbox;
 pub mod search;
 pub mod shutdown;

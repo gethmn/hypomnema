@@ -10,6 +10,7 @@ pub use crate::api::types::{
 };
 use crate::config::Config;
 
+#[derive(Clone)]
 pub struct DaemonClient {
     base_url: String,
     http: reqwest::Client,
