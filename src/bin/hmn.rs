@@ -203,7 +203,7 @@ async fn cmd_mcp(config: &Config, override_url: Option<&str>) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)
         .context("constructing DaemonClient for mcp subcommand")?;
     let server = hypomnema::mcp::HypomnemaMcpServer {
-        client,
+        backend: std::sync::Arc::new(client),
         default_vault_name: config.default_vault_name.clone(),
         enable_write_tools: config.mcp.enable_write_tools,
     };

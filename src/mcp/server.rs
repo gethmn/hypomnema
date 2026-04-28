@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rmcp::ServerHandler;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::CallToolResult;
@@ -9,11 +11,11 @@ use crate::api::types::{
     VaultPauseInput, VaultRenameInput, VaultRescanInput, VaultResetInput, VaultResumeInput,
     VaultStatusInput, VaultTerminateInput,
 };
-use crate::client::{DaemonClient, is_connect_error};
+use crate::mcp::backend::HypomnemaBackend;
 
 #[derive(Clone)]
 pub struct HypomnemaMcpServer {
-    pub client: DaemonClient,
+    pub backend: Arc<dyn HypomnemaBackend + Send + Sync>,
     pub default_vault_name: String,
     pub enable_write_tools: bool,
 }
@@ -34,11 +36,13 @@ impl HypomnemaMcpServer {
         &self,
         Parameters(input): Parameters<FilesystemQueryJson>,
     ) -> CallToolResult {
-        match self.client.search_filesystem(&input).await {
+        match self.backend.search_filesystem(&input).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -51,11 +55,13 @@ impl HypomnemaMcpServer {
         &self,
         Parameters(input): Parameters<ContentQueryJson>,
     ) -> CallToolResult {
-        match self.client.search_content(&input).await {
+        match self.backend.search_content(&input).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -68,11 +74,13 @@ impl HypomnemaMcpServer {
         &self,
         Parameters(input): Parameters<SemanticQueryJson>,
     ) -> CallToolResult {
-        match self.client.search_semantic(&input).await {
+        match self.backend.search_semantic(&input).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -81,11 +89,13 @@ impl HypomnemaMcpServer {
                        See docs/specs/vault-management.md § Operations."
     )]
     async fn vault_list(&self) -> CallToolResult {
-        match self.client.list_vaults().await {
+        match self.backend.list_vaults().await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -102,11 +112,13 @@ impl HypomnemaMcpServer {
             .target
             .as_deref()
             .unwrap_or(self.default_vault_name.as_str());
-        match self.client.get_vault(target).await {
+        match self.backend.get_vault(target).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -126,11 +138,13 @@ impl HypomnemaMcpServer {
             name: input.name,
             path: input.path,
         };
-        match self.client.create_vault(&req).await {
+        match self.backend.create_vault(&req).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -149,11 +163,13 @@ impl HypomnemaMcpServer {
                 "vault_terminate",
             ));
         }
-        match self.client.terminate_vault(&input.target).await {
+        match self.backend.terminate_vault(&input.target).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -167,11 +183,13 @@ impl HypomnemaMcpServer {
         if !self.enable_write_tools {
             return CallToolResult::structured_error(write_tools_disabled_envelope("vault_pause"));
         }
-        match self.client.pause_vault(&input.target).await {
+        match self.backend.pause_vault(&input.target).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -188,11 +206,13 @@ impl HypomnemaMcpServer {
         if !self.enable_write_tools {
             return CallToolResult::structured_error(write_tools_disabled_envelope("vault_resume"));
         }
-        match self.client.resume_vault(&input.target).await {
+        match self.backend.resume_vault(&input.target).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -206,11 +226,13 @@ impl HypomnemaMcpServer {
         if !self.enable_write_tools {
             return CallToolResult::structured_error(write_tools_disabled_envelope("vault_reset"));
         }
-        match self.client.reset_vault(&input.target, input.rebuild).await {
+        match self.backend.reset_vault(&input.target, input.rebuild).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -228,14 +250,16 @@ impl HypomnemaMcpServer {
             return CallToolResult::structured_error(write_tools_disabled_envelope("vault_rename"));
         }
         match self
-            .client
+            .backend
             .rename_vault(&input.target, &input.new_name)
             .await
         {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 
@@ -252,11 +276,13 @@ impl HypomnemaMcpServer {
         if !self.enable_write_tools {
             return CallToolResult::structured_error(write_tools_disabled_envelope("vault_rescan"));
         }
-        match self.client.rescan_vault(&input.target).await {
+        match self.backend.rescan_vault(&input.target).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
-            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
         }
     }
 }
@@ -272,9 +298,9 @@ fn write_tools_disabled_envelope(tool_name: &str) -> Value {
     })
 }
 
-fn envelope_from_anyhow(client: &DaemonClient, err: &anyhow::Error) -> Value {
-    if is_connect_error(err) {
-        return daemon_unreachable_envelope(client.base_url(), err);
+fn envelope_from_anyhow(backend: &dyn HypomnemaBackend, err: &anyhow::Error) -> Value {
+    if backend.is_connect_error(err) {
+        return backend.daemon_unreachable_envelope(err);
     }
     let display = format!("{err:#}");
     let (code, message) = match display.split_once(": ") {
@@ -315,6 +341,7 @@ mod tests {
         FilesystemSearchResponse, RescanResponseJson, SemanticResultJson, SemanticSearchResponse,
         TerminateVaultResponse, VaultListResponse, VaultRowJson,
     };
+    use crate::client::DaemonClient;
     use crate::config::Config;
     use std::sync::{Arc, Mutex};
 
@@ -361,7 +388,7 @@ mod tests {
         let cfg = smoke_config();
         let client = DaemonClient::from_config(&cfg, Some(url)).unwrap();
         HypomnemaMcpServer {
-            client,
+            backend: Arc::new(client),
             default_vault_name: cfg.default_vault_name.clone(),
             enable_write_tools: true,
         }
@@ -371,10 +398,25 @@ mod tests {
         let cfg = smoke_config();
         let client = DaemonClient::from_config(&cfg, Some(url)).unwrap();
         HypomnemaMcpServer {
-            client,
+            backend: Arc::new(client),
             default_vault_name: cfg.default_vault_name.clone(),
             enable_write_tools,
         }
+    }
+
+    #[test]
+    fn hypomnema_mcp_server_holds_arc_dyn_backend() {
+        // Type-check that the field is `Arc<dyn HypomnemaBackend + Send + Sync>`.
+        // Catches accidental concrete-typing regression of the field.
+        fn assert_field_type(_: &Arc<dyn HypomnemaBackend + Send + Sync>) {}
+        let cfg = smoke_config();
+        let client = DaemonClient::from_config(&cfg, None).unwrap();
+        let server = HypomnemaMcpServer {
+            backend: Arc::new(client),
+            default_vault_name: cfg.default_vault_name.clone(),
+            enable_write_tools: true,
+        };
+        assert_field_type(&server.backend);
     }
 
     #[tokio::test]
