@@ -145,6 +145,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         .compiled_ignores()
         .expect("compile ignores");
     let (watcher, rx) = watcher::spawn_watcher(
+        &fx.vault_id,
         &fx.vault,
         ignores,
         Duration::from_millis(fx.config.watcher.debounce_ms),
@@ -152,8 +153,9 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     )
     .expect("spawn watcher");
 
-    let outbox_path = fx.data_dir.join(&fx.config.storage.outbox_file);
-    let outbox = Outbox::open(outbox_path.clone())
+    let outbox_path =
+        vault_data_dir(&fx.data_dir, &fx.vault_id).join(&fx.config.storage.outbox_file);
+    let outbox = Outbox::open(fx.vault_id.clone(), outbox_path.clone())
         .await
         .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

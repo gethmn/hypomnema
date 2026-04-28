@@ -6,14 +6,16 @@ use anyhow::{Context, Result};
 use tokio::task;
 
 use super::event::ChangeEvent;
+use crate::vault_registry::VaultId;
 
 pub struct Outbox {
+    vault_id: VaultId,
     path: PathBuf,
     file: Arc<Mutex<std::fs::File>>,
 }
 
 impl Outbox {
-    pub async fn open(path: PathBuf) -> Result<Self> {
+    pub async fn open(vault_id: VaultId, path: PathBuf) -> Result<Self> {
         let path_for_blocking = path.clone();
         let file = task::spawn_blocking(move || {
             std::fs::OpenOptions::new()
@@ -24,7 +26,13 @@ impl Outbox {
         })
         .await
         .context("spawn_blocking join error in Outbox::open")??;
+        tracing::info!(
+            vault_id = %vault_id,
+            path = %path.display(),
+            "outbox: opened"
+        );
         Ok(Self {
+            vault_id,
             path,
             file: Arc::new(Mutex::new(file)),
         })
@@ -46,6 +54,10 @@ impl Outbox {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub fn vault_id(&self) -> &VaultId {
+        &self.vault_id
+    }
 }
 
 #[cfg(test)]
@@ -54,8 +66,17 @@ mod tests {
     use crate::outbox::EventType;
     use tempfile::TempDir;
 
-    fn ev(kind: EventType, path: &str, hash: Option<&str>) -> ChangeEvent {
-        ChangeEvent::now(kind, path.to_string(), hash.map(|s| s.to_string()))
+    fn vault_id() -> VaultId {
+        VaultId::new()
+    }
+
+    fn ev(vault: &VaultId, kind: EventType, path: &str, hash: Option<&str>) -> ChangeEvent {
+        ChangeEvent::now(
+            vault.clone(),
+            kind,
+            path.to_string(),
+            hash.map(|s| s.to_string()),
+        )
     }
 
     fn read_lines(path: &Path) -> Vec<String> {
@@ -71,12 +92,18 @@ mod tests {
     async fn append_three_events_round_trips_through_disk() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("outbox.jsonl");
-        let outbox = Outbox::open(path.clone()).await.unwrap();
+        let vault = vault_id();
+        let outbox = Outbox::open(vault.clone(), path.clone()).await.unwrap();
 
         let inputs = [
-            ev(EventType::Created, "notes/a.md", Some("sha256:aaa")),
-            ev(EventType::Modified, "notes/a.md", Some("sha256:bbb")),
-            ev(EventType::Deleted, "notes/a.md", Some("sha256:bbb")),
+            ev(&vault, EventType::Created, "notes/a.md", Some("sha256:aaa")),
+            ev(
+                &vault,
+                EventType::Modified,
+                "notes/a.md",
+                Some("sha256:bbb"),
+            ),
+            ev(&vault, EventType::Deleted, "notes/a.md", Some("sha256:bbb")),
         ];
         for e in &inputs {
             outbox.append(e.clone()).await.unwrap();
@@ -97,9 +124,10 @@ mod tests {
 
         std::fs::write(&path, "{\"prior\":\"line\"}\n").unwrap();
 
-        let outbox = Outbox::open(path.clone()).await.unwrap();
+        let vault = vault_id();
+        let outbox = Outbox::open(vault.clone(), path.clone()).await.unwrap();
         outbox
-            .append(ev(EventType::Modified, "x.md", Some("sha256:1")))
+            .append(ev(&vault, EventType::Modified, "x.md", Some("sha256:1")))
             .await
             .unwrap();
 
@@ -114,7 +142,7 @@ mod tests {
     async fn open_on_missing_parent_directory_returns_err() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("does/not/exist/outbox.jsonl");
-        let result = Outbox::open(path).await;
+        let result = Outbox::open(vault_id(), path).await;
         assert!(result.is_err(), "expected Err for missing parent dir");
     }
 
@@ -122,14 +150,17 @@ mod tests {
     async fn concurrent_appends_all_land() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("outbox.jsonl");
-        let outbox = Arc::new(Outbox::open(path.clone()).await.unwrap());
+        let vault = vault_id();
+        let outbox = Arc::new(Outbox::open(vault.clone(), path.clone()).await.unwrap());
 
         let mut handles = Vec::new();
         for i in 0..10 {
             let outbox = outbox.clone();
+            let vault = vault.clone();
             handles.push(tokio::spawn(async move {
                 outbox
                     .append(ev(
+                        &vault,
                         EventType::Modified,
                         &format!("notes/{i}.md"),
                         Some(&format!("sha256:{i}")),
@@ -153,8 +184,17 @@ mod tests {
     async fn path_returns_open_path() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("outbox.jsonl");
-        let outbox = Outbox::open(path.clone()).await.unwrap();
+        let outbox = Outbox::open(vault_id(), path.clone()).await.unwrap();
         assert_eq!(outbox.path(), path.as_path());
+    }
+
+    #[tokio::test]
+    async fn vault_id_returns_open_vault_id() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("outbox.jsonl");
+        let id = vault_id();
+        let outbox = Outbox::open(id.clone(), path).await.unwrap();
+        assert_eq!(outbox.vault_id(), &id);
     }
 
     #[tokio::test]
@@ -162,17 +202,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("outbox.jsonl");
 
+        let vault = vault_id();
         {
-            let outbox = Outbox::open(path.clone()).await.unwrap();
+            let outbox = Outbox::open(vault.clone(), path.clone()).await.unwrap();
             outbox
-                .append(ev(EventType::Created, "first.md", Some("sha256:1")))
+                .append(ev(&vault, EventType::Created, "first.md", Some("sha256:1")))
                 .await
                 .unwrap();
         }
 
-        let outbox = Outbox::open(path.clone()).await.unwrap();
+        let outbox = Outbox::open(vault.clone(), path.clone()).await.unwrap();
         outbox
-            .append(ev(EventType::Modified, "first.md", Some("sha256:2")))
+            .append(ev(
+                &vault,
+                EventType::Modified,
+                "first.md",
+                Some("sha256:2"),
+            ))
             .await
             .unwrap();
 

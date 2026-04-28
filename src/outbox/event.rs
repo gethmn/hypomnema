@@ -1,8 +1,11 @@
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::vault_registry::VaultId;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChangeEvent {
+    pub vault: VaultId,
     pub event_type: EventType,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,8 +22,14 @@ pub enum EventType {
 }
 
 impl ChangeEvent {
-    pub fn now(event_type: EventType, path: String, content_hash: Option<String>) -> Self {
+    pub fn now(
+        vault: VaultId,
+        event_type: EventType,
+        path: String,
+        content_hash: Option<String>,
+    ) -> Self {
         Self {
+            vault,
             event_type,
             path,
             content_hash,
@@ -33,6 +42,10 @@ impl ChangeEvent {
 mod tests {
     use super::*;
     use chrono::DateTime;
+
+    fn vault() -> VaultId {
+        VaultId::from_string("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string())
+    }
 
     #[test]
     fn event_type_serializes_with_lowercase_discriminants() {
@@ -62,6 +75,7 @@ mod tests {
     #[test]
     fn content_hash_some_serializes_field() {
         let ev = ChangeEvent {
+            vault: vault(),
             event_type: EventType::Modified,
             path: "notes/a.md".to_string(),
             content_hash: Some("sha256:abc".to_string()),
@@ -74,6 +88,7 @@ mod tests {
     #[test]
     fn content_hash_none_is_omitted_not_null() {
         let ev = ChangeEvent {
+            vault: vault(),
             event_type: EventType::Deleted,
             path: "notes/a.md".to_string(),
             content_hash: None,
@@ -91,6 +106,7 @@ mod tests {
     fn change_event_round_trips_for_all_event_types() {
         for variant in [EventType::Created, EventType::Modified, EventType::Deleted] {
             let ev = ChangeEvent {
+                vault: vault(),
                 event_type: variant,
                 path: "notes/a.md".to_string(),
                 content_hash: Some("sha256:deadbeef".to_string()),
@@ -104,8 +120,30 @@ mod tests {
 
     #[test]
     fn now_produces_rfc3339_parseable_detected_at() {
-        let ev = ChangeEvent::now(EventType::Created, "notes/a.md".to_string(), None);
+        let ev = ChangeEvent::now(vault(), EventType::Created, "notes/a.md".to_string(), None);
         DateTime::parse_from_rfc3339(&ev.detected_at)
             .unwrap_or_else(|e| panic!("detected_at not RFC3339: {} ({e})", ev.detected_at));
+    }
+
+    #[test]
+    fn outbox_event_carries_vault_id() {
+        // Per workplan § Task 9.4: every outbox event line carries the
+        // vault: <id> field. This test pins the wire shape against a known
+        // vault_id string so a future regression on the field name or shape
+        // shows up as a clear assertion failure.
+        let id = VaultId::from_string("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string());
+        let ev = ChangeEvent::now(
+            id.clone(),
+            EventType::Created,
+            "notes/a.md".to_string(),
+            Some("sha256:abc".to_string()),
+        );
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(
+            s.contains("\"vault\":\"018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0\""),
+            "outbox line must carry vault id; got: {s}"
+        );
+        let back: ChangeEvent = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.vault, id);
     }
 }

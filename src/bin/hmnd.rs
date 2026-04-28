@@ -14,7 +14,7 @@ use hypomnema::logging::{self, BinaryKind};
 use hypomnema::outbox::Outbox;
 use hypomnema::shutdown;
 use hypomnema::store::Store;
-use hypomnema::vault_registry::VaultId;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher;
 
 // Interim placeholder vault identity for step-9 task 9.2. Both the daemon's
@@ -86,8 +86,11 @@ async fn dispatch(command: Option<Command>, config: Config) -> Result<()> {
 
 async fn run_daemon(config: Config) -> Result<()> {
     let pid = std::process::id();
-    let outbox_path = config.storage.data_dir.0.join(&config.storage.outbox_file);
+    let vault_id = interim_vault_id();
+    let outbox_path =
+        vault_data_dir(&config.storage.data_dir.0, &vault_id).join(&config.storage.outbox_file);
     tracing::info!(
+        vault_id = %vault_id,
         vault = %config.vault.0.display(),
         data_dir = %config.storage.data_dir.0.display(),
         outbox = %outbox_path.display(),
@@ -109,7 +112,6 @@ async fn run_daemon(config: Config) -> Result<()> {
         );
     }
 
-    let vault_id = interim_vault_id();
     let store = Store::open(
         &vault_id,
         &config.storage.data_dir.0,
@@ -134,7 +136,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         report.duration.as_secs_f64()
     );
 
-    let outbox = Outbox::open(outbox_path.clone())
+    let outbox = Outbox::open(vault_id.clone(), outbox_path.clone())
         .await
         .context("opening outbox")?;
 
@@ -143,6 +145,7 @@ async fn run_daemon(config: Config) -> Result<()> {
         .compiled_ignores()
         .context("compiling watcher.ignore_patterns for daemon watcher")?;
     let (watcher_handle, rx) = watcher::spawn_watcher(
+        &vault_id,
         &config.vault.0,
         ignores,
         Duration::from_millis(config.watcher.debounce_ms),

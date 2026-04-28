@@ -8,7 +8,7 @@ use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
-use hypomnema::vault_registry::VaultId;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -93,7 +93,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         Scanner::new(&fx.vault, &fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let outbox_path = fx.data_dir.join(&fx.config.storage.outbox_file);
+    let outbox_path =
+        vault_data_dir(&fx.data_dir, &fx.vault_id).join(&fx.config.storage.outbox_file);
     let state = ApiState {
         pool: store.pool(),
         vault: fx.vault.clone(),

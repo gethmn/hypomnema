@@ -100,6 +100,7 @@ async fn start(fx: &Fixture) -> Live {
         .compiled_ignores()
         .expect("compile ignores");
     let (watcher, rx) = watcher::spawn_watcher(
+        &fx.vault_id,
         &fx.vault,
         ignores,
         Duration::from_millis(fx.debounce_ms),
@@ -107,9 +108,12 @@ async fn start(fx: &Fixture) -> Live {
     )
     .expect("spawn watcher");
 
-    let outbox = Outbox::open(fx.data_dir.join("outbox.jsonl"))
-        .await
-        .expect("open outbox");
+    let outbox = Outbox::open(
+        fx.vault_id.clone(),
+        vault_data_dir(&fx.data_dir, &fx.vault_id).join("outbox.jsonl"),
+    )
+    .await
+    .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, outbox, shutdown_rx));
 

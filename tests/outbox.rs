@@ -9,7 +9,7 @@ use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::{Scanner, hash_file};
 use hypomnema::outbox::{ChangeEvent, EventType, Outbox};
 use hypomnema::store::Store;
-use hypomnema::vault_registry::VaultId;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::{self, Watcher};
 use tempfile::TempDir;
 use tokio::sync::watch;
@@ -58,7 +58,7 @@ fn fixture() -> Fixture {
 }
 
 fn outbox_path(fx: &Fixture) -> PathBuf {
-    fx.data_dir.join("outbox.jsonl")
+    vault_data_dir(&fx.data_dir, &fx.vault_id).join("outbox.jsonl")
 }
 
 struct Live {
@@ -94,6 +94,7 @@ async fn start(fx: &Fixture) -> Live {
         .compiled_ignores()
         .expect("compile ignores");
     let (watcher, rx) = watcher::spawn_watcher(
+        &fx.vault_id,
         &fx.vault,
         ignores,
         Duration::from_millis(fx.debounce_ms),
@@ -101,7 +102,9 @@ async fn start(fx: &Fixture) -> Live {
     )
     .expect("spawn watcher");
 
-    let outbox = Outbox::open(outbox_path(fx)).await.expect("open outbox");
+    let outbox = Outbox::open(fx.vault_id.clone(), outbox_path(fx))
+        .await
+        .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, outbox, shutdown_rx));
 
