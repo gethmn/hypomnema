@@ -16,7 +16,7 @@ use crate::config::{
 use crate::control_plane::VaultManager;
 use crate::embedding::{EmbedFuture, Embedder, EmbeddingError, StubEmbedder};
 use crate::store::{SqlitePool, Store};
-use crate::vault_registry::{VaultId, VaultRegistry, VaultStatus};
+use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus};
 
 // 4 MB is plenty for these test bodies; we set a finite cap to satisfy
 // `to_bytes` without inviting unbounded reads.
@@ -857,4 +857,605 @@ async fn search_filesystem_invalid_request_body_returns_400() {
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "invalid_request");
+}
+
+// ===== Cross-vault search tests =====
+//
+// Pinned to `docs/specs/vault-management.md § Cross-Vault Search Semantics`
+// (workplan § A's eight resolutions). Fixtures use `for_tests_full` to set
+// up multiple active vaults plus optional paused/errored row stubs without
+// spinning up a live `VaultManager::open` (which would need a registry +
+// embedder + watcher per vault).
+
+struct MultiVaultHarness {
+    _root: TempDir,
+    _vault_dirs: Vec<TempDir>,
+    state: ApiState,
+    pools: Vec<SqlitePool>,
+    ids: Vec<VaultId>,
+    #[allow(dead_code)]
+    names: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct InactiveStub {
+    name: String,
+    status: VaultStatus,
+    last_error: Option<String>,
+}
+
+async fn multi_vault_harness(active_names: Vec<&'static str>) -> MultiVaultHarness {
+    multi_vault_harness_with(active_names, vec![], Arc::new(StubEmbedder::new(DIM))).await
+}
+
+async fn multi_vault_harness_with(
+    active_names: Vec<&'static str>,
+    inactive: Vec<InactiveStub>,
+    embedder: Arc<dyn Embedder>,
+) -> MultiVaultHarness {
+    let root = TempDir::new().unwrap();
+    let mut pools: Vec<SqlitePool> = Vec::new();
+    let mut ids: Vec<VaultId> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    let mut entries: Vec<VaultEntry> = Vec::new();
+    let mut vault_dirs: Vec<TempDir> = Vec::new();
+    for name in &active_names {
+        let vault_dir = TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let store = Store::open(
+            &vault_id,
+            root.path(),
+            "index.sqlite",
+            &EmbeddingConfig::default(),
+        )
+        .await
+        .unwrap();
+        let outbox_path = root.path().join(format!("outbox-{name}.jsonl"));
+        let store = Arc::new(store);
+        let pool = store.pool();
+        let entry = VaultEntry {
+            id: vault_id.clone(),
+            name: (*name).to_string(),
+            vault_path: vault_dir.path().to_path_buf(),
+            outbox_path,
+            store,
+            status: VaultStatus::Active,
+        };
+        pools.push(pool);
+        ids.push(vault_id);
+        names.push((*name).to_string());
+        entries.push(entry);
+        vault_dirs.push(vault_dir);
+    }
+    let inactive_rows: Vec<VaultRow> = inactive
+        .into_iter()
+        .map(|stub| VaultRow {
+            id: VaultId::new(),
+            name: stub.name,
+            path: std::path::PathBuf::from("/dev/null"),
+            status: stub.status,
+            created_at: chrono::Utc::now(),
+            last_error: stub.last_error,
+        })
+        .collect();
+    let manager = Arc::new(VaultManager::for_tests_full(
+        entries,
+        inactive_rows,
+        embedder,
+        DIM as u32,
+    ));
+    let state = ApiState {
+        vault_manager: manager,
+    };
+    MultiVaultHarness {
+        _root: root,
+        _vault_dirs: vault_dirs,
+        state,
+        pools,
+        ids,
+        names,
+    }
+}
+
+/// Test embedder that returns a fixed unit vector on every call. Sufficient
+/// for cross-vault semantic tests where each per-vault call to
+/// `search_semantic` re-invokes the embedder; `OneShotEmbedder` errors on
+/// the second call which would mask the per-vault iteration shape.
+struct FixedEmbedder {
+    vector: Vec<f32>,
+}
+
+impl FixedEmbedder {
+    fn new(positions: &[(usize, f32)]) -> Arc<Self> {
+        Arc::new(Self {
+            vector: unit_vec(positions),
+        })
+    }
+}
+
+impl Embedder for FixedEmbedder {
+    fn embed_text<'a>(&'a self, _text: &'a str) -> EmbedFuture<'a> {
+        let v = self.vector.clone();
+        Box::pin(async move { Ok(v) })
+    }
+}
+
+#[tokio::test]
+async fn cross_vault_filesystem_results_global_path_sorted() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![
+            ("notes/a.md", "alpha", "2026-04-01T00:00:00Z"),
+            ("notes/m.md", "alpha-m", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![
+            ("notes/b.md", "bravo-b", "2026-04-01T00:00:00Z"),
+            ("notes/z.md", "bravo-z", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/filesystem", json!({ "glob": "**/*.md" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["notes/a.md", "notes/b.md", "notes/m.md", "notes/z.md"]
+    );
+    assert!(body.get("partial_results").is_none() || body["partial_results"].is_null());
+}
+
+#[tokio::test]
+async fn cross_vault_content_results_global_path_sorted() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![
+            ("docs/a.md", "needle alpha", "2026-04-01T00:00:00Z"),
+            ("docs/m.md", "needle alpha-m", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![
+            ("docs/b.md", "needle bravo", "2026-04-01T00:00:00Z"),
+            ("docs/z.md", "needle bravo-z", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/content", json!({ "query": "needle" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["docs/a.md", "docs/b.md", "docs/m.md", "docs/z.md"]
+    );
+    assert!(body.get("partial_results").is_none() || body["partial_results"].is_null());
+}
+
+#[tokio::test]
+async fn cross_vault_semantic_results_score_desc_sorted() {
+    // Two vaults, each with one chunk. Different cosine scores against the
+    // query vector; merged response must be score-descending.
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    // Vault 0 chunk: orthogonal to query → cosine 0.5 after [-1, 1] -> [0, 1]
+    // mapping (i.e. small-but-nonzero score).
+    seed_chunk(
+        h.pools[0].clone(),
+        "alpha.md",
+        0,
+        "Intro",
+        "alpha body",
+        unit_vec(&[(1, 1.0)]),
+    )
+    .await;
+    // Vault 1 chunk: parallel to query → cosine 1.0 → score 1.0.
+    seed_chunk(
+        h.pools[1].clone(),
+        "bravo.md",
+        0,
+        "Intro",
+        "bravo body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "any" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    // Higher score first.
+    let s0 = results[0]["score"].as_f64().unwrap();
+    let s1 = results[1]["score"].as_f64().unwrap();
+    assert!(s0 >= s1, "expected score-desc but got {s0} then {s1}");
+    assert_eq!(results[0]["file_path"], "bravo.md");
+    assert_eq!(results[1]["file_path"], "alpha.md");
+}
+
+#[tokio::test]
+async fn vaults_filter_narrows_to_subset_by_name() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![("a.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![("b.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "vaults": ["alpha"] }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["a.md"]);
+    let vault_names: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["vault_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(vault_names, vec!["alpha"]);
+}
+
+#[tokio::test]
+async fn vaults_filter_narrows_to_subset_by_id() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![("a.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![("b.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let target_id = h.ids[1].to_string();
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "vaults": [target_id.clone()] }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["b.md"]);
+    assert_eq!(body["results"][0]["vault"], target_id);
+}
+
+#[tokio::test]
+async fn vaults_filter_unknown_name_appears_in_partial_results_failed() {
+    let h = multi_vault_harness(vec!["alpha"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![("a.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "vaults": ["alpha", "ghost"] }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["a.md"]);
+    let failed = body["partial_results"]["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["code"], "vault_not_found");
+    assert_eq!(failed[0]["vault"], "ghost");
+}
+
+#[tokio::test]
+async fn vaults_filter_empty_array_returns_invalid_request() {
+    let h = multi_vault_harness(vec!["alpha"]).await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "vaults": [] }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+}
+
+#[tokio::test]
+async fn paused_vault_skipped_with_partial_results_diagnostic() {
+    let h = multi_vault_harness_with(
+        vec!["alpha"],
+        vec![InactiveStub {
+            name: "bravo".to_string(),
+            status: VaultStatus::Paused,
+            last_error: None,
+        }],
+        Arc::new(StubEmbedder::new(DIM)),
+    )
+    .await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![("a.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/filesystem", json!({ "glob": "**/*.md" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    // Active vault still returns results.
+    assert_eq!(body["results"].as_array().unwrap().len(), 1);
+    // Paused vault appears in skipped.
+    let skipped = body["partial_results"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["status"], "paused");
+    assert_eq!(skipped[0]["vault_name"], "bravo");
+    assert_eq!(skipped[0]["reason"], "vault is paused");
+}
+
+#[tokio::test]
+async fn errored_vault_skipped_with_last_error_propagated() {
+    let h = multi_vault_harness_with(
+        vec!["alpha"],
+        vec![InactiveStub {
+            name: "broken".to_string(),
+            status: VaultStatus::Errored,
+            last_error: Some("vault path /home/foo no longer accessible".to_string()),
+        }],
+        Arc::new(StubEmbedder::new(DIM)),
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/filesystem", json!({ "glob": "**/*.md" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let skipped = body["partial_results"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["status"], "errored");
+    let reason = skipped[0]["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("vault path /home/foo no longer accessible"),
+        "expected last_error propagated, got: {reason}"
+    );
+    assert!(reason.starts_with("vault is errored: "));
+}
+
+#[tokio::test]
+async fn partial_results_omitted_when_all_active() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![("a.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![("b.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/filesystem", json!({ "glob": "**/*.md" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    // The field is `skip_serializing_if = Option::is_none` → absent on the wire.
+    assert!(
+        body.get("partial_results").is_none(),
+        "expected partial_results absent when all vaults active, got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn truncated_true_when_global_limit_capped_after_merge() {
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![
+            ("a1.md", "x", "2026-04-01T00:00:00Z"),
+            ("a2.md", "x", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![
+            ("b1.md", "x", "2026-04-01T00:00:00Z"),
+            ("b2.md", "x", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "limit": 2 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+    assert_eq!(body["truncated"], true);
+}
+
+#[tokio::test]
+async fn cross_vault_path_collision_breaks_tie_by_vault_id() {
+    // Same path indexed in both vaults → identical sort key. Tie-break by
+    // vault_id (UUIDv7 → creation-time-stable). The first-created vault has
+    // the lexicographically-smaller id, so its result lands first.
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    let id_alpha = h.ids[0].to_string();
+    let id_bravo = h.ids[1].to_string();
+    assert!(
+        id_alpha < id_bravo,
+        "UUIDv7 invariant: first-created id is smaller (got alpha={id_alpha}, bravo={id_bravo})"
+    );
+
+    seed_files(
+        h.pools[0].clone(),
+        vec![("notes/shared.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![("notes/shared.md", "x", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/filesystem", json!({ "glob": "**/*.md" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["path"], "notes/shared.md");
+    assert_eq!(results[1]["path"], "notes/shared.md");
+    assert_eq!(results[0]["vault"], id_alpha);
+    assert_eq!(results[1]["vault"], id_bravo);
+}
+
+#[tokio::test]
+async fn merged_limit_applied_after_per_vault_search() {
+    // Each vault returns up to `limit` rows; the merged set is then capped
+    // at the same `limit`. Per-vault search reports `truncated` only if it
+    // hits its own cap; with 2 rows per vault and limit=2, no per-vault
+    // truncation, but the merge of 4 → 2 capped.
+    let h = multi_vault_harness(vec!["alpha", "bravo"]).await;
+    seed_files(
+        h.pools[0].clone(),
+        vec![
+            ("aa.md", "x", "2026-04-01T00:00:00Z"),
+            ("am.md", "x", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    seed_files(
+        h.pools[1].clone(),
+        vec![
+            ("ba.md", "x", "2026-04-01T00:00:00Z"),
+            ("bm.md", "x", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/filesystem",
+        json!({ "glob": "**/*.md", "limit": 2 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    // Global path-sort: aa, am, ba, bm → first two are aa, am.
+    assert_eq!(paths, vec!["aa.md", "am.md"]);
+    assert_eq!(body["truncated"], true);
+}
+
+#[tokio::test]
+async fn semantic_search_assumes_same_dimension_across_vaults() {
+    // The daemon's embedding service is configured per-daemon; all vaults
+    // share the same dimension. The defensive path: if a per-vault search
+    // somehow errored on a storage-level dimension issue, the error would
+    // appear in `partial_results.failed` (code `vault_search_failed`) and
+    // the other vault still returns. We force this by dropping the
+    // `chunks_vec` table on one vault — sqlite-vec then errors on MATCH.
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    // Vault 0: real chunk that will succeed.
+    seed_chunk(
+        h.pools[0].clone(),
+        "ok.md",
+        0,
+        "Intro",
+        "alpha body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    // Vault 1: drop chunks_vec so any MATCH errors at the SQL layer.
+    let pool = h.pools[1].clone();
+    task::spawn_blocking(move || {
+        let conn = pool.get().unwrap();
+        conn.execute("DROP TABLE chunks_vec", []).unwrap();
+    })
+    .await
+    .unwrap();
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK, "should not crash; got {body}");
+    // Vault 0's chunk survives in results.
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["file_path"], "ok.md");
+    // Vault 1 lands in failed.
+    let failed = body["partial_results"]["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["code"], "vault_search_failed");
+    assert_eq!(failed[0]["vault_name"], "bravo");
 }

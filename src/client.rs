@@ -277,6 +277,7 @@ mod tests {
                 include_matches: true,
                 max_matches_per_file: None,
                 limit: None,
+                vaults: None,
             })
             .await
             .expect("content search succeeds");

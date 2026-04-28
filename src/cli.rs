@@ -85,6 +85,10 @@ pub enum SearchMode {
         /// Max results.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Restrict the search to a subset of vaults (comma-separated names or ids).
+        /// Repeating the flag also works. Omitting queries all active vaults.
+        #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
+        vaults: Vec<String>,
     },
     /// Substring/regex over file contents.
     Content {
@@ -96,6 +100,9 @@ pub enum SearchMode {
         /// Max results.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Restrict the search to a subset of vaults (comma-separated names or ids).
+        #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
+        vaults: Vec<String>,
     },
     /// Natural-language semantic search.
     Semantic {
@@ -107,6 +114,9 @@ pub enum SearchMode {
         /// Max results.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Restrict the search to a subset of vaults (comma-separated names or ids).
+        #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
+        vaults: Vec<String>,
     },
 }
 
@@ -143,11 +153,13 @@ mod tests {
                         query,
                         prefix,
                         limit,
+                        vaults,
                     },
             } => {
                 assert_eq!(query, "notes/**/*.md");
                 assert!(prefix.is_none());
                 assert!(limit.is_none());
+                assert!(vaults.is_empty());
             }
             _ => panic!("expected Search/Filesystem"),
         }
@@ -166,11 +178,13 @@ mod tests {
                         query,
                         prefix,
                         limit,
+                        vaults,
                     },
             } => {
                 assert_eq!(query, "pgvector");
                 assert_eq!(prefix.as_deref(), Some("notes"));
                 assert_eq!(limit, Some(25));
+                assert!(vaults.is_empty());
             }
             _ => panic!("expected Search/Content"),
         }
@@ -186,6 +200,63 @@ mod tests {
             } => {
                 assert_eq!(query, "how do indexes work");
             }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn parses_search_filesystem_with_vaults_comma_separated() {
+        // Per spec § Cross-Vault Search Semantics § `vaults` filter, the
+        // CLI accepts comma-separated names/ids. clap's `value_delimiter`
+        // splits one occurrence of the flag.
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "filesystem",
+            "**/*.md",
+            "--vaults",
+            "alpha,bravo",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode: SearchMode::Filesystem { vaults, .. },
+            } => assert_eq!(vaults, vec!["alpha".to_string(), "bravo".to_string()]),
+            _ => panic!("expected Search/Filesystem"),
+        }
+    }
+
+    #[test]
+    fn parses_search_content_with_vaults_repeated_flag() {
+        // Repeating the flag also accumulates entries — confirms that the
+        // value-delimiter usage doesn't cap the flag at a single occurrence.
+        let cli = Cli::try_parse_from([
+            "hmn", "search", "content", "needle", "--vaults", "alpha", "--vaults", "bravo",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode: SearchMode::Content { vaults, .. },
+            } => assert_eq!(vaults, vec!["alpha".to_string(), "bravo".to_string()]),
+            _ => panic!("expected Search/Content"),
+        }
+    }
+
+    #[test]
+    fn parses_search_semantic_with_vaults() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--vaults",
+            "personal,work",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode: SearchMode::Semantic { vaults, .. },
+            } => assert_eq!(vaults, vec!["personal".to_string(), "work".to_string()]),
             _ => panic!("expected Search/Semantic"),
         }
     }

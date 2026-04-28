@@ -21,6 +21,25 @@ use crate::watcher;
 
 use super::runner::{RunnerLifecycle, VaultRunner};
 
+/// One vault's view from the perspective of cross-vault search. Combines a
+/// registry row's identity + lifecycle status + (when active) the live
+/// runner's `VaultEntry`. Search handlers iterate these:
+///
+/// - `entry: Some(_)` → run the per-vault search.
+/// - `entry: None` with `status: Paused | Errored` → skip and add a
+///   `partial_results.skipped` diagnostic to the response envelope.
+/// - `entry: None` with `status: Active` → registry says active but no live
+///   runner; treat as a `partial_results.failed` (`vault_search_failed`)
+///   case. Should not happen in step-10's static manager but is defended
+///   against because step 11's pause/resume mutates the runner set.
+pub struct VaultScopeRow {
+    pub id: VaultId,
+    pub name: String,
+    pub status: VaultStatus,
+    pub last_error: Option<String>,
+    pub entry: Option<Arc<VaultEntry>>,
+}
+
 const TERMINATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCHER_BUFFER: usize = 256;
 const NAME_HINT_MAX_DISTANCE: usize = 3;
@@ -138,6 +157,10 @@ struct ManagerInner {
     /// Production spawn context. `None` for `for_tests`-constructed managers,
     /// in which case `create`/`terminate` return `Internal`.
     spawn: Option<SpawnCtx>,
+    /// Test-only: paused/errored row stubs for cross-vault search fixtures.
+    /// Empty in production; production gets paused/errored rows from the
+    /// registry's `list()` instead.
+    test_inactive_rows: Vec<VaultRow>,
 }
 
 struct SpawnCtx {
@@ -197,6 +220,7 @@ impl VaultManager {
                     data_dir,
                     shutdown_rx,
                 }),
+                test_inactive_rows: Vec::new(),
             }),
         })
     }
@@ -211,8 +235,22 @@ impl VaultManager {
         embedder: Arc<dyn Embedder>,
         embedding_dimension: u32,
     ) -> Self {
+        Self::for_tests_full(entries, Vec::new(), embedder, embedding_dimension)
+    }
+
+    /// Test-only constructor that additionally accepts paused/errored row
+    /// stubs surfaced by `search_scope()` for cross-vault search fixtures.
+    /// Each entry in `inactive_rows` is *not* given a runner — its `status`
+    /// and `last_error` flow straight into the search handler's
+    /// `partial_results.skipped` diagnostic.
+    pub fn for_tests_full(
+        active_entries: Vec<VaultEntry>,
+        inactive_rows: Vec<VaultRow>,
+        embedder: Arc<dyn Embedder>,
+        embedding_dimension: u32,
+    ) -> Self {
         let mut runners: HashMap<VaultId, Arc<VaultRunner>> = HashMap::new();
-        for entry in entries {
+        for entry in active_entries {
             let id = entry.id.clone();
             runners.insert(id, Arc::new(VaultRunner::test_only(entry)));
         }
@@ -222,6 +260,7 @@ impl VaultManager {
                 embedder,
                 embedding_dimension,
                 spawn: None,
+                test_inactive_rows: inactive_rows,
             }),
         }
     }
@@ -256,6 +295,78 @@ impl VaultManager {
                 }
             })
             .collect()
+    }
+
+    /// Snapshot of every registered vault for cross-vault search. Active
+    /// vaults carry their live `VaultEntry` (so handlers can run a per-vault
+    /// search); paused/errored vaults carry status + last_error so handlers
+    /// can build the `partial_results.skipped` diagnostic. Async because
+    /// production reads the registry; for_tests synthesizes from runners +
+    /// injected inactive rows.
+    pub async fn search_scope(&self) -> Result<Vec<VaultScopeRow>, ControlPlaneError> {
+        if let Some(spawn) = self.inner.spawn.as_ref() {
+            let rows =
+                spawn
+                    .registry
+                    .list()
+                    .await
+                    .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                        detail: format!("{e:#}"),
+                    })?;
+            let runners_guard = self
+                .inner
+                .runners
+                .read()
+                .expect("vault manager runners RwLock poisoned");
+            let scope = rows
+                .into_iter()
+                .map(|row| {
+                    let entry = if matches!(row.status, VaultStatus::Active) {
+                        runners_guard.get(&row.id).map(|r| r.entry().clone())
+                    } else {
+                        None
+                    };
+                    VaultScopeRow {
+                        id: row.id,
+                        name: row.name,
+                        status: row.status,
+                        last_error: row.last_error,
+                        entry,
+                    }
+                })
+                .collect();
+            return Ok(scope);
+        }
+        let runners_guard = self
+            .inner
+            .runners
+            .read()
+            .expect("vault manager runners RwLock poisoned");
+        let mut scope: Vec<VaultScopeRow> = runners_guard
+            .values()
+            .map(|runner| {
+                let entry = runner.entry().clone();
+                let active = entry.is_active();
+                VaultScopeRow {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    status: entry.status,
+                    last_error: None,
+                    entry: if active { Some(entry) } else { None },
+                }
+            })
+            .collect();
+        drop(runners_guard);
+        for row in &self.inner.test_inactive_rows {
+            scope.push(VaultScopeRow {
+                id: row.id.clone(),
+                name: row.name.clone(),
+                status: row.status,
+                last_error: row.last_error.clone(),
+                entry: None,
+            });
+        }
+        Ok(scope)
     }
 
     /// Resolve a name-or-id to a `VaultId`. Tries id-match first, then

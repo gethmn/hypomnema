@@ -30,5 +30,5 @@ mod runner;
 #[cfg(test)]
 mod tests;
 
-pub use manager::{ControlPlaneError, CreateVaultRequest, VaultManager};
+pub use manager::{ControlPlaneError, CreateVaultRequest, VaultManager, VaultScopeRow};
 pub use runner::VaultRunner;

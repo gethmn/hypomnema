@@ -47,6 +47,7 @@ async fn main() -> ExitCode {
                 query,
                 prefix,
                 limit,
+                vaults,
             } => {
                 cmd_search_filesystem(
                     &config,
@@ -55,6 +56,7 @@ async fn main() -> ExitCode {
                     query,
                     prefix,
                     limit,
+                    vaults,
                 )
                 .await
             }
@@ -62,6 +64,7 @@ async fn main() -> ExitCode {
                 query,
                 prefix,
                 limit,
+                vaults,
             } => {
                 cmd_search_content(
                     &config,
@@ -70,6 +73,7 @@ async fn main() -> ExitCode {
                     query,
                     prefix,
                     limit,
+                    vaults,
                 )
                 .await
             }
@@ -77,6 +81,7 @@ async fn main() -> ExitCode {
                 query,
                 prefix,
                 limit,
+                vaults,
             } => {
                 cmd_search_semantic(
                     &config,
@@ -85,6 +90,7 @@ async fn main() -> ExitCode {
                     query,
                     prefix,
                     limit,
+                    vaults,
                 )
                 .await
             }
@@ -115,6 +121,7 @@ async fn cmd_search_filesystem(
     query: String,
     prefix: Option<String>,
     limit: Option<usize>,
+    vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = FilesystemQueryJson {
@@ -122,6 +129,7 @@ async fn cmd_search_filesystem(
         glob: Some(query),
         max_depth: None,
         limit,
+        vaults: vaults_or_none(vaults),
     };
     let resp = client.search_filesystem(&req).await?;
     if json {
@@ -139,6 +147,7 @@ async fn cmd_search_content(
     query: String,
     prefix: Option<String>,
     limit: Option<usize>,
+    vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = ContentQueryJson {
@@ -149,6 +158,7 @@ async fn cmd_search_content(
         include_matches: true,
         max_matches_per_file: None,
         limit,
+        vaults: vaults_or_none(vaults),
     };
     let resp = client.search_content(&req).await?;
     if json {
@@ -166,6 +176,7 @@ async fn cmd_search_semantic(
     query: String,
     prefix: Option<String>,
     limit: Option<usize>,
+    vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = SemanticQueryJson {
@@ -173,6 +184,7 @@ async fn cmd_search_semantic(
         prefix,
         limit,
         min_similarity: None,
+        vaults: vaults_or_none(vaults),
     };
     let resp = client.search_semantic(&req).await?;
     if json {
@@ -181,6 +193,10 @@ async fn cmd_search_semantic(
         print!("{}", render_semantic_text(&resp));
     }
     Ok(())
+}
+
+fn vaults_or_none(v: Vec<String>) -> Option<Vec<String>> {
+    if v.is_empty() { None } else { Some(v) }
 }
 
 async fn cmd_mcp(config: &Config, override_url: Option<&str>) -> Result<()> {
@@ -512,6 +528,7 @@ mod tests {
                 "Pgvector supports HNSW indexes.",
             )],
             hint: None,
+            partial_results: None,
         };
         let out = render_semantic_text(&resp);
         assert!(
@@ -538,6 +555,7 @@ mod tests {
                 "body",
             )],
             hint: None,
+            partial_results: None,
         };
         let out = render_semantic_text(&resp);
         assert!(
@@ -555,6 +573,7 @@ mod tests {
         let resp = SemanticSearchResponse {
             results: vec![],
             hint: Some("semantic index is building".to_string()),
+            partial_results: None,
         };
         let out = render_semantic_text(&resp);
         assert!(

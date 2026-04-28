@@ -24,6 +24,11 @@ pub struct FilesystemQueryJson {
         description = "Maximum number of results. Defaults to 100; results beyond this are truncated and the response carries `truncated: true`."
     )]
     pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict the search to a subset of vaults. Each entry matches against vault name first, then surrogate id. Unknown entries land in `partial_results.failed`. Omitting (or `null`) queries all currently active vaults; `[]` is rejected with `invalid_request`."
+    )]
+    pub vaults: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -31,6 +36,8 @@ pub struct FilesystemQueryJson {
 pub struct FilesystemSearchResponse {
     pub results: Vec<FilesystemResultJson>,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_results: Option<PartialResults>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -79,6 +86,11 @@ pub struct ContentQueryJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(description = "Maximum number of result files. Defaults to 100.")]
     pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict the search to a subset of vaults. Each entry matches against vault name first, then surrogate id. Unknown entries land in `partial_results.failed`. Omitting (or `null`) queries all currently active vaults; `[]` is rejected with `invalid_request`."
+    )]
+    pub vaults: Option<Vec<String>>,
 }
 
 fn default_include_matches() -> bool {
@@ -90,6 +102,8 @@ fn default_include_matches() -> bool {
 pub struct ContentSearchResponse {
     pub results: Vec<ContentResultJson>,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_results: Option<PartialResults>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -129,6 +143,11 @@ pub struct SemanticQueryJson {
         description = "Filter results to those whose cosine similarity score is >= this value, in [0.0, 1.0]. Out-of-range values are clamped. Defaults to 0.0 (no filter)."
     )]
     pub min_similarity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Restrict the search to a subset of vaults. Each entry matches against vault name first, then surrogate id. Unknown entries land in `partial_results.failed`. Omitting (or `null`) queries all currently active vaults; `[]` is rejected with `invalid_request`."
+    )]
+    pub vaults: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -137,6 +156,8 @@ pub struct SemanticSearchResponse {
     pub results: Vec<SemanticResultJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_results: Option<PartialResults>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -151,6 +172,44 @@ pub struct SemanticResultJson {
     pub vault: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_name: Option<String>,
+}
+
+// ===== Cross-vault partial-results diagnostics =====
+//
+// Pinned to docs/specs/vault-management.md § Cross-Vault Search Semantics §
+// Partial-failure handling (workplan § A.6/A.7/A.8). Embedded as
+// `partial_results: Option<...>` on every search response envelope; absent
+// from the wire when no per-vault search was skipped or failed.
+//
+// `skipped` is for *intentional* exclusions (paused/errored vaults).
+// `failed` is for *unexpected* runtime errors (per-vault search failure,
+// unknown name in `vaults` filter).
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct PartialResults {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<SkippedVault>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedVault>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SkippedVault {
+    pub vault: String,
+    pub vault_name: String,
+    pub status: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct FailedVault {
+    pub vault: String,
+    pub vault_name: String,
+    pub code: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +360,7 @@ mod tests {
                 vault_name: Some("default".to_string()),
             }],
             truncated: false,
+            partial_results: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         let entry = &v["results"][0];
@@ -325,6 +385,7 @@ mod tests {
                 vault_name: Some("default".to_string()),
             }],
             truncated: false,
+            partial_results: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         let entry = &v["results"][0];
@@ -348,6 +409,7 @@ mod tests {
                 vault_name: Some("default".to_string()),
             }],
             hint: None,
+            partial_results: None,
         };
         let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
         let entry = &v["results"][0];

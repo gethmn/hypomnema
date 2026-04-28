@@ -174,6 +174,7 @@ mod tests {
                         vault_name: None,
                     }],
                     truncated: false,
+                    partial_results: None,
                 })
             }),
         );
@@ -214,6 +215,7 @@ mod tests {
                         vault_name: None,
                     }],
                     truncated: false,
+                    partial_results: None,
                 })
             }),
         );
@@ -229,6 +231,7 @@ mod tests {
                 include_matches: true,
                 max_matches_per_file: None,
                 limit: None,
+                vaults: None,
             }))
             .await;
 
@@ -257,6 +260,7 @@ mod tests {
                         vault_name: None,
                     }],
                     hint: None,
+                    partial_results: None,
                 })
             }),
         );
