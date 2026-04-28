@@ -1,9 +1,9 @@
-mod error;
+pub(crate) mod error;
 mod health;
-mod search;
+pub(crate) mod search;
 mod status;
 pub mod types;
-mod vaults;
+pub(crate) mod vaults;
 
 use std::path::PathBuf;
 use std::sync::Arc;

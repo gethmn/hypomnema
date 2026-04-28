@@ -2,9 +2,11 @@ use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 
 pub mod backend;
+pub mod backend_in_process;
 mod server;
 
 pub use backend::HypomnemaBackend;
+pub use backend_in_process::InProcessBackend;
 pub use server::{HypomnemaMcpServer, daemon_unreachable_envelope};
 
 pub async fn serve_stdio(server: HypomnemaMcpServer) -> Result<()> {

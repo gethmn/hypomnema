@@ -172,6 +172,18 @@ impl IntoResponse for ApiError {
     }
 }
 
+// Mirrors the wire-shape that `DaemonClient::decode_response` produces for
+// failed HTTP calls (`anyhow!("{code}: {message}")`). This lets the
+// in-process backend surface the same anyhow display that
+// `mcp::server::envelope_from_anyhow` already knows how to split into a
+// structured envelope, so HTTP and in-process backends route identical
+// `{code, message}` payloads to MCP hosts.
+impl From<ApiError> for anyhow::Error {
+    fn from(err: ApiError) -> Self {
+        anyhow::anyhow!("{}: {}", err.code, err.message)
+    }
+}
+
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
         // The query layer encodes user-facing failure modes as anyhow chains

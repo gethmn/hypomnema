@@ -1,5 +1,9 @@
+use chrono::SecondsFormat;
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+
+use crate::control_plane::RescanResponse;
+use crate::vault_registry::VaultRow;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -255,6 +259,19 @@ pub struct VaultRowJson {
     pub last_error: Option<String>,
 }
 
+impl From<VaultRow> for VaultRowJson {
+    fn from(row: VaultRow) -> Self {
+        VaultRowJson {
+            id: row.id.to_string(),
+            name: row.name,
+            path: row.path.display().to_string(),
+            status: row.status.as_str().to_string(),
+            created_at: row.created_at.to_rfc3339_opts(SecondsFormat::Micros, true),
+            last_error: row.last_error,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultListResponse {
     pub vaults: Vec<VaultRowJson>,
@@ -282,6 +299,17 @@ pub struct RescanResponseJson {
     #[serde(flatten)]
     pub row: VaultRowJson,
     pub rescan_initiated_at: String,
+}
+
+impl From<RescanResponse> for RescanResponseJson {
+    fn from(resp: RescanResponse) -> Self {
+        RescanResponseJson {
+            row: VaultRowJson::from(resp.row),
+            rescan_initiated_at: resp
+                .rescan_initiated_at
+                .to_rfc3339_opts(SecondsFormat::Micros, true),
+        }
+    }
 }
 
 // ===== MCP-tool input shapes for vault control-plane wrappers =====

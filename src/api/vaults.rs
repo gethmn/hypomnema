@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use chrono::SecondsFormat;
 
 use super::ApiState;
 use super::error::{ApiError, ApiJson};
@@ -11,7 +10,6 @@ use super::types::{
     VaultListResponse, VaultRowJson,
 };
 use crate::control_plane::CreateVaultRequest as ControlCreateRequest;
-use crate::vault_registry::VaultRow;
 
 pub(crate) async fn create(
     State(s): State<ApiState>,
@@ -24,13 +22,13 @@ pub(crate) async fn create(
             path: PathBuf::from(req.path),
         })
         .await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn list(State(s): State<ApiState>) -> Result<Json<VaultListResponse>, ApiError> {
     let rows = s.vault_manager.list().await?;
     Ok(Json(VaultListResponse {
-        vaults: rows.into_iter().map(vault_row_to_json).collect(),
+        vaults: rows.into_iter().map(VaultRowJson::from).collect(),
     }))
 }
 
@@ -39,7 +37,7 @@ pub(crate) async fn get(
     Path(name_or_id): Path<String>,
 ) -> Result<Json<VaultRowJson>, ApiError> {
     let row = s.vault_manager.get(&name_or_id).await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn terminate(
@@ -63,7 +61,7 @@ pub(crate) async fn pause(
     Path(name_or_id): Path<String>,
 ) -> Result<Json<VaultRowJson>, ApiError> {
     let row = s.vault_manager.pause(&name_or_id).await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn resume(
@@ -71,7 +69,7 @@ pub(crate) async fn resume(
     Path(name_or_id): Path<String>,
 ) -> Result<Json<VaultRowJson>, ApiError> {
     let row = s.vault_manager.resume(&name_or_id).await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn reset(
@@ -81,7 +79,7 @@ pub(crate) async fn reset(
 ) -> Result<Json<VaultRowJson>, ApiError> {
     let rebuild = body.map(|ApiJson(b)| b.rebuild).unwrap_or(false);
     let row = s.vault_manager.reset(&name_or_id, rebuild).await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn rename(
@@ -90,7 +88,7 @@ pub(crate) async fn rename(
     ApiJson(req): ApiJson<RenameRequest>,
 ) -> Result<Json<VaultRowJson>, ApiError> {
     let row = s.vault_manager.rename(&name_or_id, &req.new_name).await?;
-    Ok(Json(vault_row_to_json(row)))
+    Ok(Json(VaultRowJson::from(row)))
 }
 
 pub(crate) async fn rescan(
@@ -98,21 +96,5 @@ pub(crate) async fn rescan(
     Path(name_or_id): Path<String>,
 ) -> Result<Json<RescanResponseJson>, ApiError> {
     let resp = s.vault_manager.rescan(&name_or_id).await?;
-    Ok(Json(RescanResponseJson {
-        row: vault_row_to_json(resp.row),
-        rescan_initiated_at: resp
-            .rescan_initiated_at
-            .to_rfc3339_opts(SecondsFormat::Micros, true),
-    }))
-}
-
-fn vault_row_to_json(row: VaultRow) -> VaultRowJson {
-    VaultRowJson {
-        id: row.id.to_string(),
-        name: row.name,
-        path: row.path.display().to_string(),
-        status: row.status.as_str().to_string(),
-        created_at: row.created_at.to_rfc3339_opts(SecondsFormat::Micros, true),
-        last_error: row.last_error,
-    }
+    Ok(Json(RescanResponseJson::from(resp)))
 }

@@ -11,7 +11,7 @@ use super::types::{
     SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, SkippedVault,
 };
 use crate::api::VaultEntry;
-use crate::control_plane::VaultScopeRow;
+use crate::control_plane::{VaultManager, VaultScopeRow};
 use crate::search::{
     ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery, SemanticResult,
     SemanticSearchError, search_content, search_filesystem, search_semantic,
@@ -25,18 +25,27 @@ pub(crate) async fn filesystem(
     State(s): State<ApiState>,
     ApiJson(req): ApiJson<FilesystemQueryJson>,
 ) -> Result<Json<FilesystemSearchResponse>, ApiError> {
+    run_filesystem_search(&s.vault_manager, &req)
+        .await
+        .map(Json)
+}
+
+pub(crate) async fn run_filesystem_search(
+    manager: &VaultManager,
+    req: &FilesystemQueryJson,
+) -> Result<FilesystemSearchResponse, ApiError> {
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT);
     let q_template = FilesystemQuery {
-        prefix: req.prefix,
-        glob: req.glob,
+        prefix: req.prefix.clone(),
+        glob: req.glob.clone(),
         max_depth: req.max_depth,
         limit,
     };
 
-    let scope = s.vault_manager.search_scope().await?;
+    let scope = manager.search_scope().await?;
     let plan = filter_scope(scope, req.vaults.as_deref());
 
     let mut all_results: Vec<FilesystemResultJson> = Vec::new();
@@ -89,26 +98,33 @@ pub(crate) async fn filesystem(
         all_results.truncate(limit);
     }
 
-    Ok(Json(FilesystemSearchResponse {
+    Ok(FilesystemSearchResponse {
         results: all_results,
         truncated: any_truncated || was_capped,
         partial_results: build_partial_results(skipped, failed),
-    }))
+    })
 }
 
 pub(crate) async fn content(
     State(s): State<ApiState>,
     ApiJson(req): ApiJson<ContentQueryJson>,
 ) -> Result<Json<ContentSearchResponse>, ApiError> {
+    run_content_search(&s.vault_manager, &req).await.map(Json)
+}
+
+pub(crate) async fn run_content_search(
+    manager: &VaultManager,
+    req: &ContentQueryJson,
+) -> Result<ContentSearchResponse, ApiError> {
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT);
     let q_template = ContentQuery {
-        query: req.query,
+        query: req.query.clone(),
         regex: req.regex,
         case_sensitive: req.case_sensitive,
-        prefix: req.prefix,
+        prefix: req.prefix.clone(),
         include_matches: req.include_matches,
         max_matches_per_file: req
             .max_matches_per_file
@@ -116,7 +132,7 @@ pub(crate) async fn content(
         limit,
     };
 
-    let scope = s.vault_manager.search_scope().await?;
+    let scope = manager.search_scope().await?;
     let plan = filter_scope(scope, req.vaults.as_deref());
 
     let mut all_results: Vec<ContentResultJson> = Vec::new();
@@ -163,32 +179,39 @@ pub(crate) async fn content(
         all_results.truncate(limit);
     }
 
-    Ok(Json(ContentSearchResponse {
+    Ok(ContentSearchResponse {
         results: all_results,
         truncated: any_truncated || was_capped,
         partial_results: build_partial_results(skipped, failed),
-    }))
+    })
 }
 
 pub(crate) async fn semantic(
     State(s): State<ApiState>,
     ApiJson(req): ApiJson<SemanticQueryJson>,
 ) -> Result<Json<SemanticSearchResponse>, ApiError> {
+    run_semantic_search(&s.vault_manager, &req).await.map(Json)
+}
+
+pub(crate) async fn run_semantic_search(
+    manager: &VaultManager,
+    req: &SemanticQueryJson,
+) -> Result<SemanticSearchResponse, ApiError> {
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT);
     let q_template = SemanticQuery {
-        query: req.query,
-        prefix: req.prefix,
+        query: req.query.clone(),
+        prefix: req.prefix.clone(),
         limit,
         min_similarity: req.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0),
     };
 
-    let embedder = s.vault_manager.embedder();
-    let dimension = s.vault_manager.embedding_dimension();
+    let embedder = manager.embedder();
+    let dimension = manager.embedding_dimension();
 
-    let scope = s.vault_manager.search_scope().await?;
+    let scope = manager.search_scope().await?;
     let plan = filter_scope(scope, req.vaults.as_deref());
 
     let mut all_results: Vec<SemanticResultJson> = Vec::new();
@@ -256,11 +279,11 @@ pub(crate) async fn semantic(
         None
     };
 
-    Ok(Json(SemanticSearchResponse {
+    Ok(SemanticSearchResponse {
         results: all_results,
         hint,
         partial_results: build_partial_results(skipped, failed),
-    }))
+    })
 }
 
 // ===== Helpers =====
