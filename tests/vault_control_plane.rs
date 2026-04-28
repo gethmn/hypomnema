@@ -1034,3 +1034,713 @@ async fn errored_vault_skipped_with_last_error_propagated() {
 
     daemon.shutdown().await;
 }
+
+// ===== Step 11 · Task 11.7: lifecycle-op integration tests over HTTP =====
+//
+// Round-3 shipping gate. Each test exercises a single lifecycle op (or a
+// combination) end-to-end through the live HTTP TCP transport using
+// `LiveControlPlaneDaemon` (real `VaultManager::open`, real per-vault store +
+// outbox + watcher + indexer). The unit-level handler tests in
+// `src/api/tests.rs` cover happy-path shapes; these add: real HTTP transport,
+// outbox-file inspection, post-rebuild rescan emission, multi-op composition,
+// and concurrency edge cases.
+
+/// Like `spawn_live_daemon`, but pre-inserts an `Errored` row into the
+/// registry before opening the manager. Mirrors `errored_vault_harness` from
+/// `src/api/tests.rs`. Returns the daemon plus the bogus path the errored row
+/// was registered against (the caller can `fs::create_dir_all(&bogus)` to
+/// flip the path-accessibility precondition before calling `/reset`).
+async fn spawn_live_daemon_with_errored_row(
+    errored_name: &str,
+    last_error: &str,
+) -> (LiveControlPlaneDaemon, PathBuf) {
+    let root = TempDir::new().expect("tempdir");
+    let data_dir = root.path().join("data");
+    fs::create_dir_all(&data_dir).expect("create data_dir");
+
+    let bogus = root.path().join("not-there");
+    let id = VaultId::new();
+    let registry = Arc::new(VaultRegistry::open(&data_dir).await.expect("open registry"));
+    registry
+        .insert(VaultRow {
+            id,
+            name: errored_name.to_string(),
+            path: bogus.clone(),
+            status: VaultStatus::Errored,
+            created_at: Utc::now(),
+            last_error: Some(last_error.to_string()),
+        })
+        .await
+        .expect("seed errored row");
+
+    let config = Arc::new(make_config(data_dir.clone()));
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(DIM));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let manager = VaultManager::open(
+        registry,
+        config.clone(),
+        embedder,
+        DIM as u32,
+        shutdown_rx.clone(),
+    )
+    .await
+    .expect("open VaultManager");
+    let state = ApiState {
+        vault_manager: Arc::new(manager),
+    };
+    let app = api::router(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind 127.0.0.1:0");
+    let addr = listener.local_addr().expect("local_addr");
+    let mut server_shutdown_rx = shutdown_rx;
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = server_shutdown_rx.wait_for(|v| *v).await;
+            })
+            .await;
+    });
+
+    (
+        LiveControlPlaneDaemon {
+            base_url: format!("http://{addr}"),
+            data_dir,
+            root,
+            shutdown: shutdown_tx,
+            handle: Some(handle),
+        },
+        bogus,
+    )
+}
+
+async fn count_chunks_in_outbox(daemon: &LiveControlPlaneDaemon, vault_id: &str) -> usize {
+    let outbox_path = daemon
+        .data_dir
+        .join("vaults")
+        .join(vault_id)
+        .join("outbox.jsonl");
+    if !outbox_path.exists() {
+        return 0;
+    }
+    let bytes = fs::read(&outbox_path).expect("read outbox");
+    bytes.iter().filter(|&&b| b == b'\n').count()
+}
+
+async fn read_outbox_bytes(daemon: &LiveControlPlaneDaemon, vault_id: &str) -> Vec<u8> {
+    let outbox_path = daemon
+        .data_dir
+        .join("vaults")
+        .join(vault_id)
+        .join("outbox.jsonl");
+    if !outbox_path.exists() {
+        return Vec::new();
+    }
+    fs::read(&outbox_path).expect("read outbox")
+}
+
+/// Poll the outbox until the line count grows by at least `expected` over
+/// `baseline`, or return false on timeout. Used by the rescan-emit test to
+/// wait for the async consumer to finish processing the rescan walk.
+async fn wait_outbox_grew_by(
+    daemon: &LiveControlPlaneDaemon,
+    vault_id: &str,
+    baseline: usize,
+    expected: usize,
+    timeout: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let now = count_chunks_in_outbox(daemon, vault_id).await;
+        if now.saturating_sub(baseline) >= expected {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn count_chunks_for_vault(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> i64 {
+    // Drive the SQL through the public HTTP semantic-search endpoint? No —
+    // we want a direct chunk count. Re-open the per-vault store read-only
+    // via the on-disk index file. Avoids reaching into the manager's
+    // internals from outside the crate.
+    let index_path = daemon
+        .data_dir
+        .join("vaults")
+        .join(resolve_vault_id(daemon, vault_name).await)
+        .join("index.sqlite");
+    let index_path = index_path.to_path_buf();
+    task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(&index_path).expect("open index.sqlite");
+        conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get::<_, i64>(0))
+            .expect("count chunks")
+    })
+    .await
+    .expect("count_chunks join")
+}
+
+async fn resolve_vault_id(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> String {
+    let vault: Value = http_client()
+        .get(format!("{}/vaults/{vault_name}", daemon.base_url))
+        .send()
+        .await
+        .expect("GET /vaults/:name")
+        .error_for_status()
+        .expect("GET vault 2xx")
+        .json()
+        .await
+        .expect("vault JSON");
+    vault["id"].as_str().expect("vault.id").to_string()
+}
+
+// ===== Test 18 — pause then resume round-trip via HTTP =====
+
+#[tokio::test]
+async fn http_pause_then_resume_round_trip() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    fs::write(path.join("note.md"), b"# Title\n\nneedle keyword body.\n").expect("write file");
+
+    let create: Value = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "round-trip", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx")
+        .json()
+        .await
+        .expect("create JSON");
+    assert_eq!(create["status"], "active");
+
+    // Pause — assert returned row carries status=paused.
+    let paused: Value = http_client()
+        .post(format!("{}/vaults/round-trip/pause", daemon.base_url))
+        .send()
+        .await
+        .expect("pause")
+        .error_for_status()
+        .expect("pause 2xx")
+        .json()
+        .await
+        .expect("pause JSON");
+    assert_eq!(paused["status"], "paused");
+    assert_eq!(paused["name"], "round-trip");
+
+    // Search/filesystem should report the vault in partial_results.skipped
+    // with status=paused.
+    let body: Value = http_client()
+        .post(format!("{}/search/filesystem", daemon.base_url))
+        .json(&json!({ "glob": "**/*.md" }))
+        .send()
+        .await
+        .expect("search")
+        .error_for_status()
+        .expect("search 2xx")
+        .json()
+        .await
+        .expect("search JSON");
+    assert_eq!(
+        body["results"].as_array().unwrap().len(),
+        0,
+        "paused vault contributes no results: {body}"
+    );
+    let skipped = body["partial_results"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["status"], "paused");
+    assert_eq!(skipped[0]["vault_name"], "round-trip");
+
+    // Resume — assert row flips back to active.
+    let resumed: Value = http_client()
+        .post(format!("{}/vaults/round-trip/resume", daemon.base_url))
+        .send()
+        .await
+        .expect("resume")
+        .error_for_status()
+        .expect("resume 2xx")
+        .json()
+        .await
+        .expect("resume JSON");
+    assert_eq!(resumed["status"], "active");
+
+    // Subsequent search returns vault's results normally; partial_results
+    // is absent (or null).
+    let body: Value = http_client()
+        .post(format!("{}/search/filesystem", daemon.base_url))
+        .json(&json!({ "glob": "**/*.md" }))
+        .send()
+        .await
+        .expect("search post-resume")
+        .error_for_status()
+        .expect("search 2xx")
+        .json()
+        .await
+        .expect("search JSON");
+    let paths: Vec<&str> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["note.md"]);
+    assert!(body.get("partial_results").is_none() || body["partial_results"].is_null());
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 19 — reset clears errored state via HTTP =====
+
+#[tokio::test]
+async fn http_reset_clears_errored_state() {
+    let (daemon, bogus) = spawn_live_daemon_with_errored_row("errd", "path missing").await;
+    // Flip the precondition: the errored row's path now exists, so reset
+    // can rebuild lifecycle and update status to Active.
+    fs::create_dir_all(&bogus).expect("create previously-bogus path");
+
+    let resp = http_client()
+        .post(format!("{}/vaults/errd/reset", daemon.base_url))
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("POST /reset");
+    assert_eq!(resp.status().as_u16(), 200, "reset should succeed");
+    let body: Value = resp.json().await.expect("reset JSON");
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["name"], "errd");
+
+    // Subsequent GET /vaults/errd reflects the active state — the row is
+    // canonically active and the runner is wired up.
+    let listed: Value = http_client()
+        .get(format!("{}/vaults/errd", daemon.base_url))
+        .send()
+        .await
+        .expect("GET")
+        .error_for_status()
+        .expect("GET 2xx")
+        .json()
+        .await
+        .expect("GET JSON");
+    assert_eq!(listed["status"], "active");
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 20 — reset --rebuild clears chunks/chunks_vec/content_hash, preserves outbox =====
+
+#[tokio::test]
+async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    fs::write(path.join("a.md"), b"# Alpha\n\nFirst body.\n").expect("a.md");
+    fs::write(path.join("b.md"), b"# Bravo\n\nSecond body.\n").expect("b.md");
+
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "rebuild-target", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx");
+
+    let chunks_before = count_chunks_for_vault(&daemon, "rebuild-target").await;
+    assert!(
+        chunks_before > 0,
+        "initial scan should populate chunks; got {chunks_before}"
+    );
+    let outbox_bytes_before =
+        read_outbox_bytes(&daemon, &resolve_vault_id(&daemon, "rebuild-target").await).await;
+
+    // Reset with rebuild=true — drains the lifecycle, runs the rebuild SQL,
+    // and re-spawns with skip_initial_scan=true so content_hash stays empty.
+    let body: Value = http_client()
+        .post(format!("{}/vaults/rebuild-target/reset", daemon.base_url))
+        .json(&json!({ "rebuild": true }))
+        .send()
+        .await
+        .expect("reset")
+        .error_for_status()
+        .expect("reset 2xx")
+        .json()
+        .await
+        .expect("reset JSON");
+    assert_eq!(body["status"], "active");
+
+    let chunks_after = count_chunks_for_vault(&daemon, "rebuild-target").await;
+    assert_eq!(chunks_after, 0, "rebuild should clear chunks");
+
+    // Verify content_hash was wiped on every files row.
+    let vault_id = resolve_vault_id(&daemon, "rebuild-target").await;
+    let index_path = daemon
+        .data_dir
+        .join("vaults")
+        .join(&vault_id)
+        .join("index.sqlite");
+    let (file_count, empty_hash_count) = task::spawn_blocking(move || -> (i64, i64) {
+        let conn = rusqlite::Connection::open(&index_path).expect("open index.sqlite");
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .expect("count files");
+        let empty: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE content_hash = ''",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count empty hash");
+        (total, empty)
+    })
+    .await
+    .expect("join");
+    assert_eq!(file_count, 2, "files rows preserved across rebuild");
+    assert_eq!(
+        empty_hash_count, 2,
+        "rebuild should wipe content_hash on every file"
+    );
+
+    // Outbox file is byte-level unchanged across the rebuild — the reset
+    // path doesn't truncate or rewrite it; future events append.
+    let outbox_bytes_after = read_outbox_bytes(&daemon, &vault_id).await;
+    assert_eq!(
+        outbox_bytes_before, outbox_bytes_after,
+        "outbox bytes should be unchanged across reset --rebuild"
+    );
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 21 — rename updates search response vault_name =====
+
+#[tokio::test]
+async fn http_rename_updates_search_response_vault_name() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    fs::write(path.join("renamed.md"), b"# Topic\n\nrenamed body.\n").expect("write");
+
+    let create: Value = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "oldname", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx")
+        .json()
+        .await
+        .expect("create JSON");
+    let vault_id_before = create["id"].as_str().unwrap().to_string();
+
+    // Pre-rename search carries vault_name=oldname.
+    let body: Value = http_client()
+        .post(format!("{}/search/filesystem", daemon.base_url))
+        .json(&json!({ "glob": "**/*.md" }))
+        .send()
+        .await
+        .expect("search")
+        .error_for_status()
+        .expect("search 2xx")
+        .json()
+        .await
+        .expect("search JSON");
+    assert_eq!(body["results"][0]["vault_name"], "oldname");
+
+    // Rename.
+    let renamed: Value = http_client()
+        .post(format!("{}/vaults/oldname/rename", daemon.base_url))
+        .json(&json!({ "new_name": "newname" }))
+        .send()
+        .await
+        .expect("rename")
+        .error_for_status()
+        .expect("rename 2xx")
+        .json()
+        .await
+        .expect("rename JSON");
+    assert_eq!(renamed["name"], "newname");
+    assert_eq!(
+        renamed["id"].as_str().unwrap(),
+        vault_id_before,
+        "surrogate id is stable across rename"
+    );
+
+    // Post-rename search response carries vault_name=newname.
+    let body: Value = http_client()
+        .post(format!("{}/search/filesystem", daemon.base_url))
+        .json(&json!({ "glob": "**/*.md" }))
+        .send()
+        .await
+        .expect("search post-rename")
+        .error_for_status()
+        .expect("search 2xx")
+        .json()
+        .await
+        .expect("search JSON");
+    assert_eq!(body["results"][0]["vault_name"], "newname");
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 22 — rescan emits outbox events for existing files (post-rebuild) =====
+
+#[tokio::test]
+async fn http_rescan_emits_outbox_events_for_existing_files() {
+    // The rescan-emission path documented in the spec + Task 11.2 forward
+    // note: rescan walks the vault and Upserts each file; on stable mtime
+    // the indexer's stat-gate short-circuits so a rescan of an up-to-date
+    // vault is silent. Pair it with `reset --rebuild` (which clears
+    // content_hash) to force per-file emission, exactly the operator
+    // workflow Smoke 5 + Smoke 7 verify.
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    fs::write(path.join("one.md"), b"# One\n\nFirst.\n").expect("write");
+    fs::write(path.join("two.md"), b"# Two\n\nSecond.\n").expect("write");
+
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "rescanned", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx");
+
+    let vault_id = resolve_vault_id(&daemon, "rescanned").await;
+
+    // reset --rebuild to clear content_hash; baseline outbox count post-reset.
+    let _ = http_client()
+        .post(format!("{}/vaults/rescanned/reset", daemon.base_url))
+        .json(&json!({ "rebuild": true }))
+        .send()
+        .await
+        .expect("reset")
+        .error_for_status()
+        .expect("reset 2xx");
+    let outbox_baseline = count_chunks_in_outbox(&daemon, &vault_id).await;
+
+    // rescan; expect 2 modified events to land asynchronously.
+    let resp: Value = http_client()
+        .post(format!("{}/vaults/rescanned/rescan", daemon.base_url))
+        .send()
+        .await
+        .expect("rescan")
+        .error_for_status()
+        .expect("rescan 2xx")
+        .json()
+        .await
+        .expect("rescan JSON");
+    assert!(
+        resp.get("rescan_initiated_at").is_some(),
+        "rescan response carries initiated timestamp: {resp}"
+    );
+
+    let grew = wait_outbox_grew_by(
+        &daemon,
+        &vault_id,
+        outbox_baseline,
+        2,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert!(
+        grew,
+        "rescan should emit at least 2 outbox events post-rebuild; baseline={outbox_baseline}, current={}",
+        count_chunks_in_outbox(&daemon, &vault_id).await
+    );
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 23 — pause is idempotent (pause-on-paused returns 200 + paused row) =====
+
+#[tokio::test]
+async fn http_pause_idempotent() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "twice-paused", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx");
+
+    let first: Value = http_client()
+        .post(format!("{}/vaults/twice-paused/pause", daemon.base_url))
+        .send()
+        .await
+        .expect("pause #1")
+        .error_for_status()
+        .expect("pause #1 2xx")
+        .json()
+        .await
+        .expect("pause #1 JSON");
+    assert_eq!(first["status"], "paused");
+
+    let second: Value = http_client()
+        .post(format!("{}/vaults/twice-paused/pause", daemon.base_url))
+        .send()
+        .await
+        .expect("pause #2")
+        .error_for_status()
+        .expect("pause #2 2xx")
+        .json()
+        .await
+        .expect("pause #2 JSON");
+    assert_eq!(second["status"], "paused");
+    assert_eq!(second["id"], first["id"]);
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 24 — resume is idempotent (resume-on-active returns 200 + active row) =====
+
+#[tokio::test]
+async fn http_resume_idempotent() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "always-active", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx");
+
+    // Vault is already active; resume should be a no-op-shaped 200 with the
+    // existing row (per manager-layer idempotency guarantee).
+    let body: Value = http_client()
+        .post(format!("{}/vaults/always-active/resume", daemon.base_url))
+        .send()
+        .await
+        .expect("resume")
+        .error_for_status()
+        .expect("resume 2xx")
+        .json()
+        .await
+        .expect("resume JSON");
+    assert_eq!(body["status"], "active");
+    assert_eq!(body["name"], "always-active");
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 25 — reset on unknown vault returns 404 =====
+
+#[tokio::test]
+async fn http_reset_returns_404_for_unknown() {
+    let daemon = spawn_live_daemon().await;
+
+    let resp = http_client()
+        .post(format!("{}/vaults/never-was/reset", daemon.base_url))
+        .json(&json!({}))
+        .send()
+        .await
+        .expect("reset unknown");
+    assert_eq!(resp.status().as_u16(), 404);
+    let body: Value = resp.json().await.expect("404 JSON");
+    assert_eq!(body["error"]["code"], "vault_not_found");
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 26 — rename to a colliding name returns 409 =====
+
+#[tokio::test]
+async fn http_rename_returns_409_on_collision() {
+    let daemon = spawn_live_daemon().await;
+    let path_a = daemon.fresh_vault_dir("a");
+    let path_b = daemon.fresh_vault_dir("b");
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "alpha", "path": path_a.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create alpha")
+        .error_for_status()
+        .expect("create alpha 2xx");
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "bravo", "path": path_b.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create bravo")
+        .error_for_status()
+        .expect("create bravo 2xx");
+
+    let resp = http_client()
+        .post(format!("{}/vaults/alpha/rename", daemon.base_url))
+        .json(&json!({ "new_name": "bravo" }))
+        .send()
+        .await
+        .expect("rename");
+    assert_eq!(resp.status().as_u16(), 409);
+    let body: Value = resp.json().await.expect("409 JSON");
+    assert_eq!(body["error"]["code"], "vault_name_conflict");
+
+    daemon.shutdown().await;
+}
+
+// ===== Test 27 — concurrent pause + terminate on the same vault don't corrupt state =====
+
+#[tokio::test]
+async fn concurrent_pause_and_terminate_dont_corrupt_state() {
+    let daemon = spawn_live_daemon().await;
+    let path = daemon.fresh_vault_dir("v");
+    let _ = http_client()
+        .post(format!("{}/vaults", daemon.base_url))
+        .json(&json!({ "name": "racy", "path": path.to_str().unwrap() }))
+        .send()
+        .await
+        .expect("create")
+        .error_for_status()
+        .expect("create 2xx");
+
+    let url = daemon.base_url.clone();
+    let client = http_client();
+    let pause = client.post(format!("{url}/vaults/racy/pause"));
+    let terminate = client.delete(format!("{url}/vaults/racy"));
+    let (pause_resp, term_resp) = tokio::join!(pause.send(), terminate.send());
+    let pause_status = pause_resp.expect("pause send").status().as_u16();
+    let term_status = term_resp.expect("terminate send").status().as_u16();
+
+    // The serializing op_lock guarantees ordered application; the second to
+    // run sees registry state that already-applied the first. Acceptable
+    // outcomes:
+    //   - pause first wins (200), terminate then succeeds (200): final list
+    //     is empty.
+    //   - terminate first wins (200), pause then 404s on resolve: final
+    //     list is empty.
+    //   - terminate first wins (200), pause races on the registry row read
+    //     and 200s with the just-paused row before terminate's deletion
+    //     lands; this is a narrow but legal interleaving — the post-test
+    //     final-list assertion still holds.
+    let pair = (pause_status, term_status);
+    assert!(
+        matches!(pair, (200, 200) | (404, 200) | (200, 404)),
+        "unexpected status pair from concurrent pause + terminate: {pair:?}"
+    );
+
+    let listed: Value = http_client()
+        .get(format!("{}/vaults", daemon.base_url))
+        .send()
+        .await
+        .expect("list")
+        .error_for_status()
+        .expect("list 2xx")
+        .json()
+        .await
+        .expect("list JSON");
+    assert!(
+        listed["vaults"].as_array().unwrap().is_empty(),
+        "post-race vault list should be empty (terminate must have applied); got {listed}"
+    );
+
+    daemon.shutdown().await;
+}
