@@ -44,6 +44,11 @@ transport = "stdio"   # or "socket"
 socket = "~/.local/share/hypomnema/mcp.sock"  # only if transport = "socket"
 enable_write_tools = true   # set false to deny all seven vault write tools (create / pause / resume / reset / rename / rescan / terminate)
 
+# HTTP-MCP transport (Streamable HTTP MCP on hmnd's Axum router; round 4)
+[mcp.http]
+enabled = true        # set false to disable HTTP-MCP without disabling stdio MCP
+path = "/mcp"         # reserved-for-forward-compat; any other value rejected at startup
+
 # Embedding service (OpenAI-compatible)
 [embedding]
 endpoint = "http://127.0.0.1:8080/v1/embeddings"
@@ -161,6 +166,17 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 
 ---
 
+## `[mcp.http]`
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `mcp.http.enabled` | bool | no | `true` | Whether to mount `/mcp` on the daemon's HTTP listener (loopback by default; inherits the listener's full trust posture). Set to `false` to disable HTTP-MCP without disabling stdio MCP. |
+| `mcp.http.path` | string | no | `"/mcp"` | Route prefix. **Reserved-for-forward-compat in v1**: any value other than `"/mcp"` produces a startup error with the message `mcp.http.path must be "/mcp" in this version of Hypomnema`. Future versions may allow customization (e.g., for operators reverse-proxying multiple Hypomnema daemons under different prefixes). |
+
+> **HTTP-MCP trust posture inheritance**: the `/mcp` route inherits whatever posture `hmnd`'s HTTP listener is configured with — bind address from [`[http]`](#http) (loopback-only by default), no auth, no TLS — extending [ADR-0005](../decisions/0005-local-everything.md)'s local-everything boundary. The HTTP-MCP transport does not introduce its own trust posture; if `hmnd` later gains auth or TLS, MCP-over-HTTP rides on them with no spec change. Origin-header validation is the one HTTP-MCP-specific defense (DNS-rebinding mitigation; allowed origins are loopback-only or `null`). See [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md) and [`docs/specs/mcp-streamable-http.md`](../specs/mcp-streamable-http.md).
+
+---
+
 ## `[embedding]`
 
 | Option | Type | Required | Default | Description |
@@ -256,6 +272,7 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 - `storage.data_dir` must not be under any registered vault path — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md). At vault creation time, a path that would place `data_dir` inside the new vault is rejected with `422 vault_path_invalid`.
 - `storage.data_dir/vaults/` must exist or be creatable by the daemon (it is created on first startup if absent)
 - `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
+- `mcp.http.path` must equal `"/mcp"` in v1; any other value fails the daemon at startup with the message `mcp.http.path must be "/mcp" in this version of Hypomnema` ([ADR-0013](../decisions/0013-mcp-transport-streamable-http.md))
 - A top-level `[vault]` block is parsed but **deprecated**; see [Legacy `[vault]` block migration](#legacy-vault-block-migration) — its presence does not fail validation, but logs a `WARN` while the legacy migration could still engage (registry empty)
 - The daemon scans + reconciles each active vault on every startup; this is the only mode in v0.
 

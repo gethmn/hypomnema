@@ -1,7 +1,7 @@
 # Vault Management Specification
 
-**Version**: 1.0.0
-**Date**: 2026-04-27
+**Version**: 1.1.0
+**Date**: 2026-04-28
 **Status**: Approved
 
 ---
@@ -337,6 +337,8 @@ The full nine operations are exposed as MCP tools, naming-mirroring the HTTP con
 - Default-on matches the round-2 trust posture (localhost-only daemon by default; agents already trusted to invoke search tools that read every file in every vault).
 - Future write tools inherit the same gate. No config-key-explosion across rounds.
 - Operators wanting strict opt-out get a single-line config edit (`[mcp] enable_write_tools = false`).
+
+Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically.
 
 ### Compose-Style Declarative Layer (deferred)
 
@@ -783,3 +785,4 @@ Same operations as HTTP, registered as tools. Read-only tools always advertised;
 |---------|------|---------|
 | 0.1.0 | 2026-04-26 | Initial outline, seeded from ADR-0009 / ADR-0010 / ADR-0011. Cross-vault search semantics deliberately under-specified; round-3 workplan resolves. |
 | 1.0.0 | 2026-04-27 | Fleshed from outline; commits step-10 workplan resolutions. Status: Draft → Approved. Pinned: UUIDv7 ID format; eight cross-vault search semantics resolutions; per-vault async-mutex concurrency; MCP single-flag write-tool gating; full HTTP error catalog; full operations specification (step 10 ships 4; step 11 ships 5). Removed resolved Open Questions; preserved round-4+ items. |
+| 1.1.0 | 2026-04-28 | Step 12 workplan: small wording amendment to § MCP Tool Surface naming both stdio MCP and HTTP MCP transports as peers serving the same tool list. No behavioral change. |

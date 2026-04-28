@@ -107,3 +107,7 @@ for the formal record of stdio-shipped / socket-deferred. The
 two-binary shape and the "thin client" framing of the ADR are
 otherwise preserved — this amendment clarifies *which* thin client
 owns the MCP surface, not whether the project uses thin clients.
+
+### 2026-04-28: HTTP-MCP joins socket-MCP as the second `hmnd`-resident MCP transport ([ADR-0013](./0013-mcp-transport-streamable-http.md), round 4)
+
+The "each transport's binary matches its lifetime" principle from the 2026-04-27 amendment applies unchanged: stdio-MCP → `hmn` (short-lived adapter); HTTP-MCP → `hmnd` (long-lived listener); socket-MCP (deferred) → `hmnd` (long-lived listener). No decision change to the two-binaries shape; `hmnd` simply gains a second MCP transport mount alongside the deferred Unix socket.
