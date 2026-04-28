@@ -39,6 +39,38 @@ pub enum Command {
     /// Intended to be invoked by MCP-capable agent hosts (Claude Code,
     /// Iris). Process exits when its parent (the host) closes stdin.
     Mcp,
+    /// Manage vaults (create / list / status / terminate).
+    Vault {
+        #[command(subcommand)]
+        op: VaultOp,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VaultOp {
+    /// Create a new vault.
+    Create {
+        /// Path to the vault directory. Must exist and be canonicalizable.
+        path: PathBuf,
+        /// Vault name. Defaults to config's default_vault_name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List all registered vaults.
+    List,
+    /// Show details for a single vault.
+    Status {
+        /// Vault name or surrogate id. Defaults to default_vault_name when omitted.
+        target: Option<String>,
+    },
+    /// Terminate a vault: stop its runner, delete its registry row, and remove its per-vault state.
+    Terminate {
+        /// Vault name or surrogate id.
+        target: String,
+        /// Skip the destructive-op confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -212,5 +244,115 @@ mod tests {
             err.kind(),
             clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
         );
+    }
+
+    #[test]
+    fn parses_vault_create_with_path() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "create", "/tmp/foo"])
+            .expect("vault create parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Create { path, name },
+            } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/foo"));
+                assert!(name.is_none());
+            }
+            _ => panic!("expected Vault/Create"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_create_with_name_and_path() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "create", "--name", "personal", "/tmp/foo"])
+            .expect("vault create with name parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Create { path, name },
+            } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/foo"));
+                assert_eq!(name.as_deref(), Some("personal"));
+            }
+            _ => panic!("expected Vault/Create"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_list() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "list"]).expect("vault list parses");
+        assert!(matches!(cli.command, Command::Vault { op: VaultOp::List }));
+    }
+
+    #[test]
+    fn parses_vault_status_with_target() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "status", "personal"])
+            .expect("vault status with target parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Status { target },
+            } => assert_eq!(target.as_deref(), Some("personal")),
+            _ => panic!("expected Vault/Status"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_status_without_target() {
+        let cli =
+            Cli::try_parse_from(["hmn", "vault", "status"]).expect("vault status parses bare");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Status { target },
+            } => assert!(target.is_none()),
+            _ => panic!("expected Vault/Status"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_terminate_with_yes() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "terminate", "personal", "--yes"])
+            .expect("vault terminate --yes parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Terminate { target, yes },
+            } => {
+                assert_eq!(target, "personal");
+                assert!(yes);
+            }
+            _ => panic!("expected Vault/Terminate"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_terminate_without_yes() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "terminate", "personal"])
+            .expect("vault terminate parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Terminate { target, yes },
+            } => {
+                assert_eq!(target, "personal");
+                assert!(!yes);
+            }
+            _ => panic!("expected Vault/Terminate"),
+        }
+    }
+
+    #[test]
+    fn missing_vault_op_is_an_error() {
+        let err = Cli::try_parse_from(["hmn", "vault"]).expect_err("must require an op");
+        assert!(matches!(
+            err.kind(),
+            clap::error::ErrorKind::MissingSubcommand
+                | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        ));
+    }
+
+    #[test]
+    fn vault_terminate_without_target_is_an_error() {
+        let err = Cli::try_parse_from(["hmn", "vault", "terminate"])
+            .expect_err("terminate requires target");
+        assert!(matches!(
+            err.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        ));
     }
 }

@@ -4,9 +4,11 @@ use anyhow::{Context, Result, anyhow};
 use serde::de::DeserializeOwned;
 
 pub use crate::api::types::{
-    ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse, ErrorEnvelope,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, HealthResponse,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
+    ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse,
+    CreateVaultRequest, ErrorEnvelope, FilesystemQueryJson, FilesystemResultJson,
+    FilesystemSearchResponse, HealthResponse, SemanticQueryJson, SemanticResultJson,
+    SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
+    VaultRowJson,
 };
 use crate::config::Config;
 
@@ -65,10 +67,46 @@ impl DaemonClient {
         let resp = self.http.post(&url).json(q).send().await?;
         decode_response(resp).await
     }
+
+    pub async fn create_vault(&self, req: &CreateVaultRequest) -> Result<VaultRowJson> {
+        let url = format!("{}/vaults", self.base_url);
+        let resp = self.http.post(&url).json(req).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn list_vaults(&self) -> Result<VaultListResponse> {
+        let url = format!("{}/vaults", self.base_url);
+        let resp = self.http.get(&url).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn get_vault(&self, name_or_id: &str) -> Result<VaultRowJson> {
+        let url = vault_url(&self.base_url, name_or_id)?;
+        let resp = self.http.get(url).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn terminate_vault(&self, name_or_id: &str) -> Result<TerminateVaultResponse> {
+        let url = vault_url(&self.base_url, name_or_id)?;
+        let resp = self.http.delete(url).send().await?;
+        decode_response(resp).await
+    }
 }
 
 fn normalize_base_url(url: &str) -> String {
     url.trim_end_matches('/').to_string()
+}
+
+/// Build a `/vaults/<segment>` URL with `name_or_id` percent-encoded as a
+/// single path segment. Vault names are otherwise unconstrained at the
+/// CLI surface; without this, names containing `/` or `?` would land on
+/// the wrong handler.
+fn vault_url(base_url: &str, name_or_id: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base_url).context("parsing daemon base URL")?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("daemon URL cannot be a base"))?
+        .extend(["vaults", name_or_id]);
+    Ok(url)
 }
 
 async fn decode_response<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
@@ -282,6 +320,21 @@ mod tests {
             "expected leading code token, got {msg:?}"
         );
         daemon.shutdown().await;
+    }
+
+    #[test]
+    fn vault_url_encodes_special_chars_in_segment() {
+        let url = vault_url("http://localhost:9099", "needs/encoding?").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://localhost:9099/vaults/needs%2Fencoding%3F"
+        );
+    }
+
+    #[test]
+    fn vault_url_handles_normal_names() {
+        let url = vault_url("http://localhost:9099", "personal").unwrap();
+        assert_eq!(url.as_str(), "http://localhost:9099/vaults/personal");
     }
 
     #[tokio::test]

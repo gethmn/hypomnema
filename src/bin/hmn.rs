@@ -1,13 +1,15 @@
+use std::io::{BufRead, Write};
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 
-use hypomnema::cli::{Cli, Command, SearchMode};
+use hypomnema::cli::{Cli, Command, SearchMode, VaultOp};
 use hypomnema::client::{
-    ContentQueryJson, ContentResultJson, ContentSearchResponse, DaemonClient, FilesystemQueryJson,
-    FilesystemResultJson, FilesystemSearchResponse, SemanticQueryJson, SemanticResultJson,
-    SemanticSearchResponse, StatusResponse, is_connect_error,
+    ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
+    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, SemanticQueryJson,
+    SemanticResultJson, SemanticSearchResponse, StatusResponse, TerminateVaultResponse,
+    VaultListResponse, VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
@@ -89,6 +91,7 @@ async fn main() -> ExitCode {
         },
         Command::Status => cmd_status(&config, cli.daemon_url.as_deref(), cli.json).await,
         Command::Mcp => cmd_mcp(&config, cli.daemon_url.as_deref()).await,
+        Command::Vault { op } => cmd_vault(&config, cli.daemon_url.as_deref(), cli.json, op).await,
     };
 
     match result {
@@ -187,6 +190,172 @@ async fn cmd_mcp(config: &Config, override_url: Option<&str>) -> Result<()> {
     hypomnema::mcp::serve_stdio(server)
         .await
         .context("serving MCP over stdio")
+}
+
+async fn cmd_vault(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    op: VaultOp,
+) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)?;
+    match op {
+        VaultOp::Create { path, name } => {
+            let req = CreateVaultRequest {
+                name,
+                path: path.display().to_string(),
+            };
+            let row = client.create_vault(&req).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::List => {
+            let resp = client.list_vaults().await?;
+            if json {
+                print_json(&resp)?;
+            } else {
+                render_vault_list(&resp);
+            }
+        }
+        VaultOp::Status { target } => {
+            let target = resolve_target(config, target.as_deref())?;
+            let row = client.get_vault(&target).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::Terminate { target, yes } => {
+            if !yes && !confirm_terminate(&target, std::io::stdin().lock(), &mut std::io::stderr())?
+            {
+                if json {
+                    print_json(&serde_json::json!({ "terminated": false, "aborted": true }))?;
+                } else {
+                    println!("aborted");
+                }
+                return Ok(());
+            }
+            let resp = client.terminate_vault(&target).await?;
+            if json {
+                print_json(&resp)?;
+            } else {
+                render_terminate(&resp);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_target(config: &Config, target: Option<&str>) -> Result<String> {
+    match target {
+        Some(t) => Ok(t.to_string()),
+        None => {
+            let default = config.default_vault_name.trim();
+            if default.is_empty() {
+                Err(anyhow!(
+                    "no target supplied and default_vault_name is empty in config"
+                ))
+            } else {
+                Ok(default.to_string())
+            }
+        }
+    }
+}
+
+/// Read a yes/no answer from `stdin`, prompting on `prompt_writer`. Returns
+/// `true` only when the input begins with `y` or `Y`. EOF / empty input /
+/// anything else means "no" — destructive ops require an explicit
+/// affirmative.
+fn confirm_terminate<R: BufRead, W: Write>(
+    target: &str,
+    mut reader: R,
+    prompt_writer: &mut W,
+) -> Result<bool> {
+    write!(prompt_writer, "Terminate vault '{target}'? (y/N) ")?;
+    prompt_writer.flush()?;
+    let mut line = String::new();
+    let n = reader.read_line(&mut line)?;
+    if n == 0 {
+        return Ok(false);
+    }
+    let trimmed = line.trim_start();
+    Ok(trimmed.chars().next().is_some_and(|c| c == 'y' || c == 'Y'))
+}
+
+fn render_vault_row(row: &VaultRowJson) {
+    println!("id:         {}", row.id);
+    println!("name:       {}", row.name);
+    println!("path:       {}", row.path);
+    println!("status:     {}", row.status);
+    println!("created_at: {}", row.created_at);
+    if let Some(err) = &row.last_error {
+        println!("last_error: {err}");
+    }
+}
+
+fn render_vault_list(resp: &VaultListResponse) {
+    if resp.vaults.is_empty() {
+        println!("(no vaults)");
+        return;
+    }
+    let widths = column_widths(&resp.vaults);
+    println!(
+        "{:<id_w$}  {:<name_w$}  {:<status_w$}  {:<created_w$}  PATH",
+        "ID",
+        "NAME",
+        "STATUS",
+        "CREATED",
+        id_w = widths.id,
+        name_w = widths.name,
+        status_w = widths.status,
+        created_w = widths.created,
+    );
+    for row in &resp.vaults {
+        println!(
+            "{:<id_w$}  {:<name_w$}  {:<status_w$}  {:<created_w$}  {}",
+            row.id,
+            row.name,
+            row.status,
+            row.created_at,
+            row.path,
+            id_w = widths.id,
+            name_w = widths.name,
+            status_w = widths.status,
+            created_w = widths.created,
+        );
+    }
+}
+
+struct ColumnWidths {
+    id: usize,
+    name: usize,
+    status: usize,
+    created: usize,
+}
+
+fn column_widths(rows: &[VaultRowJson]) -> ColumnWidths {
+    let mut w = ColumnWidths {
+        id: "ID".len(),
+        name: "NAME".len(),
+        status: "STATUS".len(),
+        created: "CREATED".len(),
+    };
+    for row in rows {
+        w.id = w.id.max(row.id.len());
+        w.name = w.name.max(row.name.len());
+        w.status = w.status.max(row.status.len());
+        w.created = w.created.max(row.created_at.len());
+    }
+    w
+}
+
+fn render_terminate(resp: &TerminateVaultResponse) {
+    println!("terminated: {}", resp.terminated);
+    println!("id:         {}", resp.id);
 }
 
 async fn cmd_status(config: &Config, override_url: Option<&str>, json: bool) -> Result<()> {
@@ -392,6 +561,42 @@ mod tests {
             out.contains("(semantic index is building)"),
             "expected hint suffix in:\n{out}"
         );
+    }
+
+    #[test]
+    fn confirm_terminate_accepts_lowercase_y() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_terminate("personal", &b"y\n"[..], &mut sink).unwrap();
+        assert!(answered);
+        assert!(String::from_utf8_lossy(&sink).contains("Terminate vault 'personal'? (y/N) "));
+    }
+
+    #[test]
+    fn confirm_terminate_accepts_uppercase_y() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_terminate("personal", &b"Yes\n"[..], &mut sink).unwrap();
+        assert!(answered);
+    }
+
+    #[test]
+    fn confirm_terminate_rejects_no() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_terminate("personal", &b"n\n"[..], &mut sink).unwrap();
+        assert!(!answered);
+    }
+
+    #[test]
+    fn confirm_terminate_rejects_empty_line() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_terminate("personal", &b"\n"[..], &mut sink).unwrap();
+        assert!(!answered);
+    }
+
+    #[test]
+    fn confirm_terminate_rejects_eof() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_terminate("personal", &b""[..], &mut sink).unwrap();
+        assert!(!answered);
     }
 
     #[test]
