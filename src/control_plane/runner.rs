@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use tokio::sync::{Mutex, watch};
@@ -9,18 +9,21 @@ use crate::api::VaultEntry;
 use crate::watcher::Watcher;
 
 pub struct VaultRunner {
-    entry: Arc<VaultEntry>,
-    /// Per-vault operation lock. Reserved for step-11 ops
+    /// Live snapshot of this vault's view exposed to search handlers.
+    /// Wrapped in `RwLock` so step-11 ops (pause/resume/reset/rename) can
+    /// swap a fresh `Arc<VaultEntry>` in without disturbing readers — search
+    /// handlers clone the inner Arc and release the read-lock in
+    /// microseconds.
+    entry: RwLock<Arc<VaultEntry>>,
+    /// Per-vault operation lock. Held by step-11 ops
     /// (pause/resume/reset/rename/rescan) that mutate vault state without
     /// changing the runners-map membership. Step-10's create/terminate take
-    /// the outer RwLock instead, so this field is constructed but not yet
-    /// acquired.
-    #[allow(dead_code)]
+    /// the outer RwLock instead.
     pub(crate) op_lock: Mutex<()>,
     /// Lifecycle handles. `None` when the runner was constructed via
     /// `VaultRunner::test_only` (test fixture path with no live watcher /
-    /// consumer to drain).
-    lifecycle: Mutex<Option<RunnerLifecycle>>,
+    /// consumer to drain), or after `shutdown_with_timeout` has drained.
+    pub(crate) lifecycle: Mutex<Option<RunnerLifecycle>>,
 }
 
 pub(crate) struct RunnerLifecycle {
@@ -32,7 +35,7 @@ pub(crate) struct RunnerLifecycle {
 impl VaultRunner {
     pub(crate) fn new(entry: VaultEntry, lifecycle: RunnerLifecycle) -> Self {
         VaultRunner {
-            entry: Arc::new(entry),
+            entry: RwLock::new(Arc::new(entry)),
             op_lock: Mutex::new(()),
             lifecycle: Mutex::new(Some(lifecycle)),
         }
@@ -40,14 +43,22 @@ impl VaultRunner {
 
     pub(crate) fn test_only(entry: VaultEntry) -> Self {
         VaultRunner {
-            entry: Arc::new(entry),
+            entry: RwLock::new(Arc::new(entry)),
             op_lock: Mutex::new(()),
             lifecycle: Mutex::new(None),
         }
     }
 
-    pub fn entry(&self) -> &Arc<VaultEntry> {
-        &self.entry
+    /// Snapshot the current entry. Search handlers call this once per
+    /// request, so the read-window holds for an Arc-clone and is released.
+    pub fn entry(&self) -> Arc<VaultEntry> {
+        self.entry.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Replace the entry snapshot. Used by step-11 ops after an in-place
+    /// status / name mutation to publish the new view to readers.
+    pub(crate) fn replace_entry(&self, entry: Arc<VaultEntry>) {
+        *self.entry.write().unwrap_or_else(|e| e.into_inner()) = entry;
     }
 
     /// Cooperative shutdown of this vault's watcher + consumer. Sends the
@@ -65,7 +76,7 @@ impl VaultRunner {
         let drained = tokio::time::timeout(drain_timeout, lc.consumer_handle).await;
         if drained.is_err() {
             warn!(
-                vault_id = %self.entry.id,
+                vault_id = %self.entry().id,
                 drain_ms = %drain_timeout.as_millis(),
                 "vault runner: consumer drain exceeded timeout; force-aborting"
             );

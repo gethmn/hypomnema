@@ -206,6 +206,27 @@ impl VaultRegistry {
         .context("spawn_blocking join error in VaultRegistry::update_status")?
     }
 
+    pub async fn update_name(&self, id: &VaultId, new_name: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let id = id.clone();
+        let new_name = new_name.to_string();
+        task::spawn_blocking(move || {
+            let conn = pool.get().context("acquiring vault_registry connection")?;
+            let updated = conn
+                .execute(
+                    "UPDATE vaults SET name = ?1 WHERE id = ?2",
+                    params![new_name, id.as_str()],
+                )
+                .context("updating vault name")?;
+            if updated == 0 {
+                return Err(anyhow!("no vault row with id {id}"));
+            }
+            Ok(())
+        })
+        .await
+        .context("spawn_blocking join error in VaultRegistry::update_name")?
+    }
+
     /// Delete the row for `id`. Returns `Ok(true)` if a row was removed and
     /// `Ok(false)` if no row matched (already gone — terminate's idempotent
     /// recovery path: if a previous terminate crashed between row delete and

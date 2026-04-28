@@ -40,9 +40,12 @@ pub struct VaultScopeRow {
     pub entry: Option<Arc<VaultEntry>>,
 }
 
-const TERMINATE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per-vault drain timeout used by every lifecycle op (terminate, pause,
+/// reset). Bounds the consumer-handle await before the runner force-aborts.
+const LIFECYCLE_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCHER_BUFFER: usize = 256;
 const NAME_HINT_MAX_DISTANCE: usize = 3;
+const VAULT_NAME_PATTERN: &str = "^[A-Za-z0-9_-]+$";
 
 /// Control-plane errors. Each variant maps 1:1 to the HTTP error-code table
 /// in `docs/specs/vault-management.md` § Error Handling (workplan § D).
@@ -288,11 +291,7 @@ impl VaultManager {
             .values()
             .filter_map(|runner| {
                 let entry = runner.entry();
-                if entry.is_active() {
-                    Some(entry.clone())
-                } else {
-                    None
-                }
+                if entry.is_active() { Some(entry) } else { None }
             })
             .collect()
     }
@@ -322,7 +321,7 @@ impl VaultManager {
                 .into_iter()
                 .map(|row| {
                     let entry = if matches!(row.status, VaultStatus::Active) {
-                        runners_guard.get(&row.id).map(|r| r.entry().clone())
+                        runners_guard.get(&row.id).map(|r| r.entry())
                     } else {
                         None
                     };
@@ -345,7 +344,7 @@ impl VaultManager {
         let mut scope: Vec<VaultScopeRow> = runners_guard
             .values()
             .map(|runner| {
-                let entry = runner.entry().clone();
+                let entry = runner.entry();
                 let active = entry.is_active();
                 VaultScopeRow {
                     id: entry.id.clone(),
@@ -552,7 +551,7 @@ impl VaultManager {
         };
 
         if let Some(runner) = &runner {
-            runner.shutdown_with_timeout(TERMINATE_DRAIN_TIMEOUT).await;
+            runner.shutdown_with_timeout(LIFECYCLE_DRAIN_TIMEOUT).await;
         }
 
         let _deleted = spawn
@@ -574,6 +573,269 @@ impl VaultManager {
         info!(vault_id = %id, "control_plane: terminated vault");
 
         Ok(())
+    }
+
+    /// Pause an active vault: drain its watcher + consumer, mark the
+    /// registry row paused, and publish a `Paused` snapshot to readers. The
+    /// runner stays in the map (with `lifecycle = None`) so resume can swap
+    /// a fresh lifecycle in without re-keying the map.
+    pub async fn pause(&self, name_or_id: &str) -> Result<VaultRow, ControlPlaneError> {
+        let spawn = self.spawn_ctx_or_err()?;
+
+        let row = self.get(name_or_id).await?;
+        let id = row.id.clone();
+
+        let runner = self
+            .runner_for(&id)
+            .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                name_or_id: name_or_id.to_string(),
+                hint: None,
+            })?;
+        let _op_guard = runner.op_lock.lock().await;
+
+        let current = runner.entry();
+        if matches!(current.status, VaultStatus::Paused) {
+            return Ok(row);
+        }
+
+        runner.shutdown_with_timeout(LIFECYCLE_DRAIN_TIMEOUT).await;
+
+        spawn
+            .registry
+            .update_status(&id, VaultStatus::Paused, None)
+            .await
+            .map_err(|e| {
+                ControlPlaneError::Internal(e.context("updating registry status to paused"))
+            })?;
+
+        let new_entry = VaultEntry {
+            status: VaultStatus::Paused,
+            ..(*current).clone()
+        };
+        runner.replace_entry(Arc::new(new_entry));
+
+        let updated = spawn
+            .registry
+            .get_by_id(&id)
+            .await
+            .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                detail: format!("{e:#}"),
+            })?
+            .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                name_or_id: name_or_id.to_string(),
+                hint: None,
+            })?;
+
+        info!(vault_id = %id, vault_name = %updated.name, "control_plane: paused vault");
+        Ok(updated)
+    }
+
+    /// Resume a paused or errored vault: validate path accessibility, spawn
+    /// a fresh `RunnerLifecycle`, and clear `last_error`. Handles two
+    /// shapes: the runner is already in the map (paused mid-run) — install
+    /// a new lifecycle and update entry/registry; or the runner is absent
+    /// (errored at startup, or paused before a daemon restart) — spawn a
+    /// full new runner and insert it.
+    pub async fn resume(&self, name_or_id: &str) -> Result<VaultRow, ControlPlaneError> {
+        let spawn = self.spawn_ctx_or_err()?;
+
+        let row = self.get(name_or_id).await?;
+        let id = row.id.clone();
+
+        if let Some(runner) = self.runner_for(&id) {
+            let _op_guard = runner.op_lock.lock().await;
+
+            let current = runner.entry();
+            if matches!(current.status, VaultStatus::Active) {
+                return Ok(row);
+            }
+
+            if matches!(current.status, VaultStatus::Errored) && !path_is_accessible(&row.path) {
+                return Err(ControlPlaneError::VaultErrored {
+                    name_or_id: name_or_id.to_string(),
+                    last_error: row.last_error.clone(),
+                });
+            }
+
+            let (entry, lifecycle) = spawn_runner_parts(
+                &row,
+                spawn.config.as_ref(),
+                self.inner.embedder.clone(),
+                spawn.shutdown_rx.clone(),
+            )
+            .await
+            .map_err(|e| ControlPlaneError::Internal(e.context("spawning lifecycle for resume")))?;
+
+            *runner.lifecycle.lock().await = Some(lifecycle);
+
+            spawn
+                .registry
+                .update_status(&id, VaultStatus::Active, None)
+                .await
+                .map_err(|e| {
+                    ControlPlaneError::Internal(e.context("updating registry status to active"))
+                })?;
+
+            let new_entry = VaultEntry {
+                status: VaultStatus::Active,
+                ..entry
+            };
+            runner.replace_entry(Arc::new(new_entry));
+        } else {
+            if matches!(row.status, VaultStatus::Active) {
+                return Ok(row);
+            }
+            if matches!(row.status, VaultStatus::Errored) && !path_is_accessible(&row.path) {
+                return Err(ControlPlaneError::VaultErrored {
+                    name_or_id: name_or_id.to_string(),
+                    last_error: row.last_error.clone(),
+                });
+            }
+
+            spawn
+                .registry
+                .update_status(&id, VaultStatus::Active, None)
+                .await
+                .map_err(|e| {
+                    ControlPlaneError::Internal(e.context("updating registry status to active"))
+                })?;
+
+            let updated = spawn
+                .registry
+                .get_by_id(&id)
+                .await
+                .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                    detail: format!("{e:#}"),
+                })?
+                .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                    name_or_id: name_or_id.to_string(),
+                    hint: None,
+                })?;
+
+            let runner = spawn_runner_for_row(
+                &updated,
+                spawn.config.as_ref(),
+                self.inner.embedder.clone(),
+                spawn.shutdown_rx.clone(),
+            )
+            .await
+            .map_err(|e| ControlPlaneError::Internal(e.context("spawning runner for resume")))?;
+
+            let mut guard = self
+                .inner
+                .runners
+                .write()
+                .expect("vault manager runners RwLock poisoned");
+            guard.insert(id.clone(), Arc::new(runner));
+        }
+
+        let updated = spawn
+            .registry
+            .get_by_id(&id)
+            .await
+            .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                detail: format!("{e:#}"),
+            })?
+            .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                name_or_id: name_or_id.to_string(),
+                hint: None,
+            })?;
+        info!(vault_id = %id, vault_name = %updated.name, "control_plane: resumed vault");
+        Ok(updated)
+    }
+
+    /// Rename a vault: validate the new name, pre-check uniqueness, update
+    /// the registry and the per-vault meta.toml, and replace the runner's
+    /// entry with the new name. Watcher / indexer don't read `name`, so the
+    /// lifecycle is unchanged. If the runner is not in the map (paused or
+    /// errored vault), only the registry + meta.toml are updated.
+    pub async fn rename(
+        &self,
+        name_or_id: &str,
+        new_name: &str,
+    ) -> Result<VaultRow, ControlPlaneError> {
+        let spawn = self.spawn_ctx_or_err()?;
+
+        if !is_valid_vault_name(new_name) {
+            return Err(ControlPlaneError::VaultPathInvalid {
+                detail: format!(
+                    "new_name {new_name:?} must match {VAULT_NAME_PATTERN} (ASCII letters, digits, '_', '-')",
+                ),
+            });
+        }
+
+        let row = self.get(name_or_id).await?;
+        let id = row.id.clone();
+
+        if row.name == new_name {
+            return Ok(row);
+        }
+
+        let runner = self.runner_for(&id);
+        let _op_guard = if let Some(r) = runner.as_ref() {
+            Some(r.op_lock.lock().await)
+        } else {
+            None
+        };
+
+        if let Some(existing) = spawn.registry.get_by_name(new_name).await.map_err(|e| {
+            ControlPlaneError::RegistryCorrupt {
+                detail: format!("{e:#}"),
+            }
+        })? {
+            if existing.id != id {
+                return Err(ControlPlaneError::VaultNameConflict {
+                    existing_path: existing.path,
+                    name: new_name.to_string(),
+                });
+            }
+        }
+
+        spawn
+            .registry
+            .update_name(&id, new_name)
+            .await
+            .map_err(|e| {
+                ControlPlaneError::Internal(e.context("updating vault name in registry"))
+            })?;
+
+        let updated = spawn
+            .registry
+            .get_by_id(&id)
+            .await
+            .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                detail: format!("{e:#}"),
+            })?
+            .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                name_or_id: name_or_id.to_string(),
+                hint: None,
+            })?;
+
+        let vault_dir = vault_data_dir(&spawn.data_dir, &id);
+        legacy_state_migration::write_meta_toml(&vault_dir, &updated).map_err(|e| {
+            ControlPlaneError::Internal(e.context("rewriting meta.toml after rename"))
+        })?;
+
+        if let Some(r) = runner.as_ref() {
+            let current = r.entry();
+            let new_entry = VaultEntry {
+                name: new_name.to_string(),
+                ..(*current).clone()
+            };
+            r.replace_entry(Arc::new(new_entry));
+        }
+
+        info!(vault_id = %id, new_name, "control_plane: renamed vault");
+        Ok(updated)
+    }
+
+    fn runner_for(&self, id: &VaultId) -> Option<Arc<VaultRunner>> {
+        let guard = self
+            .inner
+            .runners
+            .read()
+            .expect("vault manager runners RwLock poisoned");
+        guard.get(id).cloned()
     }
 
     fn spawn_ctx_or_err(&self) -> Result<&SpawnCtx, ControlPlaneError> {
@@ -706,6 +968,20 @@ async fn spawn_runner_for_row(
     embedder: Arc<dyn Embedder>,
     parent_shutdown_rx: watch::Receiver<bool>,
 ) -> Result<VaultRunner> {
+    let (entry, lifecycle) = spawn_runner_parts(row, config, embedder, parent_shutdown_rx).await?;
+    Ok(VaultRunner::new(entry, lifecycle))
+}
+
+/// Open the per-vault store, run the initial scan, and spawn the watcher +
+/// consumer. Returns the entry/lifecycle pair separately so step-11 ops
+/// (resume) can install a fresh lifecycle into an existing
+/// `Arc<VaultRunner>` without minting a new runner.
+async fn spawn_runner_parts(
+    row: &VaultRow,
+    config: &Config,
+    embedder: Arc<dyn Embedder>,
+    parent_shutdown_rx: watch::Receiver<bool>,
+) -> Result<(VaultEntry, RunnerLifecycle)> {
     let store = Store::open(
         &row.id,
         &config.storage.data_dir.0,
@@ -783,7 +1059,7 @@ async fn spawn_runner_for_row(
         status: row.status,
     };
 
-    Ok(VaultRunner::new(
+    Ok((
         entry,
         RunnerLifecycle {
             shutdown_tx: per_vault_tx,
@@ -825,6 +1101,17 @@ fn expand_tilde(path: &Path) -> PathBuf {
 fn path_under(child: &Path, ancestor: &Path) -> bool {
     let child = std::fs::canonicalize(child).unwrap_or_else(|_| child.to_path_buf());
     child.starts_with(ancestor)
+}
+
+fn is_valid_vault_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn path_is_accessible(path: &Path) -> bool {
+    matches!(std::fs::metadata(path), Ok(m) if m.is_dir())
 }
 
 fn paths_equal(a: &Path, b: &Path) -> bool {

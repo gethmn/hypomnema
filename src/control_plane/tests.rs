@@ -410,3 +410,409 @@ async fn concurrent_terminate_on_same_vault_serializes() {
         "the loser sees VaultNotFound (the winner removed the runner first)"
     );
 }
+
+// -- step-11 task 11.1 ----------------------------------------------------
+
+fn read_meta_toml_name(vault_dir: &Path) -> String {
+    let s = std::fs::read_to_string(vault_dir.join("meta.toml")).expect("read meta.toml");
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("name = \"") {
+            if let Some(end) = rest.rfind('"') {
+                return rest[..end].to_string();
+            }
+        }
+    }
+    panic!("meta.toml has no name line: {s}");
+}
+
+#[tokio::test]
+async fn pause_drains_runner_and_updates_status() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let updated = manager.pause("alpha").await.expect("pause succeeds");
+    assert_eq!(updated.id, row.id);
+    assert_eq!(updated.status, VaultStatus::Paused);
+    assert!(updated.last_error.is_none());
+
+    let on_disk = registry.get_by_id(&row.id).await.unwrap().unwrap();
+    assert_eq!(on_disk.status, VaultStatus::Paused);
+
+    // Active snapshot drops the paused vault; cross-vault scope shows it as
+    // a non-active row (entry None).
+    assert!(manager.active_vaults().is_empty());
+    let scope = manager.search_scope().await.unwrap();
+    assert_eq!(scope.len(), 1);
+    assert_eq!(scope[0].status, VaultStatus::Paused);
+    assert!(scope[0].entry.is_none());
+}
+
+#[tokio::test]
+async fn pause_idempotent_on_already_paused() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    manager.pause("alpha").await.expect("first pause succeeds");
+    let again = manager
+        .pause("alpha")
+        .await
+        .expect("second pause is a no-op");
+    assert_eq!(again.status, VaultStatus::Paused);
+}
+
+#[tokio::test]
+async fn pause_returns_vault_not_found_for_unknown() {
+    let (_root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let err = manager
+        .pause("does-not-exist")
+        .await
+        .expect_err("pause against unknown vault must error");
+    match err {
+        ControlPlaneError::VaultNotFound { name_or_id, .. } => {
+            assert_eq!(name_or_id, "does-not-exist");
+        }
+        other => panic!("expected VaultNotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resume_from_paused_restores_active() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    manager.pause("alpha").await.unwrap();
+    let resumed = manager.resume("alpha").await.expect("resume succeeds");
+    assert_eq!(resumed.id, row.id);
+    assert_eq!(resumed.status, VaultStatus::Active);
+    assert!(resumed.last_error.is_none());
+
+    let on_disk = registry.get_by_id(&row.id).await.unwrap().unwrap();
+    assert_eq!(on_disk.status, VaultStatus::Active);
+    assert_eq!(manager.active_vaults().len(), 1);
+}
+
+#[tokio::test]
+async fn resume_from_errored_with_path_accessible_succeeds() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+
+    let path = fresh_vault_dir(root.path(), "ev");
+    let id = VaultId::new();
+    registry
+        .insert(VaultRow {
+            id: id.clone(),
+            name: "errd".to_string(),
+            path: path.clone(),
+            status: VaultStatus::Errored,
+            created_at: Utc::now(),
+            last_error: Some("prior reconcile failure".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+    // Reconcile skipped the errored row, so no runner is in the map yet.
+    assert!(manager.active_vaults().is_empty());
+
+    let resumed = manager.resume("errd").await.expect("resume errored vault");
+    assert_eq!(resumed.id, id);
+    assert_eq!(resumed.status, VaultStatus::Active);
+    assert!(resumed.last_error.is_none());
+
+    let on_disk = registry.get_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(on_disk.status, VaultStatus::Active);
+    assert!(on_disk.last_error.is_none());
+    assert_eq!(manager.active_vaults().len(), 1);
+}
+
+#[tokio::test]
+async fn resume_from_errored_with_path_inaccessible_returns_503_vault_errored() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+
+    let bogus = root.path().join("not-there");
+    let id = VaultId::new();
+    registry
+        .insert(VaultRow {
+            id: id.clone(),
+            name: "errd".to_string(),
+            path: bogus,
+            status: VaultStatus::Errored,
+            created_at: Utc::now(),
+            last_error: Some("path missing".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+
+    let err = manager
+        .resume("errd")
+        .await
+        .expect_err("resume against inaccessible path must error");
+    match err {
+        ControlPlaneError::VaultErrored {
+            name_or_id,
+            last_error,
+        } => {
+            assert_eq!(name_or_id, "errd");
+            assert_eq!(last_error.as_deref(), Some("path missing"));
+        }
+        other => panic!("expected VaultErrored, got {other:?}"),
+    }
+
+    let on_disk = registry.get_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(on_disk.status, VaultStatus::Errored);
+}
+
+#[tokio::test]
+async fn resume_idempotent_on_already_active() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let again = manager
+        .resume("alpha")
+        .await
+        .expect("resume on already-active is a no-op");
+    assert_eq!(again.status, VaultStatus::Active);
+    assert_eq!(manager.active_vaults().len(), 1);
+}
+
+#[tokio::test]
+async fn rename_updates_registry_and_meta_toml() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config.clone(), registry.clone(), embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("old".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let renamed = manager
+        .rename("old", "new-name")
+        .await
+        .expect("rename succeeds");
+    assert_eq!(renamed.id, row.id, "surrogate id unchanged");
+    assert_eq!(renamed.name, "new-name");
+
+    let on_disk = registry.get_by_id(&row.id).await.unwrap().unwrap();
+    assert_eq!(on_disk.name, "new-name");
+
+    let vault_dir = vault_data_dir(&config.storage.data_dir.0, &row.id);
+    assert_eq!(read_meta_toml_name(&vault_dir), "new-name");
+
+    // Resolve via the new name; runner stayed in the map.
+    let active = manager.active_vaults();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].name, "new-name");
+}
+
+#[tokio::test]
+async fn rename_validates_new_name_regex() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    for bad in ["has space", "with/slash", "", "dotted.name"] {
+        let err = manager
+            .rename("alpha", bad)
+            .await
+            .expect_err(&format!("rename to {bad:?} should fail"));
+        match err {
+            ControlPlaneError::VaultPathInvalid { detail } => {
+                assert!(
+                    detail.contains("new_name"),
+                    "expected detail to mention new_name: {detail}"
+                );
+            }
+            other => panic!("expected VaultPathInvalid for {bad:?}, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn rename_rejects_name_already_in_use() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path_a = fresh_vault_dir(root.path(), "a");
+    let path_b = fresh_vault_dir(root.path(), "b");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path: path_a,
+        })
+        .await
+        .unwrap();
+    manager
+        .create(CreateVaultRequest {
+            name: Some("bravo".to_string()),
+            path: path_b,
+        })
+        .await
+        .unwrap();
+
+    let err = manager
+        .rename("alpha", "bravo")
+        .await
+        .expect_err("rename to in-use name must error");
+    match err {
+        ControlPlaneError::VaultNameConflict { name, .. } => assert_eq!(name, "bravo"),
+        other => panic!("expected VaultNameConflict, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rename_to_same_name_is_noop() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let row = manager
+        .rename("alpha", "alpha")
+        .await
+        .expect("rename to same name succeeds");
+    assert_eq!(row.name, "alpha");
+}
+
+#[tokio::test]
+async fn concurrent_renames_on_different_vaults_run_in_parallel() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = Arc::new(open_manager(config, registry, embedder, rx).await);
+
+    let path_a = fresh_vault_dir(root.path(), "a");
+    let path_b = fresh_vault_dir(root.path(), "b");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path: path_a,
+        })
+        .await
+        .unwrap();
+    manager
+        .create(CreateVaultRequest {
+            name: Some("bravo".to_string()),
+            path: path_b,
+        })
+        .await
+        .unwrap();
+
+    let m1 = manager.clone();
+    let m2 = manager.clone();
+    let h1 = tokio::spawn(async move { m1.rename("alpha", "alpha2").await });
+    let h2 = tokio::spawn(async move { m2.rename("bravo", "bravo2").await });
+
+    let r1 = h1.await.unwrap().expect("rename alpha succeeds");
+    let r2 = h2.await.unwrap().expect("rename bravo succeeds");
+    assert_eq!(r1.name, "alpha2");
+    assert_eq!(r2.name, "bravo2");
+
+    let mut names: Vec<String> = manager
+        .active_vaults()
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["alpha2", "bravo2"]);
+}
+
+#[tokio::test]
+async fn concurrent_pause_and_search_dont_deadlock() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = Arc::new(open_manager(config, registry, embedder, rx).await);
+
+    let path_a = fresh_vault_dir(root.path(), "a");
+    let path_b = fresh_vault_dir(root.path(), "b");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path: path_a,
+        })
+        .await
+        .unwrap();
+    manager
+        .create(CreateVaultRequest {
+            name: Some("bravo".to_string()),
+            path: path_b,
+        })
+        .await
+        .unwrap();
+
+    let m1 = manager.clone();
+    let m2 = manager.clone();
+    let pause_h = tokio::spawn(async move { m1.pause("alpha").await });
+    let search_h = tokio::spawn(async move {
+        for _ in 0..32 {
+            let _ = m2.search_scope().await.expect("search_scope");
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let pause_res = tokio::time::timeout(std::time::Duration::from_secs(5), pause_h)
+        .await
+        .expect("pause did not complete within 5s — possible deadlock")
+        .unwrap()
+        .expect("pause result");
+    assert_eq!(pause_res.status, VaultStatus::Paused);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), search_h)
+        .await
+        .expect("searches did not complete within 5s — possible deadlock")
+        .unwrap();
+}
