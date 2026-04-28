@@ -14,7 +14,17 @@ use hypomnema::logging::{self, BinaryKind};
 use hypomnema::outbox::Outbox;
 use hypomnema::shutdown;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::VaultId;
 use hypomnema::watcher;
+
+// Interim placeholder vault identity for step-9 task 9.2. Both the daemon's
+// `run_daemon` startup and the `hmn scan` subcommand share this single id so
+// the per-vault index path stays stable across invocations during the
+// per-vault refactor's intermediate state. Task 9.5 replaces this with a
+// real `vault_registry`-driven reconcile + legacy-state migration.
+fn interim_vault_id() -> VaultId {
+    VaultId::from_string("00000000-0000-0000-0000-000000000000".to_string())
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "hmnd", version, about = "Hypomnema daemon")]
@@ -99,7 +109,9 @@ async fn run_daemon(config: Config) -> Result<()> {
         );
     }
 
+    let vault_id = interim_vault_id();
     let store = Store::open(
+        &vault_id,
         &config.storage.data_dir.0,
         &config.storage.index_file,
         &config.embedding,
@@ -187,7 +199,9 @@ async fn run_daemon(config: Config) -> Result<()> {
 }
 
 async fn do_scan(config: &Config) -> Result<ScanReport> {
+    let vault_id = interim_vault_id();
     let store = Store::open(
+        &vault_id,
         &config.storage.data_dir.0,
         &config.storage.index_file,
         &config.embedding,

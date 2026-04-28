@@ -30,9 +30,14 @@ async fn harness() -> Harness {
 async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     let dir = TempDir::new().unwrap();
     let vault = TempDir::new().unwrap();
-    let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
-        .await
-        .unwrap();
+    let store = Store::open(
+        &crate::vault_registry::VaultId::new(),
+        dir.path(),
+        "index.sqlite",
+        &EmbeddingConfig::default(),
+    )
+    .await
+    .unwrap();
     let state = ApiState {
         pool: store.pool(),
         vault: vault.path().to_path_buf(),

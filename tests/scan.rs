@@ -6,6 +6,7 @@ use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::{ScanReport, Scanner};
 use hypomnema::store::Store;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
 
@@ -14,6 +15,13 @@ struct Fixture {
     vault: PathBuf,
     data_dir: PathBuf,
     config: Config,
+    vault_id: VaultId,
+}
+
+impl Fixture {
+    fn index_dir(&self) -> PathBuf {
+        vault_data_dir(&self.data_dir, &self.vault_id)
+    }
 }
 
 fn fixture() -> Fixture {
@@ -40,11 +48,13 @@ fn fixture() -> Fixture {
         vault,
         data_dir,
         config,
+        vault_id: VaultId::new(),
     }
 }
 
 async fn run_scan(fx: &Fixture) -> ScanReport {
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,
@@ -56,8 +66,8 @@ async fn run_scan(fx: &Fixture) -> ScanReport {
     scanner.run().await.expect("run scan")
 }
 
-fn indexed_paths(data_dir: &Path) -> Vec<String> {
-    let db_path = data_dir.join("index.sqlite");
+fn indexed_paths(index_dir: &Path) -> Vec<String> {
+    let db_path = index_dir.join("index.sqlite");
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .expect("open index.sqlite read-only");
     let mut stmt = conn
@@ -77,7 +87,7 @@ async fn obsidian_directory_is_not_indexed() {
     fs::write(fx.vault.join("kept.md"), b"# kept").unwrap();
 
     run_scan(&fx).await;
-    assert_eq!(indexed_paths(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(indexed_paths(&fx.index_dir()), vec!["kept.md".to_string()]);
 }
 
 #[tokio::test]
@@ -89,7 +99,7 @@ async fn dot_git_directory_is_not_indexed() {
     fs::write(fx.vault.join("kept.md"), b"# kept").unwrap();
 
     run_scan(&fx).await;
-    assert_eq!(indexed_paths(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(indexed_paths(&fx.index_dir()), vec!["kept.md".to_string()]);
 }
 
 #[tokio::test]
@@ -103,7 +113,7 @@ async fn sync_conflict_files_are_not_indexed() {
     fs::write(fx.vault.join("kept.md"), b"# kept").unwrap();
 
     run_scan(&fx).await;
-    assert_eq!(indexed_paths(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(indexed_paths(&fx.index_dir()), vec!["kept.md".to_string()]);
 }
 
 #[tokio::test]
@@ -114,7 +124,7 @@ async fn nested_md_tmp_files_are_not_indexed() {
     fs::write(fx.vault.join("kept.md"), b"# kept").unwrap();
 
     run_scan(&fx).await;
-    assert_eq!(indexed_paths(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(indexed_paths(&fx.index_dir()), vec!["kept.md".to_string()]);
 }
 
 #[cfg(unix)]
@@ -128,7 +138,7 @@ async fn symlink_inside_vault_is_indexed_under_link_name() {
 
     let report = run_scan(&fx).await;
     assert_eq!(
-        indexed_paths(&fx.data_dir),
+        indexed_paths(&fx.index_dir()),
         vec!["link.md".to_string(), "real.md".to_string()]
     );
     assert_eq!(report.skipped_outside_vault, 0);
@@ -146,7 +156,7 @@ async fn symlink_pointing_outside_vault_is_skipped() {
     symlink(outside.path().join("secret.md"), fx.vault.join("link.md")).unwrap();
 
     let report = run_scan(&fx).await;
-    assert_eq!(indexed_paths(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(indexed_paths(&fx.index_dir()), vec!["kept.md".to_string()]);
     assert!(
         report.skipped_outside_vault >= 1,
         "expected ScanReport.skipped_outside_vault >= 1, got {}",

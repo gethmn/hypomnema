@@ -562,6 +562,7 @@ mod tests {
     use super::*;
     use crate::embedding::{EmbedFuture, EmbeddingError, StubEmbedder};
     use crate::store::Store;
+    use crate::vault_registry::VaultId;
     use std::fs;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -766,9 +767,14 @@ mod tests {
         fs::write(vault_dir.path().join("hello.md"), b"# hello").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         let report = scanner.run().await.unwrap();
         assert_eq!(report.inserted, 1);
@@ -785,9 +791,14 @@ mod tests {
         fs::write(vault_dir.path().join("hello.md"), b"# hello").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         let r1 = scanner.run().await.unwrap();
         assert_eq!(r1.inserted, 1);
@@ -808,9 +819,14 @@ mod tests {
         fs::write(&path, b"# v1").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.run().await.unwrap();
 
@@ -835,9 +851,14 @@ mod tests {
         fs::write(&path, b"# stable").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.run().await.unwrap();
 
@@ -866,9 +887,14 @@ mod tests {
         fs::write(vault_dir.path().join("b.md"), b"# B").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         let r1 = scanner.run().await.unwrap();
         assert_eq!(r1.inserted, 2);
@@ -887,9 +913,14 @@ mod tests {
         fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let outcome = scanner.reindex_path("hello.md").await.unwrap();
@@ -911,9 +942,14 @@ mod tests {
         fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let expected = hash_file(&path).unwrap();
@@ -937,9 +973,14 @@ mod tests {
         fs::write(&path, b"# v1").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.reindex_path("hello.md").await.unwrap();
         let h1 = read_hash(&store, "hello.md").await;
@@ -966,9 +1007,14 @@ mod tests {
         fs::write(&path, b"# stable").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.reindex_path("hello.md").await.unwrap();
         let h1 = read_hash(&store, "hello.md").await;
@@ -988,9 +1034,14 @@ mod tests {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let outcome = scanner.reindex_path("ghost.md").await.unwrap();
@@ -1007,9 +1058,14 @@ mod tests {
         fs::write(&path, b"# nested").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let outcome = scanner.reindex_path("notes/sub/note.md").await.unwrap();
@@ -1031,9 +1087,14 @@ mod tests {
         fs::write(&path, b"# hi").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.reindex_path("hello.md").await.unwrap();
         assert_eq!(count_files(&store).await, 1);
@@ -1054,9 +1115,14 @@ mod tests {
         let vault_dir = tempdir().unwrap();
         let data_dir = tempdir().unwrap();
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let outcome = scanner.remove_path("ghost.md").await.unwrap();
@@ -1072,9 +1138,14 @@ mod tests {
         fs::write(&path, b"# carries-inserted-hash").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         let expected = hash_file(&path).unwrap();
@@ -1093,9 +1164,14 @@ mod tests {
         fs::write(&path, b"# v1").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.reindex_path("hello.md").await.unwrap();
 
@@ -1115,9 +1191,14 @@ mod tests {
         fs::write(vault_dir.path().join("hello.md"), b"# hello\n\nbody").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         let report = scanner.run().await.unwrap();
         assert_eq!(report.inserted, 1);
@@ -1133,9 +1214,14 @@ mod tests {
         fs::write(&path, b"# v1").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.run().await.unwrap();
         assert_eq!(read_content(&store, "hello.md").await, "# v1");
@@ -1154,9 +1240,14 @@ mod tests {
         fs::write(&path, b"# carries-prior-hash").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
         scanner.reindex_path("hello.md").await.unwrap();
         let inserted_hash = read_hash(&store, "hello.md").await;
@@ -1182,9 +1273,14 @@ mod tests {
         .unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let recorder = RecordingEmbedder::new(768);
         let scanner = Scanner::new(&config, &store, recorder.clone() as Arc<dyn Embedder>).unwrap();
 
@@ -1211,9 +1307,14 @@ mod tests {
         fs::write(&path, b"# Alpha\n\nBody one.\n\n# Bravo\n\nBody two.\n").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let scanner = stub_scanner(&config, &store);
 
         scanner.reindex_path("note.md").await.unwrap();
@@ -1239,9 +1340,14 @@ mod tests {
         fs::write(vault_dir.path().join("note.md"), b"# A\n\nbody.\n").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let failing = AlwaysSkipEmbedder::new();
         let scanner = Scanner::new(&config, &store, failing.clone() as Arc<dyn Embedder>).unwrap();
 
@@ -1274,9 +1380,14 @@ mod tests {
         fs::write(vault_dir.path().join("note.md"), b"# A\n\nbody.\n").unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let failing = AlwaysDimensionMismatchEmbedder::new();
         let scanner = Scanner::new(&config, &store, failing.clone() as Arc<dyn Embedder>).unwrap();
 
@@ -1310,9 +1421,14 @@ mod tests {
         fs::write(vault_dir.path().join("fm.md"), body).unwrap();
 
         let config = smoke_config(vault_dir.path());
-        let store = Store::open(data_dir.path(), "index.sqlite", &config.embedding)
-            .await
-            .unwrap();
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
         let recorder = RecordingEmbedder::new(768);
         let scanner = Scanner::new(&config, &store, recorder.clone() as Arc<dyn Embedder>).unwrap();
 

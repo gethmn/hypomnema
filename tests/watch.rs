@@ -8,6 +8,7 @@ use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::{self, Watcher};
 use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
@@ -23,6 +24,13 @@ struct Fixture {
     data_dir: PathBuf,
     config: Config,
     debounce_ms: u64,
+    vault_id: VaultId,
+}
+
+impl Fixture {
+    fn index_dir(&self) -> PathBuf {
+        vault_data_dir(&self.data_dir, &self.vault_id)
+    }
 }
 
 fn fixture() -> Fixture {
@@ -55,6 +63,7 @@ fn fixture_with_debounce(debounce_ms: u64) -> Fixture {
         data_dir,
         config,
         debounce_ms,
+        vault_id: VaultId::new(),
     }
 }
 
@@ -74,6 +83,7 @@ impl Live {
 
 async fn start(fx: &Fixture) -> Live {
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,
@@ -110,14 +120,14 @@ async fn start(fx: &Fixture) -> Live {
     }
 }
 
-fn open_index(data_dir: &Path) -> Connection {
-    let db_path = data_dir.join("index.sqlite");
+fn open_index(index_dir: &Path) -> Connection {
+    let db_path = index_dir.join("index.sqlite");
     Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .expect("open index.sqlite read-only")
 }
 
-fn paths_in_index(data_dir: &Path) -> Vec<String> {
-    let conn = open_index(data_dir);
+fn paths_in_index(index_dir: &Path) -> Vec<String> {
+    let conn = open_index(index_dir);
     let mut stmt = conn
         .prepare("SELECT path FROM files ORDER BY path")
         .unwrap();
@@ -125,8 +135,8 @@ fn paths_in_index(data_dir: &Path) -> Vec<String> {
     rows.map(|r| r.unwrap()).collect()
 }
 
-fn hash_for(data_dir: &Path, path: &str) -> Option<String> {
-    let conn = open_index(data_dir);
+fn hash_for(index_dir: &Path, path: &str) -> Option<String> {
+    let conn = open_index(index_dir);
     conn.query_row(
         "SELECT content_hash FROM files WHERE path = ?1",
         rusqlite::params![path],
@@ -141,14 +151,14 @@ async fn edit_updates_content_hash() {
     fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
 
     let live = start(&fx).await;
-    let initial_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+    let initial_hash = hash_for(&fx.index_dir(), "note.md").expect("initial row");
 
     fs::write(fx.vault.join("note.md"), b"# v1 changed bytes\n").unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    let new_hash = hash_for(&fx.data_dir, "note.md").expect("row after edit");
+    let new_hash = hash_for(&fx.index_dir(), "note.md").expect("row after edit");
     assert_ne!(initial_hash, new_hash, "content_hash should change on edit");
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["note.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -159,7 +169,7 @@ async fn dropping_sync_conflict_file_is_ignored() {
     fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
 
     let live = start(&fx).await;
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     fs::write(
         fx.vault.join("My Note.sync-conflict-202604.md"),
@@ -168,7 +178,7 @@ async fn dropping_sync_conflict_file_is_ignored() {
     .unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -179,7 +189,7 @@ async fn dropping_obsidian_conflict_file_is_ignored() {
     fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
 
     let live = start(&fx).await;
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     fs::write(
         fx.vault.join("My Note (conflicted copy 2026-04-25).md"),
@@ -188,7 +198,7 @@ async fn dropping_obsidian_conflict_file_is_ignored() {
     .unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -201,14 +211,14 @@ async fn deleting_md_removes_row() {
 
     let live = start(&fx).await;
     assert_eq!(
-        paths_in_index(&fx.data_dir),
+        paths_in_index(&fx.index_dir()),
         vec!["a.md".to_string(), "b.md".to_string()]
     );
 
     fs::remove_file(fx.vault.join("a.md")).unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["b.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["b.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -221,7 +231,7 @@ async fn set_modified_without_byte_change_leaves_hash() {
     fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
 
     let live = start(&fx).await;
-    let original_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+    let original_hash = hash_for(&fx.index_dir(), "note.md").expect("initial row");
 
     let f = fs::OpenOptions::new()
         .write(true)
@@ -232,12 +242,12 @@ async fn set_modified_without_byte_change_leaves_hash() {
     drop(f);
     tokio::time::sleep(SETTLE).await;
 
-    let after_hash = hash_for(&fx.data_dir, "note.md").expect("row after touch");
+    let after_hash = hash_for(&fx.index_dir(), "note.md").expect("row after touch");
     assert_eq!(
         original_hash, after_hash,
         "content_hash must not change for an mtime-only bump"
     );
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["note.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -249,13 +259,13 @@ async fn creating_nested_md_appears_with_forward_slash_path() {
     fs::create_dir_all(fx.vault.join("notes/sub")).unwrap();
 
     let live = start(&fx).await;
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     fs::write(fx.vault.join("notes/sub/new.md"), b"# new\n").unwrap();
     tokio::time::sleep(SETTLE).await;
 
     assert_eq!(
-        paths_in_index(&fx.data_dir),
+        paths_in_index(&fx.index_dir()),
         vec!["kept.md".to_string(), "notes/sub/new.md".to_string()]
     );
 
@@ -270,12 +280,18 @@ async fn rename_decomposes_into_remove_and_upsert() {
     fs::write(fx.vault.join("notes/a.md"), b"# a\n").unwrap();
 
     let live = start(&fx).await;
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["notes/a.md".to_string()]);
+    assert_eq!(
+        paths_in_index(&fx.index_dir()),
+        vec!["notes/a.md".to_string()]
+    );
 
     fs::rename(fx.vault.join("notes/a.md"), fx.vault.join("notes/b.md")).unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["notes/b.md".to_string()]);
+    assert_eq!(
+        paths_in_index(&fx.index_dir()),
+        vec!["notes/b.md".to_string()]
+    );
 
     live.shutdown().await;
 }
@@ -287,12 +303,12 @@ async fn dropping_dot_git_md_is_ignored() {
     fs::create_dir_all(fx.vault.join(".git")).unwrap();
 
     let live = start(&fx).await;
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     fs::write(fx.vault.join(".git/HEAD.md"), b"ref: refs/heads/main\n").unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["kept.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     live.shutdown().await;
 }
@@ -303,7 +319,7 @@ async fn sustained_save_loop_completes_with_consistent_row() {
     fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
 
     let live = start(&fx).await;
-    let initial_hash = hash_for(&fx.data_dir, "note.md").expect("initial row");
+    let initial_hash = hash_for(&fx.index_dir(), "note.md").expect("initial row");
 
     let started = Instant::now();
     for _ in 0..50 {
@@ -320,12 +336,12 @@ async fn sustained_save_loop_completes_with_consistent_row() {
     );
 
     let final_hash =
-        hash_for(&fx.data_dir, "note.md").expect("row must still exist after save loop");
+        hash_for(&fx.index_dir(), "note.md").expect("row must still exist after save loop");
     assert_eq!(
         initial_hash, final_hash,
         "same-bytes loop must leave content_hash equal to the original"
     );
-    assert_eq!(paths_in_index(&fx.data_dir), vec!["note.md".to_string()]);
+    assert_eq!(paths_in_index(&fx.index_dir()), vec!["note.md".to_string()]);
 
     live.shutdown().await;
 }

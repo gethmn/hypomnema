@@ -9,6 +9,7 @@ use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::{Scanner, hash_file};
 use hypomnema::outbox::{ChangeEvent, EventType, Outbox};
 use hypomnema::store::Store;
+use hypomnema::vault_registry::VaultId;
 use hypomnema::watcher::{self, Watcher};
 use tempfile::TempDir;
 use tokio::sync::watch;
@@ -23,6 +24,7 @@ struct Fixture {
     data_dir: PathBuf,
     config: Config,
     debounce_ms: u64,
+    vault_id: VaultId,
 }
 
 fn fixture() -> Fixture {
@@ -51,6 +53,7 @@ fn fixture() -> Fixture {
         data_dir,
         config,
         debounce_ms: DEBOUNCE_MS,
+        vault_id: VaultId::new(),
     }
 }
 
@@ -74,6 +77,7 @@ impl Live {
 
 async fn start(fx: &Fixture) -> Live {
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,

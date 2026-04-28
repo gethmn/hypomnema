@@ -135,9 +135,14 @@ mod tests {
     async fn spawn_test_daemon() -> TestDaemon {
         let dir = TempDir::new().unwrap();
         let vault = TempDir::new().unwrap();
-        let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
-            .await
-            .unwrap();
+        let store = Store::open(
+            &crate::vault_registry::VaultId::new(),
+            dir.path(),
+            "index.sqlite",
+            &EmbeddingConfig::default(),
+        )
+        .await
+        .unwrap();
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
         let state = ApiState {
             pool: store.pool(),

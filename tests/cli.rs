@@ -8,6 +8,7 @@ use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::VaultId;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -20,6 +21,7 @@ struct Fixture {
     data_dir: PathBuf,
     cfg_path: PathBuf,
     config: Config,
+    vault_id: VaultId,
 }
 
 fn fixture() -> Fixture {
@@ -47,6 +49,7 @@ fn fixture() -> Fixture {
         data_dir,
         cfg_path,
         config,
+        vault_id: VaultId::new(),
     }
 }
 
@@ -78,6 +81,7 @@ impl LiveDaemon {
 
 async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,

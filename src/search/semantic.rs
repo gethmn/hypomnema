@@ -310,9 +310,14 @@ mod tests {
 
     async fn open_store() -> (tempfile::TempDir, Store) {
         let dir = tempdir().unwrap();
-        let store = Store::open(dir.path(), "index.sqlite", &EmbeddingConfig::default())
-            .await
-            .unwrap();
+        let store = Store::open(
+            &crate::vault_registry::VaultId::new(),
+            dir.path(),
+            "index.sqlite",
+            &EmbeddingConfig::default(),
+        )
+        .await
+        .unwrap();
         (dir, store)
     }
 

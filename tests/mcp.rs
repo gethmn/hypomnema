@@ -29,6 +29,7 @@ use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::{self, Watcher};
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -53,6 +54,7 @@ struct Fixture {
     data_dir: PathBuf,
     cfg_path: PathBuf,
     config: Config,
+    vault_id: VaultId,
 }
 
 fn fixture() -> Fixture {
@@ -85,6 +87,7 @@ fn fixture() -> Fixture {
         data_dir,
         cfg_path,
         config,
+        vault_id: VaultId::new(),
     }
 }
 
@@ -125,6 +128,7 @@ impl LiveDaemon {
 async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(SCHEMA_DIM));
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,
@@ -182,7 +186,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     LiveDaemon {
         base_url: format!("http://{addr}"),
         cfg_path: fx.cfg_path.clone(),
-        data_dir: fx.data_dir.clone(),
+        data_dir: vault_data_dir(&fx.data_dir, &fx.vault_id),
         watcher: Some(watcher),
         consumer: Some(consumer),
         server: Some(server),

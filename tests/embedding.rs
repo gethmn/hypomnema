@@ -27,6 +27,7 @@ use hypomnema::embedding::{EmbedFuture, Embedder, EmbeddingClient};
 use hypomnema::indexer::Scanner;
 use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::{self, Watcher};
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
@@ -179,6 +180,7 @@ struct Fixture {
     data_dir: PathBuf,
     cfg_path: PathBuf,
     config: Config,
+    vault_id: VaultId,
 }
 
 fn fixture(stub_url: &str) -> Fixture {
@@ -215,6 +217,7 @@ fn fixture(stub_url: &str) -> Fixture {
         data_dir,
         cfg_path,
         config,
+        vault_id: VaultId::new(),
     }
 }
 
@@ -253,6 +256,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
 
 async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder>) -> LiveDaemon {
     let store = Store::open(
+        &fx.vault_id,
         &fx.data_dir,
         &fx.config.storage.index_file,
         &fx.config.embedding,
@@ -310,7 +314,7 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
     LiveDaemon {
         base_url: format!("http://{addr}"),
         cfg_path: fx.cfg_path.clone(),
-        data_dir: fx.data_dir.clone(),
+        data_dir: vault_data_dir(&fx.data_dir, &fx.vault_id),
         vault: fx.vault.clone(),
         watcher: Some(watcher),
         consumer: Some(consumer),
@@ -565,7 +569,8 @@ async fn dimension_mismatch_at_startup_fails_loudly() {
         ..EmbeddingConfig::default()
     };
 
-    let err = match Store::open(&data_dir, "index.sqlite", &cfg).await {
+    let vault_id = VaultId::new();
+    let err = match Store::open(&vault_id, &data_dir, "index.sqlite", &cfg).await {
         Ok(_) => panic!("Store::open must error on dimension mismatch"),
         Err(e) => e,
     };
