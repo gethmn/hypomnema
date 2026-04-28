@@ -263,7 +263,8 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
     )
     .await
     .expect("open store");
-    let scanner = Scanner::new(&fx.config, &store, embedder.clone()).expect("construct scanner");
+    let scanner =
+        Scanner::new(&fx.vault, &fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
     let ignores = fx

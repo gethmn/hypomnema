@@ -18,6 +18,7 @@ use crate::chunk;
 use crate::config::Config;
 use crate::embedding::{Embedder, EmbeddingError};
 use crate::store::{SqlitePool, Store, rewrite_chunks_for_file};
+use crate::vault_registry::VaultId;
 
 pub use hash::hash_file;
 
@@ -47,6 +48,7 @@ pub enum RemoveOutcome {
 }
 
 pub struct Scanner {
+    vault_id: VaultId,
     vault: PathBuf,
     ignores: GlobSet,
     pool: SqlitePool,
@@ -54,13 +56,19 @@ pub struct Scanner {
 }
 
 impl Scanner {
-    pub fn new(config: &Config, store: &Store, embedder: Arc<dyn Embedder>) -> Result<Self> {
+    pub fn new(
+        vault_path: &Path,
+        config: &Config,
+        store: &Store,
+        embedder: Arc<dyn Embedder>,
+    ) -> Result<Self> {
         let ignores = config
             .watcher
             .compiled_ignores()
             .context("compiling watcher.ignore_patterns for scanner")?;
         Ok(Self {
-            vault: config.vault.0.clone(),
+            vault_id: store.vault_id().clone(),
+            vault: vault_path.to_path_buf(),
             ignores,
             pool: store.pool(),
             embedder,
@@ -73,7 +81,11 @@ impl Scanner {
         let ignores = self.ignores.clone();
         let pool = self.pool.clone();
 
-        info!(vault = %vault.display(), "scan: walking vault");
+        info!(
+            vault_id = %self.vault_id,
+            vault = %vault.display(),
+            "scan: walking vault"
+        );
 
         // Phase 1 (sync): walk + load existing files into HashMap.
         let (walked, mut existing) = task::spawn_blocking(
@@ -117,6 +129,7 @@ impl Scanner {
 
         let total = walked.entries.len() as u64;
         info!(
+            vault_id = %self.vault_id,
             total,
             skipped_outside_vault = walked.skipped_outside_vault,
             walk_errors = walked.walk_errors,
@@ -155,6 +168,7 @@ impl Scanner {
             processed += 1;
             if processed % PROGRESS_EVERY_FILES == 0 || last_log_at.elapsed() >= PROGRESS_EVERY {
                 info!(
+                    vault_id = %self.vault_id,
                     processed,
                     total,
                     inserted = report.inserted,
@@ -192,6 +206,7 @@ impl Scanner {
 
         report.duration = started.elapsed();
         info!(
+            vault_id = %self.vault_id,
             inserted = report.inserted,
             updated = report.updated,
             hash_unchanged = report.hash_unchanged,
@@ -579,7 +594,7 @@ mod tests {
 
     fn stub_scanner(config: &Config, store: &Store) -> Scanner {
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-        Scanner::new(config, store, embedder).unwrap()
+        Scanner::new(&config.vault.0, config, store, embedder).unwrap()
     }
 
     /// Embedder used by failure-path tests. Returns a `Status { code: 503, ... }`
@@ -1282,7 +1297,13 @@ mod tests {
         .await
         .unwrap();
         let recorder = RecordingEmbedder::new(768);
-        let scanner = Scanner::new(&config, &store, recorder.clone() as Arc<dyn Embedder>).unwrap();
+        let scanner = Scanner::new(
+            &config.vault.0,
+            &config,
+            &store,
+            recorder.clone() as Arc<dyn Embedder>,
+        )
+        .unwrap();
 
         let outcome = scanner.reindex_path("hello.md").await.unwrap();
         assert!(matches!(outcome, ReindexOutcome::Inserted { .. }));
@@ -1349,7 +1370,13 @@ mod tests {
         .await
         .unwrap();
         let failing = AlwaysSkipEmbedder::new();
-        let scanner = Scanner::new(&config, &store, failing.clone() as Arc<dyn Embedder>).unwrap();
+        let scanner = Scanner::new(
+            &config.vault.0,
+            &config,
+            &store,
+            failing.clone() as Arc<dyn Embedder>,
+        )
+        .unwrap();
 
         let outcome = scanner.reindex_path("note.md").await.unwrap();
         assert_eq!(
@@ -1389,7 +1416,13 @@ mod tests {
         .await
         .unwrap();
         let failing = AlwaysDimensionMismatchEmbedder::new();
-        let scanner = Scanner::new(&config, &store, failing.clone() as Arc<dyn Embedder>).unwrap();
+        let scanner = Scanner::new(
+            &config.vault.0,
+            &config,
+            &store,
+            failing.clone() as Arc<dyn Embedder>,
+        )
+        .unwrap();
 
         let outcome = scanner.reindex_path("note.md").await.unwrap();
         assert_eq!(
@@ -1430,7 +1463,13 @@ mod tests {
         .await
         .unwrap();
         let recorder = RecordingEmbedder::new(768);
-        let scanner = Scanner::new(&config, &store, recorder.clone() as Arc<dyn Embedder>).unwrap();
+        let scanner = Scanner::new(
+            &config.vault.0,
+            &config,
+            &store,
+            recorder.clone() as Arc<dyn Embedder>,
+        )
+        .unwrap();
 
         let outcome = scanner.reindex_path("fm.md").await.unwrap();
         match outcome {
@@ -1448,6 +1487,71 @@ mod tests {
         assert!(
             recorder.texts().is_empty(),
             "embedder must not be called for a zero-chunk file"
+        );
+    }
+
+    // --- Task 9.3 prescribed test: per-vault isolation ---
+
+    #[tokio::test]
+    async fn indexer_writes_to_correct_per_vault_store() {
+        let vault_a = tempdir().unwrap();
+        let vault_b = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+
+        fs::write(vault_a.path().join("only-in-a.md"), b"# only in a").unwrap();
+        fs::write(vault_b.path().join("only-in-b.md"), b"# only in b").unwrap();
+
+        let config_a = smoke_config(vault_a.path());
+        let config_b = smoke_config(vault_b.path());
+
+        let vault_id_a = VaultId::new();
+        let vault_id_b = VaultId::new();
+
+        let store_a = Store::open(
+            &vault_id_a,
+            data_dir.path(),
+            "index.sqlite",
+            &config_a.embedding,
+        )
+        .await
+        .unwrap();
+        let store_b = Store::open(
+            &vault_id_b,
+            data_dir.path(),
+            "index.sqlite",
+            &config_b.embedding,
+        )
+        .await
+        .unwrap();
+
+        let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+        let scanner_a =
+            Scanner::new(&config_a.vault.0, &config_a, &store_a, embedder.clone()).unwrap();
+        let scanner_b =
+            Scanner::new(&config_b.vault.0, &config_b, &store_b, embedder.clone()).unwrap();
+
+        scanner_a.run().await.unwrap();
+        scanner_b.run().await.unwrap();
+
+        assert_eq!(count_files(&store_a).await, 1);
+        assert_eq!(count_files(&store_b).await, 1);
+        assert_eq!(
+            read_hash_optional(&store_a, "only-in-a.md").await,
+            Some(hash_file(&vault_a.path().join("only-in-a.md")).unwrap()),
+        );
+        assert_eq!(
+            read_hash_optional(&store_a, "only-in-b.md").await,
+            None,
+            "vault A's store must not see vault B's file",
+        );
+        assert_eq!(
+            read_hash_optional(&store_b, "only-in-b.md").await,
+            Some(hash_file(&vault_b.path().join("only-in-b.md")).unwrap()),
+        );
+        assert_eq!(
+            read_hash_optional(&store_b, "only-in-a.md").await,
+            None,
+            "vault B's store must not see vault A's file",
         );
     }
 }

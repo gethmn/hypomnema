@@ -122,8 +122,8 @@ async fn run_daemon(config: Config) -> Result<()> {
         EmbeddingClient::new(&config.embedding).context("constructing embedding client")?;
     embed_health_probe(&client, &config.embedding).await;
     let embedder: Arc<dyn Embedder> = Arc::new(client);
-    let scanner =
-        Scanner::new(&config, &store, embedder.clone()).context("constructing scanner")?;
+    let scanner = Scanner::new(&config.vault.0, &config, &store, embedder.clone())
+        .context("constructing scanner")?;
     let report = scanner.run().await.context("running initial scan")?;
     tracing::info!(
         "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
@@ -212,7 +212,8 @@ async fn do_scan(config: &Config) -> Result<ScanReport> {
         EmbeddingClient::new(&config.embedding).context("constructing embedding client")?;
     embed_health_probe(&client, &config.embedding).await;
     let embedder: Arc<dyn Embedder> = Arc::new(client);
-    let scanner = Scanner::new(config, &store, embedder).context("constructing scanner")?;
+    let scanner =
+        Scanner::new(&config.vault.0, config, &store, embedder).context("constructing scanner")?;
     let report = scanner.run().await.context("running scan")?;
     tracing::info!(
         "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",

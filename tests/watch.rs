@@ -91,7 +91,7 @@ async fn start(fx: &Fixture) -> Live {
     .await
     .expect("open store");
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-    let scanner = Scanner::new(&fx.config, &store, embedder).expect("construct scanner");
+    let scanner = Scanner::new(&fx.vault, &fx.config, &store, embedder).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
     let ignores = fx
