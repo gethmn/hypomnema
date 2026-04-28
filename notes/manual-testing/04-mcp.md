@@ -1,32 +1,43 @@
-# 04 · MCP
+# 04 · MCP over stdio
 
-> Applies to: step 8. Prereqs:
+> Applies to: round 4 / step 12 (12-tool surface — 3 search + 9 vault
+> management — over the round-1 stdio transport). Prereqs:
 > [`01-running-the-daemon.md`](./01-running-the-daemon.md) complete and
-> `hmnd` is running against the fixture vault. Semantic search through
-> MCP additionally requires TEI per [`00-setup.md`](./00-setup.md) §4.
+> `hmnd` is running against both fixture vaults. Semantic search
+> through MCP additionally requires TEI per
+> [`00-setup.md`](./00-setup.md) §4.
 
 This doc verifies the MCP-over-stdio surface end-to-end. Two paths:
 
 - A **JSON-RPC driver** that pumps newline-delimited frames into
   `hmn mcp`'s stdio — the one you can run from a shell to confirm the
-  wire shape against the fixture vault.
+  wire shape against the fixture vaults.
 - A **Claude Code agent-host** path — the round-2 shipping gate's
   load-bearing test. You configure Claude Code's MCP client to spawn
   `hmn mcp`, then exercise each tool through Claude Code's UX.
 
 The MCP wire shape is the same as the HTTP wire shape per
-[ADR-0004](../../docs/decisions/0004-three-search-modes-as-peers.md):
+[ADR-0004](../../docs/decisions/0004-three-search-modes-as-peers.md)
+and [ADR-0011](../../docs/decisions/0011-vault-management-on-hmn.md):
 results that match [`fixtures/README.md`](./fixtures/README.md) over
-`/search/...` will match over `tools/call` too. Where this doc shows
-expected counts and paths, they are the same expectations as
-[`03-search.md`](./03-search.md).
+`/search/...` and `/vaults/...` will match over `tools/call` too.
+Where this doc shows expected counts and paths, they are the same
+expectations as [`03-search.md`](./03-search.md) and
+[`05-vault-management.md`](./05-vault-management.md).
 
 `hmn mcp` lives on the **CLI** binary, not the daemon — see
 [ADR-0008 § Amendments](../../docs/decisions/0008-two-binary-daemon-plus-cli.md#amendments)
 and [ADR-0012](../../docs/decisions/0012-mcp-transport-stdio-v0.md) for
 the binary-placement reasoning. The daemon's `mcp.transport` config
-knob still parses, but a non-`stdio` value only produces a startup WARN
-in `hmnd` (covered in §6 below).
+knob still parses, but a non-`stdio` value only produces a startup
+WARN in `hmnd` (covered in §6 below).
+
+> The round-4 HTTP-MCP transport — the same 12-tool surface served at
+> `http://127.0.0.1:7777/mcp` on `hmnd`'s own listener — is documented
+> separately in [`06-mcp-http.md`](./06-mcp-http.md). Stdio and HTTP
+> are coexisting transports against the same handlers; both must
+> advertise the same `tools/list` and round-trip the same `tools/call`
+> bodies.
 
 ---
 
@@ -125,8 +136,9 @@ Expect a single JSON-RPC response. Spot-check:
 
 - `result.serverInfo.name` is `"hypomnema"` (the brand-identity override
   per [ADR-0012]; without it, rmcp would advertise itself as `"rmcp"`).
-- `result.serverInfo.version` is the crate version (`"0.1.0"` at v0
-  ship).
+- `result.serverInfo.version` is the crate version from `Cargo.toml`
+  (the round-4 ship version is `0.3.0`; pre-bump development builds
+  report `0.2.0`).
 - `result.protocolVersion` is `"2025-06-18"`.
 - `result.capabilities.tools` is an object (the server advertises tool
   capability).
@@ -134,39 +146,70 @@ Expect a single JSON-RPC response. Spot-check:
 ### B. `tools/list`
 
 ```bash
-/tmp/mcp-drive.py '{"method":"tools/list","params":{}}' | jq '.result.tools[] | .name'
+/tmp/mcp-drive.py '{"method":"tools/list","params":{}}' \
+  | jq '.result.tools | length, [.[] | .name] | sort'
 ```
 
-Expect exactly three tools, in any order:
+Expect **12** tools, in any order. The canonical set:
 
 ```
 "search_filesystem"
 "search_content"
 "search_semantic"
+"vault_list"
+"vault_status"
+"vault_create"
+"vault_pause"
+"vault_resume"
+"vault_reset"
+"vault_rename"
+"vault_rescan"
+"vault_terminate"
 ```
 
 Tool descriptions and per-field input schemas should also round-trip:
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/list","params":{}}' \
-  | jq '.result.tools[] | {name, description, props: (.inputSchema.properties | keys)}'
+  | jq '.result.tools[] | {name, description, props: (.inputSchema.properties // {} | keys)}'
 ```
 
 Each tool's `description` field is non-empty (sourced from the
 `#[tool(description = "...")]` macro). Each `inputSchema.properties`
 includes the field names from the request types in `src/api/types.rs`
-(e.g. `search_filesystem` exposes `glob` and `prefix`; per-field
-descriptions appear at `properties.<name>.description`).
+— e.g. `search_filesystem` exposes `glob`, `prefix`, and `vaults`;
+`vault_status` exposes an optional `target`; `vault_create` exposes
+`name` and `path`. Per-field descriptions appear at
+`properties.<name>.description`.
+
+`vault_list` takes no arguments and `vault_status` accepts an
+optional `target` (defaulting to `default_vault_name`); the seven
+write tools each take a required `target` (and `vault_create`/`vault_rename`
+take additional fields per their HTTP shapes).
+
+> **Write-tool gating** ([`docs/specs/vault-management.md` § MCP Tool
+> Surface](../../docs/specs/vault-management.md#mcp-tool-surface)).
+> When the daemon is configured with `[mcp] enable_write_tools =
+> false`, all seven write tools (`vault_create`, `vault_pause`,
+> `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`,
+> `vault_terminate`) remain in `tools/list` but `tools/call` against
+> any of them returns a structured `write_tools_disabled` error
+> envelope naming the gated tool and pointing at the config knob.
+> The five read tools (3 search + `vault_list` + `vault_status`)
+> continue to work. Default-on; flip to `false` for read-only MCP
+> deployments.
 
 ---
 
-## 4. `tools/call` against the fixture vault
+## 4. `tools/call` against the fixture vaults
 
 The expected counts and paths below match
-[`fixtures/README.md`](./fixtures/README.md) — same wire shape over MCP
-as over HTTP.
+[`fixtures/README.md`](./fixtures/README.md) — same wire shape over
+MCP as over HTTP. Search tools fan out across all active vaults by
+default and accept an optional `vaults` array to narrow scope, just
+like the HTTP search routes.
 
-### A. `search_filesystem` — match every Markdown file
+### A. `search_filesystem` — match every Markdown file across both vaults
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
@@ -178,49 +221,76 @@ Expect:
 
 ```
 false
-7
+17
 ```
 
-(`isError: false`, seven indexed `.md` files — same set as
-[`03-search.md`](./03-search.md) §A.)
+(`isError: false`, seven from `sample` + ten from `sample-2` — same
+total as [`03-search.md`](./03-search.md) §A.)
 
-The result paths land at `result.structuredContent.results[].path`,
-ascending. `result.structuredContent.truncated` is `false`.
+Each row carries `vault_name` and `vault` (UUID) — group to verify:
 
-### B. `search_content` — substring match
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"search_filesystem","arguments":{"glob":"**/*.md"}}}' \
+  | jq '[.result.structuredContent.results[] | .vault_name] | group_by(.) | map({vault: .[0], count: length})'
+```
+
+Expect `[{"vault":"sample","count":7}, {"vault":"sample-2","count":10}]`.
+
+To narrow to one vault:
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"search_filesystem","arguments":{"glob":"**/*.md","vaults":["sample-2"]}}}' \
+  | jq '.result.structuredContent.results | length'
+```
+
+Expect **10**.
+
+### B. `search_content` — substring match (vault A)
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
   "name":"search_content","arguments":{"query":"pgvector"}}}' \
-  | jq '.result.structuredContent.results[].path'
+  | jq '.result.structuredContent.results[] | {vault_name, path, match_count}'
 ```
 
-Expect exactly:
+Expect exactly one row:
 
+```json
+{"vault_name":"sample","path":"notes/databases/pgvector.md","match_count":2}
 ```
-"notes/databases/pgvector.md"
+
+`match_count >= 2` (heading line plus body mention).
+
+### C. `search_content` — substring match (vault B)
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"search_content","arguments":{"query":"sourdough"}}}' \
+  | jq '.result.structuredContent.results[].vault_name'
 ```
 
-`.results[0].match_count >= 2` (heading line plus body mention) — the
-same contract as [`03-search.md`](./03-search.md) §A in the
-content-search section.
+Expect three results, all `"sample-2"` — see
+[`fixtures/README.md`](./fixtures/README.md) § Vault B.
 
-### C. `search_semantic` — top-1 match
+### D. `search_semantic` — top-1 match (vault A)
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
   "name":"search_semantic","arguments":{"query":"heading-aware document chunking"}}}' \
-  | jq '.result.structuredContent.results[0].file_path'
+  | jq '.result.structuredContent.results[0] | {file_path, vault_name}'
 ```
 
 Expect:
 
-```
-"notes/design/chunking.md"
+```json
+{"file_path":"notes/design/chunking.md","vault_name":"sample"}
 ```
 
-Each result carries `score`, `file_path`, `chunk_index`, `heading_path`,
-and `text` (same shape as `/search/semantic`).
+Each result carries `score`, `file_path`, `chunk_index`,
+`heading_path`, `text`, `vault`, and `vault_name` — same shape as
+`/search/semantic`.
 
 > If TEI is **down**, `tools/call search_semantic` returns
 > `result.isError: true` with
@@ -228,7 +298,64 @@ and `text` (same shape as `/search/semantic`).
 > the HTTP envelope flows through unchanged. `search_filesystem` and
 > `search_content` still succeed.
 
-### D. Invalid glob → `structured_error`
+### E. `vault_list` — read-only registry view
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_list","arguments":{}}}' \
+  | jq '.result.structuredContent.vaults | length, [.[].name]'
+```
+
+Expect `2` and `["sample","sample-2"]` (order may vary).
+
+### F. `vault_status` — single-vault detail (omitted target → default)
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_status","arguments":{}}}' \
+  | jq '.result.structuredContent | {name, status}'
+```
+
+With `default_vault_name = "sample"` (per
+[`00-setup.md`](./00-setup.md)) expect:
+
+```json
+{"name":"sample","status":"active"}
+```
+
+Or address a specific vault:
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_status","arguments":{"target":"sample-2"}}}' \
+  | jq '.result.structuredContent.name'
+```
+
+Expect `"sample-2"`.
+
+### G. `vault_pause` / `vault_resume` round-trip
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_pause","arguments":{"target":"sample-2"}}}' \
+  | jq '.result.structuredContent.status'
+```
+
+Expect `"paused"`. The vault's outbox file at
+`<data_dir>/vaults/<id>/outbox.jsonl` is preserved; the watcher and
+indexer are drained. Resume:
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_resume","arguments":{"target":"sample-2"}}}' \
+  | jq '.result.structuredContent.status'
+```
+
+Expect `"active"`. The full nine-operation lifecycle is exercised in
+[`05-vault-management.md`](./05-vault-management.md); the MCP tool
+shapes mirror the CLI surface 1:1.
+
+### H. Invalid glob → `structured_error`
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
@@ -245,8 +372,25 @@ true
 
 The HTTP error envelopes (`invalid_glob`, `invalid_regex`,
 `invalid_prefix`, `invalid_request`, `embedding_unavailable`,
-`internal`) all flow through MCP unchanged at
-`result.structuredContent.error.code`. `result.isError` is `true`.
+`vault_not_found`, `vault_path_conflict`, `vault_name_conflict`,
+`vault_path_invalid`, `vault_errored`, `internal`) all flow through
+MCP unchanged at `result.structuredContent.error.code`.
+`result.isError` is `true` for all of them.
+
+### I. Unknown vault → `vault_not_found`
+
+```bash
+/tmp/mcp-drive.py '{"method":"tools/call","params":{
+  "name":"vault_status","arguments":{"target":"nonesuch"}}}' \
+  | jq '.result | .isError, .structuredContent.error.code'
+```
+
+Expect:
+
+```
+true
+"vault_not_found"
+```
 
 ---
 
@@ -418,34 +562,35 @@ UX). Make sure `hmnd` is running in the meantime — the spawned
 ### C. Verify tool listing
 
 In Claude Code's tool listing for the `hypomnema` MCP server, expect
-exactly three tools:
-
-- `search_filesystem`
-- `search_content`
-- `search_semantic`
-
-Each tool's description and parameter schema should render. Spot-check
-the **server identity**: Claude Code displays the MCP server's
-`serverInfo.name`, which should be `hypomnema` (not `rmcp`). If you see
-`rmcp`, the brand-identity override from
-[ADR-0012] regressed.
+**12** tools — the three search modes plus the nine vault lifecycle
+ops (see §3.B above for the full list). Each tool's description and
+parameter schema should render. Spot-check the **server identity**:
+Claude Code displays the MCP server's `serverInfo.name`, which should
+be `hypomnema` (not `rmcp`). If you see `rmcp`, the brand-identity
+override from [ADR-0012] regressed.
 
 ### D. Exercise each tool
 
 Through Claude Code's tool-call UX (or by asking Claude Code to run
-the tool), invoke each tool against the fixture vault:
+the tool), invoke a representative sample of tools against the
+fixture vaults:
 
 | Tool | Arguments | Expect |
 |---|---|---|
-| `search_filesystem` | `{"glob":"**/*.md"}` | 7 paths from the fixture vault |
-| `search_content` | `{"query":"pgvector"}` | One result: `notes/databases/pgvector.md` |
-| `search_semantic` | `{"query":"heading-aware document chunking"}` | Top result is `notes/design/chunking.md` (TEI must be up) |
+| `search_filesystem` | `{"glob":"**/*.md"}` | 17 results across both vaults; each row carries `vault_name` |
+| `search_content` | `{"query":"pgvector"}` | One result: `notes/databases/pgvector.md` from vault `sample` |
+| `search_semantic` | `{"query":"heading-aware document chunking"}` | Top result is `notes/design/chunking.md` from vault `sample` (TEI must be up) |
+| `vault_list` | `{}` | Both vaults listed with status `active` |
+| `vault_status` | `{"target":"sample-2"}` | Single-vault detail block for `sample-2` |
+| `vault_pause` then `vault_resume` | `{"target":"sample-2"}` each | `status: "paused"` then `status: "active"` |
 
 The same expected-results contract from
-[`03-search.md`](./03-search.md) and
-[`fixtures/README.md`](./fixtures/README.md) applies — if a query
-returns the right shape over `/search/...`, it should return the same
-shape via Claude Code's MCP UX.
+[`03-search.md`](./03-search.md),
+[`05-vault-management.md`](./05-vault-management.md), and
+[`fixtures/README.md`](./fixtures/README.md) applies — if a query or
+vault op returns the right shape over `/search/...` or
+`/vaults/...`, it should return the same shape via Claude Code's MCP
+UX.
 
 ### E. Daemon-down error path
 
@@ -482,23 +627,32 @@ fix.
 ## 8. Pass criteria summary
 
 Mirroring [`03-search.md`](./03-search.md) §Wrapping up — if everything
-above lined up, the MCP surface is healthy:
+above lined up, the MCP-over-stdio surface is healthy:
 
 - Driver path: handshake returns `serverInfo.name == "hypomnema"`,
-  three tools advertised with non-empty descriptions and per-field
+  **twelve** tools advertised with non-empty descriptions and per-field
   schemas, each tool round-trips with the same wire shape
   [`fixtures/README.md`](./fixtures/README.md) documents for HTTP.
 - Error paths: invalid glob produces `structuredContent.error.code ==
-  "invalid_glob"`; daemon-down produces `daemon_unreachable` with the
-  configured URL embedded; semantic-with-TEI-down produces
-  `embedding_unavailable`.
+  "invalid_glob"`; unknown vault produces `vault_not_found`;
+  daemon-down produces `daemon_unreachable` with the configured URL
+  embedded; semantic-with-TEI-down produces `embedding_unavailable`;
+  write-tool calls with `enable_write_tools = false` produce
+  `write_tools_disabled`.
 - Stdout/stderr split: `hmn -vv mcp < /dev/null` writes 0 stdout
   lines, ≥1 stderr line.
 - Daemon mode: `mcp.transport = "socket"` produces a startup WARN, no
   crash, `/health` returns 200.
-- Claude Code: tool listing shows the three tools under server name
+- Claude Code: tool listing shows the twelve tools under server name
   `hypomnema`, each tool round-trips, daemon-down surfaces a
   structured error.
+
+For the round-4 HTTP-MCP transport (same 12 tools, served over
+`http://127.0.0.1:7777/mcp` on the daemon's listener), see
+[`06-mcp-http.md`](./06-mcp-http.md). Stdio and HTTP advertise
+identical tool lists and round-trip identical bodies; if the two
+diverge, that's a regression in the shared `HypomnemaMcpServer`
+handler or its Arc-shared backend.
 
 Drift on any specific check points at either fixture-content drift or
 a real regression in the MCP wrapper, the brand-identity override, the

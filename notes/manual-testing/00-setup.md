@@ -1,12 +1,14 @@
 # 00 · Setup
 
-> Applies to: steps 1–7. Prereqs: a clone of the repo, Docker (or
-> equivalent) for TEI, internet access for the sqlite-vec download.
+> Applies to: round 4 / step 12 (multi-vault registry + HTTP-MCP).
+> Prereqs: a clone of the repo, Docker (or equivalent) for TEI,
+> internet access for the sqlite-vec download.
 
 This doc gets you to a state where `hmnd` and `hmn` exist as binaries,
 the sqlite-vec extension is on disk where the daemon expects it, an
 embedding service is reachable on `localhost:8080`, and a config file
-points at the fixture vault. Subsequent docs assume this is done.
+points at an empty `<data_dir>` ready for the runbook's two fixture
+vaults to be registered. Subsequent docs assume this is done.
 
 All commands assume the working directory is the repository root unless
 noted.
@@ -49,7 +51,9 @@ cargo nextest run  # full test suite
 ## 3. sqlite-vec extension
 
 The daemon loads `sqlite-vec` as a dynamic library at runtime. It is
-**not bundled**. Download a prebuilt artifact for the platform from
+**not bundled** and **not provisioned by the development shell** —
+the operator places it on disk before first start. Download a prebuilt
+artifact for the platform from
 <https://github.com/asg017/sqlite-vec/releases>.
 
 Place the file at the default path:
@@ -72,14 +76,14 @@ export HYPOMNEMA_VEC_EXT_PATH=/some/other/path/sqlite-vec.dylib
 
 If the file is missing at startup, the daemon exits with a structured
 error naming both the configured path and the env-var override
-(`src/store/mod.rs:65-72`, exit code 1).
+(exit code 1).
 
 ## 4. Embedding service (TEI)
 
-Required for the indexing path that produces `chunks` rows (step 6) and
-for `/search/semantic` (step 7). The daemon does **not** require it to
-start — see step 5 below for the boot path with TEI down — but search
-results that depend on embeddings will be empty or 503 until it's up.
+Required for the indexing path that produces `chunks` rows and for
+`/search/semantic`. The daemon does **not** require it to start — see
+step 6 below for the boot path with TEI down — but search results that
+depend on embeddings will be empty or 503 until it's up.
 
 ### Bring TEI up
 
@@ -91,10 +95,10 @@ docker run --rm -p 8080:80 \
   --model-id nomic-ai/nomic-embed-text-v1.5
 ```
 
-GPU images and other model IDs are available in the TEI README. Whatever
-you pick, the daemon's `embedding.dimension` config must match the
-model's output dimension (768 for `nomic-embed-text-v1.5`, the
-Hypomnema default).
+GPU images and other model IDs are available in the TEI README.
+Whatever you pick, the daemon's `embedding.dimension` config must
+match the model's output dimension (768 for `nomic-embed-text-v1.5`,
+the Hypomnema default).
 
 ### Smoke-check TEI
 
@@ -113,14 +117,23 @@ refused, the container isn't up.
 Default location: `~/.config/hypomnema/config.toml` (override with
 `-c` / `--config` or `HYPOMNEMA_CONFIG`).
 
-Replace `<ABSOLUTE_PATH_TO_REPO>` with the absolute path to your local
-clone of this repo:
+The runbook drives a two-vault setup; both vaults are registered at
+runtime via `hmn vault create` (see step 7 below). The config file
+itself does **not** name any vault — vaults are runtime state per
+[ADR-0010](../../docs/decisions/0010-vault-definitions-as-runtime-state.md).
+The single ergonomic knob is `default_vault_name`, used by `hmn vault
+create` (when `--name` is omitted) and by `hmn vault status` (when
+the selector is omitted).
 
 ```toml
-vault = "<ABSOLUTE_PATH_TO_REPO>/notes/manual-testing/fixtures/sample-vault"
+default_vault_name = "sample"
 
 [http]
 bind = "127.0.0.1:7777"
+
+[mcp.http]
+enabled = true
+path = "/mcp"
 
 [embedding]
 endpoint = "http://127.0.0.1:8080/v1/embeddings"
@@ -133,10 +146,22 @@ level = "info"
 
 All other keys take defaults — see
 [`docs/reference/configuration.md`](../../docs/reference/configuration.md)
-for the full schema. (That reference is at v0.2.0 and shows
-`default_vault_name` instead of `vault`; the shipped code in this
-working directory still uses the top-level `vault` key. Use the form
-above.)
+for the full schema. `mcp.http.enabled = true` is the shipped default;
+the explicit line above documents the round-4 transport for clarity
+and also serves as the toggle point for the disabling exercise in
+[`06-mcp-http.md`](./06-mcp-http.md).
+
+> **Legacy `[vault]` block**: pre-round-3 configs that still carry a
+> top-level `vault = "..."` block continue to parse. On a fresh start
+> with an empty `vaults.sqlite` and a populated `[vault]` block, the
+> daemon auto-migrates the legacy state (renames the four legacy files
+> under `<data_dir>/vaults/<id>/`, inserts a registry row using
+> `default_vault_name`) and logs a deprecation `WARN`. Once
+> `vaults.sqlite` is populated the warning stops. Remove the `[vault]`
+> block from the config when convenient — see
+> [`configuration.md` § Legacy `[vault]` block migration](../../docs/reference/configuration.md#legacy-vault-block-migration).
+> The runbook below assumes you start from an empty `vaults.sqlite` and
+> register the two fixture vaults explicitly.
 
 ## 6. Validate the config
 
@@ -146,24 +171,58 @@ hmnd config-validate
 
 Expect exit 0 and no errors. Common failures:
 
-- **vault path doesn't exist or isn't a directory** — fix the absolute
-  path in the config.
-- **`storage.data_dir` is under `vault`** — ADR-0006 forbids it; pick a
-  different `data_dir` (default `~/.local/share/hypomnema` is fine).
+- **`default_vault_name` is empty after trimming whitespace** —
+  configuration error; either set a name or accept that every vault
+  command will require an explicit selector.
+- **`mcp.http.path` is anything other than `/mcp`** — rejected at
+  startup with the message `mcp.http.path must be "/mcp" in this
+  version of Hypomnema`.
 
-## 7. Stale state from prior runs
+## 7. Stale state from prior runs and registering the fixture vaults
 
-If you've run `hmnd` against a different vault or with a different
-embedding dimension, the existing index will conflict. Reset:
+If you've run an older `hmnd` against a different vault or with a
+different embedding dimension, the existing data dir will conflict.
+Reset to an empty `<data_dir>` so the runbook can drive a clean
+two-vault setup:
 
 ```bash
-rm -rf ~/.local/share/hypomnema/index.sqlite \
+rm -rf ~/.local/share/hypomnema/vaults.sqlite \
+       ~/.local/share/hypomnema/vaults.sqlite-wal \
+       ~/.local/share/hypomnema/vaults.sqlite-shm \
+       ~/.local/share/hypomnema/vaults \
+       ~/.local/share/hypomnema/index.sqlite \
        ~/.local/share/hypomnema/index.sqlite-wal \
        ~/.local/share/hypomnema/index.sqlite-shm \
        ~/.local/share/hypomnema/outbox.jsonl
 ```
 
-Do **not** delete `sqlite-vec.dylib` (or `.so` / `.dll`) — that's the
-extension you just installed.
+The first three lines drop the registry; the fourth wipes any
+per-vault subdirectories; the last three lines clean up legacy v0
+state if it was ever present (so the auto-migration doesn't re-engage
+on the next start). Do **not** delete `sqlite-vec.<ext>` — that's the
+extension you installed in step 3.
 
-You're ready for [`01-running-the-daemon.md`](./01-running-the-daemon.md).
+Start the daemon (it will idle with zero registered vaults):
+
+```bash
+hmnd
+```
+
+In a second terminal, register the runbook's two fixture vaults.
+Replace `<ABS>` with the absolute path to your local clone of this
+repo:
+
+```bash
+hmn vault create --name sample   <ABS>/notes/manual-testing/fixtures/sample-vault
+hmn vault create --name sample-2 <ABS>/notes/manual-testing/fixtures/sample-vault-2
+```
+
+Each command returns the new vault row — surrogate ID, name,
+canonicalized path, status (`active`), creation timestamp. The daemon
+creates `<data_dir>/vaults/<vault_id>/` for each vault, runs the
+initial scan, and logs an indexing summary per vault. After both
+commands return, expect 7 + 10 = 17 indexed files across the two
+vaults.
+
+`hmn vault list` should now show both rows. You're ready for
+[`01-running-the-daemon.md`](./01-running-the-daemon.md).
