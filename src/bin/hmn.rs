@@ -7,9 +7,9 @@ use clap::Parser;
 use hypomnema::cli::{Cli, Command, SearchMode, VaultOp};
 use hypomnema::client::{
     ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, SemanticQueryJson,
-    SemanticResultJson, SemanticSearchResponse, StatusResponse, TerminateVaultResponse,
-    VaultListResponse, VaultRowJson, is_connect_error,
+    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson,
+    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
+    TerminateVaultResponse, VaultListResponse, VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
@@ -266,6 +266,69 @@ async fn cmd_vault(
                 render_terminate(&resp);
             }
         }
+        VaultOp::Pause { target } => {
+            let row = client.pause_vault(&target).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::Resume { target } => {
+            let row = client.resume_vault(&target).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::Reset {
+            target,
+            rebuild,
+            yes,
+        } => {
+            if rebuild
+                && !yes
+                && !confirm_reset_rebuild(&target, std::io::stdin().lock(), &mut std::io::stderr())?
+            {
+                if json {
+                    print_json(&serde_json::json!({ "reset": false, "aborted": true }))?;
+                } else {
+                    println!("aborted");
+                }
+                return Ok(());
+            }
+            let row = client.reset_vault(&target, rebuild).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::Rename { target, new_name } => {
+            let row = client.rename_vault(&target, &new_name).await?;
+            if json {
+                print_json(&row)?;
+            } else {
+                render_vault_row(&row);
+            }
+        }
+        VaultOp::Rescan { target, yes } => {
+            if !yes && !confirm_rescan(&target, std::io::stdin().lock(), &mut std::io::stderr())? {
+                if json {
+                    print_json(&serde_json::json!({ "rescan": false, "aborted": true }))?;
+                } else {
+                    println!("aborted");
+                }
+                return Ok(());
+            }
+            let resp = client.rescan_vault(&target).await?;
+            if json {
+                print_json(&resp)?;
+            } else {
+                render_rescan(&resp);
+            }
+        }
     }
     Ok(())
 }
@@ -292,10 +355,46 @@ fn resolve_target(config: &Config, target: Option<&str>) -> Result<String> {
 /// affirmative.
 fn confirm_terminate<R: BufRead, W: Write>(
     target: &str,
-    mut reader: R,
+    reader: R,
     prompt_writer: &mut W,
 ) -> Result<bool> {
-    write!(prompt_writer, "Terminate vault '{target}'? (y/N) ")?;
+    confirm_yn(
+        reader,
+        prompt_writer,
+        &format!("Terminate vault '{target}'? (y/N) "),
+    )
+}
+
+fn confirm_reset_rebuild<R: BufRead, W: Write>(
+    target: &str,
+    reader: R,
+    prompt_writer: &mut W,
+) -> Result<bool> {
+    confirm_yn(
+        reader,
+        prompt_writer,
+        &format!("Reset vault '{target}' and rebuild chunks? (y/N) "),
+    )
+}
+
+fn confirm_rescan<R: BufRead, W: Write>(
+    target: &str,
+    reader: R,
+    prompt_writer: &mut W,
+) -> Result<bool> {
+    confirm_yn(
+        reader,
+        prompt_writer,
+        &format!("Rescan vault '{target}'? This will re-emit outbox events. (y/N) "),
+    )
+}
+
+fn confirm_yn<R: BufRead, W: Write>(
+    mut reader: R,
+    prompt_writer: &mut W,
+    prompt: &str,
+) -> Result<bool> {
+    write!(prompt_writer, "{prompt}")?;
     prompt_writer.flush()?;
     let mut line = String::new();
     let n = reader.read_line(&mut line)?;
@@ -376,6 +475,11 @@ fn column_widths(rows: &[VaultRowJson]) -> ColumnWidths {
 fn render_terminate(resp: &TerminateVaultResponse) {
     println!("terminated: {}", resp.terminated);
     println!("id:         {}", resp.id);
+}
+
+fn render_rescan(resp: &RescanResponseJson) {
+    render_vault_row(&resp.row);
+    println!("rescan_initiated_at: {}", resp.rescan_initiated_at);
 }
 
 async fn cmd_status(config: &Config, override_url: Option<&str>, json: bool) -> Result<()> {
@@ -620,6 +724,28 @@ mod tests {
         let mut sink = Vec::<u8>::new();
         let answered = confirm_terminate("personal", &b""[..], &mut sink).unwrap();
         assert!(!answered);
+    }
+
+    #[test]
+    fn confirm_reset_rebuild_emits_rebuild_prompt() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_reset_rebuild("personal", &b"y\n"[..], &mut sink).unwrap();
+        assert!(answered);
+        assert!(
+            String::from_utf8_lossy(&sink)
+                .contains("Reset vault 'personal' and rebuild chunks? (y/N) "),
+        );
+    }
+
+    #[test]
+    fn confirm_rescan_emits_rescan_prompt() {
+        let mut sink = Vec::<u8>::new();
+        let answered = confirm_rescan("personal", &b"n\n"[..], &mut sink).unwrap();
+        assert!(!answered);
+        assert!(
+            String::from_utf8_lossy(&sink)
+                .contains("Rescan vault 'personal'? This will re-emit outbox events. (y/N) "),
+        );
     }
 
     #[test]

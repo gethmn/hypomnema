@@ -71,6 +71,43 @@ pub enum VaultOp {
         #[arg(long)]
         yes: bool,
     },
+    /// Pause a vault: stop its runner; runtime state preserved.
+    Pause {
+        /// Vault name or surrogate id.
+        target: String,
+    },
+    /// Resume a paused or errored vault: re-spawn its runner.
+    Resume {
+        /// Vault name or surrogate id.
+        target: String,
+    },
+    /// Reset a vault: clear `last_error`. With `--rebuild`, also drop and rebuild chunks.
+    Reset {
+        /// Vault name or surrogate id.
+        target: String,
+        /// Drop and rebuild chunks + chunks_vec; preserves files + outbox.
+        #[arg(long)]
+        rebuild: bool,
+        /// Skip the destructive-op confirmation prompt (required for --rebuild).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Rename a vault.
+    Rename {
+        /// Vault name or surrogate id.
+        target: String,
+        /// New vault name.
+        #[arg(long, value_name = "NEW_NAME")]
+        new_name: String,
+    },
+    /// Rescan a vault: force the watcher's debouncer to walk every file and re-emit outbox events.
+    Rescan {
+        /// Vault name or surrogate id.
+        target: String,
+        /// Skip the destructive-op confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -425,5 +462,101 @@ mod tests {
             err.kind(),
             clap::error::ErrorKind::MissingRequiredArgument
         ));
+    }
+
+    #[test]
+    fn parses_vault_pause_with_target() {
+        let cli =
+            Cli::try_parse_from(["hmn", "vault", "pause", "personal"]).expect("vault pause parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Pause { target },
+            } => assert_eq!(target, "personal"),
+            _ => panic!("expected Vault/Pause"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_resume_with_target() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "resume", "personal"])
+            .expect("vault resume parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Resume { target },
+            } => assert_eq!(target, "personal"),
+            _ => panic!("expected Vault/Resume"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_reset_with_target() {
+        let cli =
+            Cli::try_parse_from(["hmn", "vault", "reset", "personal"]).expect("vault reset parses");
+        match cli.command {
+            Command::Vault {
+                op:
+                    VaultOp::Reset {
+                        target,
+                        rebuild,
+                        yes,
+                    },
+            } => {
+                assert_eq!(target, "personal");
+                assert!(!rebuild);
+                assert!(!yes);
+            }
+            _ => panic!("expected Vault/Reset"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_reset_with_rebuild_and_yes() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "reset", "personal", "--rebuild", "--yes"])
+            .expect("vault reset --rebuild --yes parses");
+        match cli.command {
+            Command::Vault {
+                op:
+                    VaultOp::Reset {
+                        target,
+                        rebuild,
+                        yes,
+                    },
+            } => {
+                assert_eq!(target, "personal");
+                assert!(rebuild);
+                assert!(yes);
+            }
+            _ => panic!("expected Vault/Reset"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_rename_with_new_name() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "rename", "old", "--new-name", "fresh"])
+            .expect("vault rename parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Rename { target, new_name },
+            } => {
+                assert_eq!(target, "old");
+                assert_eq!(new_name, "fresh");
+            }
+            _ => panic!("expected Vault/Rename"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_rescan_with_target_and_yes() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "rescan", "personal", "--yes"])
+            .expect("vault rescan parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Rescan { target, yes },
+            } => {
+                assert_eq!(target, "personal");
+                assert!(yes);
+            }
+            _ => panic!("expected Vault/Rescan"),
+        }
     }
 }

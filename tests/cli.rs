@@ -11,7 +11,7 @@ use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::VaultStatus;
-use hypomnema::vault_registry::{VaultId, VaultRegistry, vault_data_dir};
+use hypomnema::vault_registry::{VaultId, VaultRegistry, VaultRow, vault_data_dir};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -608,6 +608,375 @@ async fn hmn_vault_status_without_target_falls_back_to_default_vault_name() {
     let row: Value = serde_json::from_slice(&status.stdout).expect("status JSON");
     assert_eq!(row["name"], "default");
     assert_eq!(row["status"], "active");
+
+    daemon.shutdown().await;
+}
+
+// ===== Lifecycle-op CLI tests (Task 11.4) =====
+//
+// These reuse the `spawn_vault_cli_daemon` fixture so the daemon is backed
+// by a real `VaultManager::open` — the lifecycle ops walk through the
+// genuine pause/resume/reset/rename/rescan paths.
+
+async fn spawn_vault_cli_daemon_with_errored_row(
+    errored_name: &str,
+    last_error: &str,
+) -> (VaultCliDaemon, VaultId) {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let data_dir = root.path().join("data");
+    fs::create_dir_all(&data_dir).expect("create data_dir");
+    let cfg_path = root.path().join("config.toml");
+    fs::write(
+        &cfg_path,
+        format!(
+            "default_vault_name = \"default\"\n[storage]\ndata_dir = \"{}\"\n",
+            data_dir.display(),
+        ),
+    )
+    .expect("write config.toml");
+    let config = Config::load(Some(&cfg_path)).expect("load config");
+    let config = Arc::new(config);
+    let registry = Arc::new(
+        VaultRegistry::open(&data_dir)
+            .await
+            .expect("open VaultRegistry"),
+    );
+
+    // Path must be accessible — reset's errored-row branch validates that
+    // before flipping status back to active.
+    let vault_path = root.path().join("errd-vault");
+    fs::create_dir_all(&vault_path).expect("create errored vault dir");
+    let id = VaultId::new();
+    registry
+        .insert(VaultRow {
+            id: id.clone(),
+            name: errored_name.to_string(),
+            path: vault_path,
+            status: VaultStatus::Errored,
+            created_at: chrono::Utc::now(),
+            last_error: Some(last_error.to_string()),
+        })
+        .await
+        .expect("insert errored row");
+
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let manager = VaultManager::open(registry, config, embedder, 768, shutdown_rx.clone())
+        .await
+        .expect("open VaultManager");
+    let state = ApiState {
+        vault_manager: Arc::new(manager),
+    };
+    let app = api::router(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind 127.0.0.1:0");
+    let addr = listener.local_addr().expect("local_addr");
+    let mut server_shutdown_rx = shutdown_rx;
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = server_shutdown_rx.wait_for(|v| *v).await;
+            })
+            .await;
+    });
+
+    (
+        VaultCliDaemon {
+            base_url: format!("http://{addr}"),
+            cfg_path,
+            root,
+            shutdown: shutdown_tx,
+            handle: Some(handle),
+        },
+        id,
+    )
+}
+
+#[tokio::test]
+async fn hmn_vault_pause_then_resume_round_trip() {
+    let daemon = spawn_vault_cli_daemon().await;
+    let vault_path = fresh_vault_dir(daemon.root.path(), "v");
+
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "rt",
+            vault_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(
+        create.status.success(),
+        "create stderr={}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let pause = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "pause", "rt"],
+    )
+    .await;
+    assert!(
+        pause.status.success(),
+        "pause exit={:?} stderr={}",
+        pause.status.code(),
+        String::from_utf8_lossy(&pause.stderr)
+    );
+    let paused: Value = serde_json::from_slice(&pause.stdout).expect("pause JSON");
+    assert_eq!(paused["status"], "paused");
+
+    let resume = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "resume", "rt"],
+    )
+    .await;
+    assert!(
+        resume.status.success(),
+        "resume exit={:?} stderr={}",
+        resume.status.code(),
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let resumed: Value = serde_json::from_slice(&resume.stdout).expect("resume JSON");
+    assert_eq!(resumed["status"], "active");
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_vault_rename_updates_vault_list() {
+    let daemon = spawn_vault_cli_daemon().await;
+    let vault_path = fresh_vault_dir(daemon.root.path(), "v");
+
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "before",
+            vault_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(create.status.success());
+
+    let rename = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "rename", "before", "--new-name", "after"],
+    )
+    .await;
+    assert!(
+        rename.status.success(),
+        "rename exit={:?} stderr={}",
+        rename.status.code(),
+        String::from_utf8_lossy(&rename.stderr)
+    );
+    let renamed: Value = serde_json::from_slice(&rename.stdout).expect("rename JSON");
+    assert_eq!(renamed["name"], "after");
+
+    let list = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "list"],
+    )
+    .await;
+    let listed: Value = serde_json::from_slice(&list.stdout).expect("list JSON");
+    let vaults = listed["vaults"].as_array().unwrap();
+    assert_eq!(vaults.len(), 1);
+    assert_eq!(vaults[0]["name"], "after");
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_vault_reset_without_rebuild_clears_errored_state() {
+    let (daemon, _id) =
+        spawn_vault_cli_daemon_with_errored_row("errd", "synthetic startup error").await;
+
+    let reset = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "reset", "errd"],
+    )
+    .await;
+    assert!(
+        reset.status.success(),
+        "reset exit={:?} stderr={}",
+        reset.status.code(),
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let row: Value = serde_json::from_slice(&reset.stdout).expect("reset JSON");
+    assert_eq!(row["status"], "active");
+    assert!(
+        row.get("last_error").is_none() || row["last_error"].is_null(),
+        "last_error should be cleared after reset; got {row}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_vault_reset_with_rebuild_yes_succeeds() {
+    let daemon = spawn_vault_cli_daemon().await;
+    let vault_path = fresh_vault_dir(daemon.root.path(), "v");
+
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "rb",
+            vault_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(create.status.success());
+
+    let reset = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "reset", "rb", "--rebuild", "--yes"],
+    )
+    .await;
+    assert!(
+        reset.status.success(),
+        "reset --rebuild --yes exit={:?} stderr={}",
+        reset.status.code(),
+        String::from_utf8_lossy(&reset.stderr)
+    );
+    let row: Value = serde_json::from_slice(&reset.stdout).expect("reset JSON");
+    assert_eq!(row["status"], "active");
+    assert_eq!(row["name"], "rb");
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_vault_rescan_with_yes_returns_rescan_initiated_at() {
+    let daemon = spawn_vault_cli_daemon().await;
+    let vault_path = fresh_vault_dir(daemon.root.path(), "v");
+
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "rsc",
+            vault_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(create.status.success());
+
+    let rescan = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "vault", "rescan", "rsc", "--yes"],
+    )
+    .await;
+    assert!(
+        rescan.status.success(),
+        "rescan exit={:?} stderr={}",
+        rescan.status.code(),
+        String::from_utf8_lossy(&rescan.stderr)
+    );
+    let body: Value = serde_json::from_slice(&rescan.stdout).expect("rescan JSON");
+    let rescan_initiated_at = body["rescan_initiated_at"]
+        .as_str()
+        .expect("rescan_initiated_at is a string");
+    assert!(
+        !rescan_initiated_at.is_empty(),
+        "rescan_initiated_at must be non-empty; got {body}"
+    );
+    // Spec wire shape is ISO-8601 micros UTC; sanity-check the trailing Z.
+    assert!(
+        rescan_initiated_at.ends_with('Z'),
+        "expected ISO-8601 UTC timestamp ending in Z; got {rescan_initiated_at}"
+    );
+    assert_eq!(body["name"], "rsc");
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_vault_rescan_without_yes_prompts_and_aborts_on_no() {
+    let daemon = spawn_vault_cli_daemon().await;
+    let vault_path = fresh_vault_dir(daemon.root.path(), "v");
+
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "rscno",
+            vault_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(create.status.success());
+
+    // Pipe `n\n` to stdin; no --yes flag → confirmation prompt fires; the
+    // process must exit 0 without hitting the daemon's rescan route.
+    let cfg_path = daemon.cfg_path.clone();
+    let base_url = daemon.base_url.clone();
+    let resp = tokio::task::spawn_blocking(move || {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hmn"))
+            .arg("--config")
+            .arg(&cfg_path)
+            .arg("--daemon-url")
+            .arg(&base_url)
+            .args(["vault", "rescan", "rscno"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn hmn vault rescan");
+        {
+            let mut stdin = child.stdin.take().expect("hmn stdin");
+            stdin.write_all(b"n\n").expect("write stdin");
+        }
+        child.wait_with_output().expect("hmn wait")
+    })
+    .await
+    .expect("spawn_blocking join");
+
+    assert!(
+        resp.status.success(),
+        "no-on-prompt should exit 0; got {:?} stderr={}",
+        resp.status.code(),
+        String::from_utf8_lossy(&resp.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&resp.stdout);
+    let stderr = String::from_utf8_lossy(&resp.stderr);
+    assert!(
+        stdout.contains("aborted"),
+        "stdout should announce abort; got stdout={stdout:?} stderr={stderr:?}",
+    );
+    assert!(
+        stderr.contains("Rescan vault 'rscno'? This will re-emit outbox events. (y/N) "),
+        "prompt should appear on stderr; got {stderr:?}",
+    );
 
     daemon.shutdown().await;
 }

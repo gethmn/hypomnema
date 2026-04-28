@@ -6,9 +6,9 @@ use serde::de::DeserializeOwned;
 pub use crate::api::types::{
     ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse,
     CreateVaultRequest, ErrorEnvelope, FilesystemQueryJson, FilesystemResultJson,
-    FilesystemSearchResponse, HealthResponse, SemanticQueryJson, SemanticResultJson,
-    SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
-    VaultRowJson,
+    FilesystemSearchResponse, HealthResponse, RenameRequest, RescanResponseJson, ResetRequest,
+    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
+    TerminateVaultResponse, VaultListResponse, VaultRowJson,
 };
 use crate::config::Config;
 
@@ -91,6 +91,48 @@ impl DaemonClient {
         let resp = self.http.delete(url).send().await?;
         decode_response(resp).await
     }
+
+    pub async fn pause_vault(&self, name_or_id: &str) -> Result<VaultRowJson> {
+        let url = vault_op_url(&self.base_url, name_or_id, "pause")?;
+        let resp = self.http.post(url).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn resume_vault(&self, name_or_id: &str) -> Result<VaultRowJson> {
+        let url = vault_op_url(&self.base_url, name_or_id, "resume")?;
+        let resp = self.http.post(url).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn reset_vault(&self, name_or_id: &str, rebuild: bool) -> Result<VaultRowJson> {
+        let url = vault_op_url(&self.base_url, name_or_id, "reset")?;
+        let resp = self
+            .http
+            .post(url)
+            .json(&ResetRequest { rebuild })
+            .send()
+            .await?;
+        decode_response(resp).await
+    }
+
+    pub async fn rename_vault(&self, name_or_id: &str, new_name: &str) -> Result<VaultRowJson> {
+        let url = vault_op_url(&self.base_url, name_or_id, "rename")?;
+        let resp = self
+            .http
+            .post(url)
+            .json(&RenameRequest {
+                new_name: new_name.to_string(),
+            })
+            .send()
+            .await?;
+        decode_response(resp).await
+    }
+
+    pub async fn rescan_vault(&self, name_or_id: &str) -> Result<RescanResponseJson> {
+        let url = vault_op_url(&self.base_url, name_or_id, "rescan")?;
+        let resp = self.http.post(url).send().await?;
+        decode_response(resp).await
+    }
 }
 
 fn normalize_base_url(url: &str) -> String {
@@ -106,6 +148,14 @@ fn vault_url(base_url: &str, name_or_id: &str) -> Result<reqwest::Url> {
     url.path_segments_mut()
         .map_err(|_| anyhow!("daemon URL cannot be a base"))?
         .extend(["vaults", name_or_id]);
+    Ok(url)
+}
+
+fn vault_op_url(base_url: &str, name_or_id: &str, op: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base_url).context("parsing daemon base URL")?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("daemon URL cannot be a base"))?
+        .extend(["vaults", name_or_id, op]);
     Ok(url)
 }
 
@@ -336,6 +386,26 @@ mod tests {
     fn vault_url_handles_normal_names() {
         let url = vault_url("http://localhost:9099", "personal").unwrap();
         assert_eq!(url.as_str(), "http://localhost:9099/vaults/personal");
+    }
+
+    #[test]
+    fn vault_op_url_encodes_target_segment() {
+        let url = vault_op_url("http://localhost:9099", "needs/encoding?", "pause").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://localhost:9099/vaults/needs%2Fencoding%3F/pause"
+        );
+    }
+
+    #[test]
+    fn vault_op_url_handles_normal_names_and_ops() {
+        for op in ["pause", "resume", "reset", "rename", "rescan"] {
+            let url = vault_op_url("http://localhost:9099", "personal", op).unwrap();
+            assert_eq!(
+                url.as_str(),
+                format!("http://localhost:9099/vaults/personal/{op}")
+            );
+        }
     }
 
     #[tokio::test]
