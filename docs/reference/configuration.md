@@ -1,11 +1,11 @@
 # Hypomnema Configuration Reference
 
-**Version**: 0.2.0
-**Generated**: 2026-04-26
+**Version**: 0.3.0
+**Generated**: 2026-04-28
 
 ---
 
-> **Status**: Schema pinned in step 1 — see [step-01 workplan § TOML config schema](../roadmap/step-01-workplan.md#2-toml-config-schema). Format is TOML; default location is `~/.config/hypomnema/config.toml` (respects `XDG_CONFIG_HOME`). The top-level `vault` setting was removed in 0.2.0 — vaults are now runtime state managed via the control-plane API ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)).
+> **Status**: Schema pinned in step 1 — see [step-01 workplan § TOML config schema](../roadmap/step-01-workplan.md#2-toml-config-schema). Format is TOML; default location is `~/.config/hypomnema/config.toml` (respects `XDG_CONFIG_HOME`). Vaults are runtime state managed via the control-plane API ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) — they are not declared in `config.toml`. The top-level `[vault]` block from v0.1.0 is **deprecated** as of 0.3.0 (round 3, step 9 — the per-vault internal refactor). The daemon continues to parse the block, logs a deprecation `WARN` on startups where the legacy migration could engage (i.e., the registry is empty), and translates it into a `vaults.sqlite` row on the first run that finds legacy v0 state. See [Legacy `[vault]` block migration](#legacy-vault-block-migration) below.
 
 > **Scope**: Every option on this page is daemon-side — it affects the behavior of `hmnd`. The CLI client (`hmn`) reads only the daemon URL (derived from `[http].bind`) to know where to send requests; override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL`. See [cli.md](./cli.md) and [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md).
 
@@ -86,13 +86,53 @@ tokio_level = "error"
 
 ## `default_vault_name`
 
-When a control-plane command (e.g., `hmn vault status`) omits the vault selector, the daemon resolves to this name. The daemon does **not** auto-create a default vault on first run; the user must run `hmn vault create` (which uses `default_vault_name` if `--name` is omitted).
+When a control-plane command (e.g., `hmn vault status`) omits the vault selector, the daemon resolves to this name. On a fresh install with no legacy v0 state, the daemon does **not** auto-create a default vault on first run; the user must run `hmn vault create` (which uses `default_vault_name` if `--name` is omitted). On first startup against legacy v0 state — a populated top-level `[vault]` block paired with a pre-existing `<data_dir>/index.sqlite` — the daemon auto-creates one `vaults.sqlite` row using `default_vault_name` for the row's `name` column; see [Legacy `[vault]` block migration](#legacy-vault-block-migration) below.
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `default_vault_name` | string | no | `"default"` | Name resolved when a command omits the selector. Set to `""` to require explicit names on every command. |
+| `default_vault_name` | string | no | `"default"` | Name resolved when a command omits the selector. Must be non-empty after trimming whitespace; the daemon fails at startup with a configuration error if empty. |
 
 See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md) for why vaults live in runtime state rather than configuration.
+
+---
+
+## Legacy `[vault]` block migration
+
+The top-level `[vault]` block from v0.1.0 is **deprecated** as of 0.3.0 (round 3, step 9 — the per-vault internal refactor). Vaults are now managed via `vaults.sqlite` ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)); the daemon continues to parse the legacy block to ease upgrades from v0.1.0.
+
+```toml
+# Deprecated; parsed for backwards-compatibility only.
+[vault]
+path = "~/notes"
+```
+
+**Deprecation `WARN`**. When a `[vault]` block is present at startup AND the registry is currently empty, the daemon logs the following at `WARN` level (visible until the operator removes the block; subsequent starts with a populated registry log nothing about the deprecated block):
+
+```
+top-level [vault] config block is deprecated; vaults are now managed via
+vaults.sqlite. Remove the [vault] block from your config when convenient
+(it will continue to be honoured for first-run auto-migration only).
+```
+
+**Migration trigger**. The legacy-state migration runs at startup when **both** of these hold:
+
+1. `<data_dir>/vaults.sqlite` is empty (no rows registered).
+2. A top-level `[vault]` block is present in the config file.
+
+When triggered, the daemon:
+
+- Inserts one row into `vaults.sqlite` with name set to `default_vault_name`, the legacy `[vault].path` (canonicalized), status `active` if the path is accessible (or `errored` with a recorded `last_error` if not), and a fresh UUIDv7 ID.
+- Atomically renames the four legacy files — `index.sqlite`, `index.sqlite-wal` (if present), `index.sqlite-shm` (if present), and `outbox.jsonl` (if present) — from `<data_dir>/` into `<data_dir>/vaults/<vault_id>/`.
+- Writes `<data_dir>/vaults/<vault_id>/meta.toml` (a human-readable mirror of the registry row, per ADR-0010).
+- Starts the watcher and indexer for the migrated vault (when status is `active`).
+
+The migration is **idempotent and crash-safe**. Each rename is per-file atomic on POSIX; if the daemon is killed mid-rename, the next startup retries the move on any file still at the legacy location and treats files already at the per-vault location as already-migrated. Subsequent startups (with `vaults.sqlite` populated) skip the migration entirely; the `[vault]` block, if still present, is ignored beyond the deprecation `WARN` (which itself only logs when the registry is empty — a populated registry suppresses the warning).
+
+**Same-filesystem assumption**. The four-file rename uses `std::fs::rename`, which is atomic per-file on POSIX **only when source and destination are on the same filesystem**. In practice this is `<data_dir>/index.sqlite` → `<data_dir>/vaults/<id>/index.sqlite` — both under `<data_dir>` — which holds on every standard install. Cross-mount setups, where `<data_dir>/vaults/` lives on a separate mount from `<data_dir>/` itself, would error during the rename pass; the daemon surfaces a structured error and refuses to migrate. Point both at the same filesystem before upgrading.
+
+**Inaccessible legacy path**. If the legacy `[vault].path` does not exist, is not a directory, or is not readable at first startup (per the resolutions of step 9 — `vault_management` § Vault Lifecycle State Machine), the migration still inserts a registry row but with `status = errored` and a recorded `last_error`. The daemon continues to start; no watcher or indexer for the errored vault. Search returns empty results from this vault. Recovery via `hmn vault reset` lands in step 10.
+
+**Hard-removal of `[vault]`** is deferred to a future round (post-0.3.x). The round-3 boundary retro is the natural moment to schedule it.
 
 ---
 
@@ -208,9 +248,11 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 ## Validation Rules
 
 - `embedding.dimension` must match the schema; mismatch fails the daemon at startup with a message pointing at this reference
+- `default_vault_name` must be non-empty after trimming whitespace; an empty string fails the daemon at startup with a configuration error
 - `storage.data_dir` must not be under any registered vault path — the daemon fails at startup if it is, per [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md). At vault creation time, a path that would place `data_dir` inside the new vault is rejected with `422 vault_path_invalid`.
 - `storage.data_dir/vaults/` must exist or be creatable by the daemon (it is created on first startup if absent)
 - `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
+- A top-level `[vault]` block is parsed but **deprecated**; see [Legacy `[vault]` block migration](#legacy-vault-block-migration) — its presence does not fail validation, but logs a `WARN` while the legacy migration could still engage (registry empty)
 - The daemon scans + reconciles each active vault on every startup; this is the only mode in v0.
 
 ---

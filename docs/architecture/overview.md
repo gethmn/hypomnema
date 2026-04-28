@@ -1,7 +1,7 @@
 # Hypomnema: Architecture Overview
 
-**Version**: 0.2.0
-**Date**: 2026-04-26
+**Version**: 0.3.0
+**Date**: 2026-04-28
 **Status**: Draft
 
 ---
@@ -186,17 +186,21 @@ All three operations are exposed identically over HTTP (Axum) and MCP (rmcp). Th
 
 The same SQL/vector query code backs both transports — transport is a thin layer over operations, not a fork.
 
-Step 5 shipped the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). The two search responses each carry an optional per-result `vault` field — populated with the surrogate vault ID once multi-vault implementation lands (round 3); v0 omits. Search responses additionally carry an optional per-result `vault_name?: string` for display ergonomics; this field is point-in-time and never appears in the outbox (outbox events carry `vault` ID only — names rot, the durable log doesn't). `/health` is daemon-scoped; `/status` returns a `vaults: [{...}]` array under the multi-vault model. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md).
+Step 5 shipped the HTTP surface: `/search/filesystem` and `/search/content` over POST, `/health` and `/status` over GET, all bound to `config.http.bind` (default `127.0.0.1:7777`). All three search responses carry per-result `vault` (surrogate ID) and `vault_name` (point-in-time display label) fields — round-3 step 9 (the per-vault internal refactor) populates both on every result. The `vault_name` field is for display ergonomics only; it never appears in the outbox (outbox events carry `vault` ID only — names rot, the durable log doesn't). `/health` is daemon-scoped. `/status` is **representative-only in step 9**: with N=1 active vault its response is byte-identical to v0.1.0 (single-vault file count + last-indexed timestamp); with N≥2 it sums file counts, takes `MAX(last_indexed_at)` across vaults, and reports the registry-list-first vault as a representative — the cross-vault `vaults: [{...}]` array shape lands in step 10. See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md).
 
 Step 7 shipped the third route: `POST /search/semantic`. The handler embeds the natural-language query via the same local embedding client the indexer uses, runs a kNN MATCH against `chunks_vec`, and returns a top-level envelope of `{ results, hint? }` per [`docs/specs/semantic-search.md`](../specs/semantic-search.md). Embedding-service failures at query time (transport error, HTTP 5xx, or a vector whose dimension disagrees with the schema) are mapped to a new error envelope code `embedding_unavailable` (HTTP 503) — the daemon never crashes due to embedding-service issues, anywhere in the runtime. See [step-6 workplan § Build-time amendment 3](../roadmap/step-06-workplan.md) for the load-bearing precedent at index time and [step-7 workplan § Resolution E](../roadmap/step-07-workplan.md#e-error-envelope-code-for-embedding-service-unavailable) for the query-time complement.
 
+**Cross-vault search semantics (step-9 internal pre-staging)**. Search handlers iterate `registry.list_active()` and execute each per-vault query against that vault's `Store`. Filesystem and content modes concatenate per-vault result slices in **registry-list order** and apply the request's `limit` to the concatenated list. Semantic mode merges per-vault top-K candidates by score (descending) and re-truncates at `limit`, preserving cross-vault top-N. For N=1 — the only state reachable from a single legacy `[vault]` migration — the wire output is byte-identical to v0.1.0 modulo the populated `vault` and `vault_name` fields. The full cross-vault semantics — ordering across vaults beyond registry-list order, pagination across N independent indexes, fan-out execution model, partial-failure handling, treatment of paused/errored vaults, semantic global top-N — are pinned in step 10's workplan-write phase.
+
+**Spec-text amendment forward-pointer**. The four search and event spec docs ([`docs/specs/filesystem-search.md`](../specs/filesystem-search.md), [`docs/specs/content-search.md`](../specs/content-search.md), [`docs/specs/semantic-search.md`](../specs/semantic-search.md), and [`docs/specs/change-events.md`](../specs/change-events.md)) still describe the v0.1.0 "always absent in v0" wording for the per-result `vault` and `vault_name` fields — step 9 ships ahead of those specs. The amendments land in step 10's workplan-write phase; until then, the integration tests in `tests/multi_vault_internal.rs` are the authoritative source of truth for the populated wire shape.
+
 ### Outbox Writer
 
-Each real change (file created, modified, deleted) produces one JSONL line in that vault's outbox. Minimum envelope: `{event_type, path, content_hash, detected_at, vault?}`. The outbox lives in the daemon's data directory under the per-vault subdirectory (`<data_dir>/vaults/<vault_id>/outbox.jsonl`), never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) (amended 2026-04-26 to formalize the multi-vault layout).
+Each real change (file created, modified, deleted) produces one JSONL line in that vault's outbox. Envelope: `{vault, event_type, path, content_hash, detected_at}` — the leading `vault` field is the surrogate ID and is present on every line as of round-3 step 9 (the per-vault internal refactor). The outbox lives in the daemon's data directory under the per-vault subdirectory (`<data_dir>/vaults/<vault_id>/outbox.jsonl`), never under the watched path — see [ADR-0006](../decisions/0006-outbox-outside-watched-directory.md) (amended 2026-04-26 to formalize the multi-vault layout).
 
 Step 4 shipped the implementation: the watcher's consumer task — the same one that drives `Scanner::reindex_path` / `Scanner::remove_path` — emits one JSONL line per real change to the vault's outbox, with per-event `sync_data`.
 
-Consumers subscribe by tailing the per-vault file. The outbox `vault` field carries the surrogate vault ID only (never the name — names are mutable; durable logs need stable identifiers). There is no push notification mechanism in v0; see the handoff's "Out of scope" for deferred fan-out work.
+Consumers subscribe by tailing the per-vault file. The outbox `vault` field carries the surrogate vault ID only — there is no `vault_name` field on outbox events (names are mutable; durable logs need stable identifiers). The peer `vault_name` field on synchronous search responses lives only in those responses, never in the outbox. There is no push notification mechanism in v0; see the handoff's "Out of scope" for deferred fan-out work.
 
 ---
 
@@ -264,7 +268,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Model switching is a re-index | Migrating to a different embedding model is an operation, not a config flip | Documented; considered acceptable for v0 scope (see [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Concurrent control-plane operations on same vault | Race in registry mutations or per-vault state | Operations on the same vault are serialized at the daemon; operations on different vaults run in parallel ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
 | Vault registry corruption | `vaults.sqlite` partial write or filesystem damage | Atomic write semantics for control-plane mutations; daemon refuses to serve on read failure until the file is restored |
-| Cross-vault search semantics under-specified | Ordering, pagination, fan-out, partial-failure not yet pinned | Wire shapes are forward-compat; resolution deferred to round-3 workplan ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), `docs/specs/vault-management.md` § Open Questions) |
+| Cross-vault search semantics partially specified | Step 9 pins minimal cross-vault shape (filesystem/content concatenate by registry-list order; semantic merges by score and re-truncates). Full semantics — ordering beyond registry-list, pagination, fan-out execution, partial-failure, paused/errored treatment, semantic global top-N — not yet pinned | Wire shapes are forward-compat; full resolution lands in step 10's workplan-write phase ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions)) |
 
 ---
 
