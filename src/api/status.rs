@@ -23,7 +23,8 @@ use super::types::{OutboxStatus, StatusResponse};
 pub(crate) async fn status(
     State(s): State<ApiState>,
 ) -> std::result::Result<Json<StatusResponse>, ApiError> {
-    if s.vaults.is_empty() {
+    let vaults = s.vault_manager.active_vaults();
+    if vaults.is_empty() {
         return Ok(Json(StatusResponse {
             vault: String::new(),
             indexed_file_count: 0,
@@ -37,7 +38,7 @@ pub(crate) async fn status(
 
     let mut total_count: i64 = 0;
     let mut max_indexed: Option<String> = None;
-    for vault in s.vaults.iter() {
+    for vault in vaults.iter() {
         let pool = vault.store.pool();
         let (count, last_indexed) =
             task::spawn_blocking(move || -> Result<(i64, Option<String>)> {
@@ -63,7 +64,7 @@ pub(crate) async fn status(
         }
     }
 
-    let representative = &s.vaults[0];
+    let representative = &vaults[0];
     let outbox_size = std::fs::metadata(&representative.outbox_path)
         .map(|m| m.len())
         .unwrap_or(0);

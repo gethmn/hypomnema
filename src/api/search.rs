@@ -30,11 +30,11 @@ pub(crate) async fn filesystem(
 
     let mut all_results: Vec<FilesystemResultJson> = Vec::new();
     let mut any_truncated = false;
-    for vault in s.vaults.iter() {
+    for vault in s.vault_manager.active_vaults() {
         let (rows, truncated) = search_filesystem(vault.store.pool(), q_template.clone()).await?;
         any_truncated |= truncated;
         for r in rows {
-            all_results.push(filesystem_to_json(r, vault));
+            all_results.push(filesystem_to_json(r, &vault));
         }
     }
     let (results, response_truncated) = merge_and_truncate(all_results, limit, any_truncated);
@@ -63,11 +63,11 @@ pub(crate) async fn content(
 
     let mut all_results: Vec<ContentResultJson> = Vec::new();
     let mut any_truncated = false;
-    for vault in s.vaults.iter() {
+    for vault in s.vault_manager.active_vaults() {
         let (rows, truncated) = search_content(vault.store.pool(), q_template.clone()).await?;
         any_truncated |= truncated;
         for r in rows {
-            all_results.push(content_to_json(r, vault));
+            all_results.push(content_to_json(r, &vault));
         }
     }
     let (results, response_truncated) = merge_and_truncate(all_results, limit, any_truncated);
@@ -100,13 +100,16 @@ pub(crate) async fn semantic(
         min_similarity: req.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0),
     };
 
+    let embedder = s.vault_manager.embedder();
+    let dimension = s.vault_manager.embedding_dimension();
+
     let mut all_results: Vec<SemanticResultJson> = Vec::new();
     let mut any_hint: Option<String> = None;
-    for vault in s.vaults.iter() {
+    for vault in s.vault_manager.active_vaults() {
         let (rows, hint) = search_semantic(
             vault.store.pool(),
-            s.embedder.clone(),
-            s.embedding_dimension,
+            embedder.clone(),
+            dimension,
             q_template.clone(),
         )
         .await
@@ -115,7 +118,7 @@ pub(crate) async fn semantic(
             any_hint = hint;
         }
         for r in rows {
-            all_results.push(semantic_to_json(r, vault));
+            all_results.push(semantic_to_json(r, &vault));
         }
     }
 

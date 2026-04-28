@@ -112,8 +112,10 @@ mod tests {
     use super::*;
     use crate::api::{ApiState, VaultEntry, router};
     use crate::config::EmbeddingConfig;
+    use crate::control_plane::VaultManager;
     use crate::embedding::{Embedder, StubEmbedder};
     use crate::store::Store;
+    use crate::vault_registry::VaultStatus;
 
     struct TestDaemon {
         base_url: String,
@@ -150,11 +152,11 @@ mod tests {
             vault_path: vault.path().to_path_buf(),
             outbox_path: dir.path().join("outbox.jsonl"),
             store: Arc::new(store),
+            status: VaultStatus::Active,
         };
+        let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));
         let state = ApiState {
-            vaults: Arc::new(vec![entry]),
-            embedder,
-            embedding_dimension: 768,
+            vault_manager: manager,
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

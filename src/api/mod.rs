@@ -12,13 +12,16 @@ use axum::routing::{get, post};
 
 pub use types::*;
 
-use crate::embedding::Embedder;
+use crate::control_plane::VaultManager;
 use crate::store::Store;
-use crate::vault_registry::VaultId;
+use crate::vault_registry::{VaultId, VaultStatus};
 
-/// One active-vault entry in the daemon's API surface. Step-9 introduces
-/// per-vault routing via `Vec<VaultEntry>`; the search handlers iterate over
-/// the entries and merge results (passthrough for N=1 per Resolution F).
+/// One active-vault entry exposed to the HTTP API. Constructed by the
+/// `control_plane::VaultManager` (one per active runner) and surfaced to
+/// search/status handlers via `VaultManager::active_vaults()`. The
+/// `status` field carries the runner's view of the vault — step 10 only
+/// inserts `Active` entries into the runners map, but step 11 will mutate
+/// it for pause/resume without tearing the runner down.
 #[derive(Clone)]
 pub struct VaultEntry {
     pub id: VaultId,
@@ -26,13 +29,18 @@ pub struct VaultEntry {
     pub vault_path: PathBuf,
     pub outbox_path: PathBuf,
     pub store: Arc<Store>,
+    pub status: VaultStatus,
+}
+
+impl VaultEntry {
+    pub fn is_active(&self) -> bool {
+        matches!(self.status, VaultStatus::Active)
+    }
 }
 
 #[derive(Clone)]
 pub struct ApiState {
-    pub vaults: Arc<Vec<VaultEntry>>,
-    pub embedder: Arc<dyn Embedder>,
-    pub embedding_dimension: u32,
+    pub vault_manager: Arc<VaultManager>,
 }
 
 pub fn router(state: ApiState) -> Router {

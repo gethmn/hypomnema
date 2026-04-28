@@ -205,6 +205,25 @@ impl VaultRegistry {
         .await
         .context("spawn_blocking join error in VaultRegistry::update_status")?
     }
+
+    /// Delete the row for `id`. Returns `Ok(true)` if a row was removed and
+    /// `Ok(false)` if no row matched (already gone — terminate's idempotent
+    /// recovery path: if a previous terminate crashed between row delete and
+    /// subdir removal, the next attempt finds the row already gone and
+    /// continues with the orphan-subdir cleanup).
+    pub async fn delete(&self, id: &VaultId) -> Result<bool> {
+        let pool = self.pool.clone();
+        let id = id.clone();
+        task::spawn_blocking(move || {
+            let conn = pool.get().context("acquiring vault_registry connection")?;
+            let deleted = conn
+                .execute("DELETE FROM vaults WHERE id = ?1", params![id.as_str()])
+                .context("deleting vault row")?;
+            Ok(deleted > 0)
+        })
+        .await
+        .context("spawn_blocking join error in VaultRegistry::delete")?
+    }
 }
 
 fn open_blocking(data_dir: PathBuf) -> Result<VaultRegistry> {

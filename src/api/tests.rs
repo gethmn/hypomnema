@@ -10,9 +10,10 @@ use std::sync::{Arc, Mutex};
 
 use super::{ApiState, VaultEntry, router};
 use crate::config::EmbeddingConfig;
+use crate::control_plane::VaultManager;
 use crate::embedding::{EmbedFuture, Embedder, EmbeddingError, StubEmbedder};
 use crate::store::{SqlitePool, Store};
-use crate::vault_registry::VaultId;
+use crate::vault_registry::{VaultId, VaultStatus};
 
 // 4 MB is plenty for these test bodies; we set a finite cap to satisfy
 // `to_bytes` without inviting unbounded reads.
@@ -22,13 +23,16 @@ struct Harness {
     _dir: TempDir,
     _vault: TempDir,
     state: ApiState,
+    pool: SqlitePool,
     vault_path: std::path::PathBuf,
     outbox_path: std::path::PathBuf,
+    vault_id: VaultId,
+    vault_name: String,
 }
 
 impl Harness {
     fn pool(&self) -> SqlitePool {
-        self.state.vaults[0].store.pool()
+        self.pool.clone()
     }
 }
 
@@ -49,29 +53,33 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     .await
     .unwrap();
     let outbox_path = dir.path().join("outbox.jsonl");
+    let store = Arc::new(store);
+    let pool = store.pool();
     let entry = VaultEntry {
-        id: vault_id,
+        id: vault_id.clone(),
         name: "test".to_string(),
         vault_path: vault.path().to_path_buf(),
         outbox_path: outbox_path.clone(),
-        store: Arc::new(store),
+        store,
+        status: VaultStatus::Active,
     };
+    let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));
     let state = ApiState {
-        vaults: Arc::new(vec![entry]),
-        embedder,
-        embedding_dimension: 768,
+        vault_manager: manager,
     };
     Harness {
         _dir: dir,
+        vault_path: vault.path().to_path_buf(),
         _vault: vault,
-        vault_path: state.vaults[0].vault_path.clone(),
         outbox_path,
+        pool,
+        vault_id,
+        vault_name: "test".to_string(),
         state,
     }
 }
 
-async fn seed_files(state: &ApiState, rows: Vec<(&'static str, &'static str, &'static str)>) {
-    let pool = state.vaults[0].store.pool();
+async fn seed_files(pool: SqlitePool, rows: Vec<(&'static str, &'static str, &'static str)>) {
     task::spawn_blocking(move || {
         let conn = pool.get().unwrap();
         for (path, content, indexed_at) in rows {
@@ -148,7 +156,7 @@ async fn status_reports_zero_files_when_index_empty() {
 async fn status_reports_count_and_last_indexed_after_seeding() {
     let h = harness().await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![
             ("a.md", "alpha", "2026-04-01T00:00:00Z"),
             ("b.md", "bravo", "2026-04-22T14:31:08.123456Z"),
@@ -174,7 +182,7 @@ async fn status_reports_count_and_last_indexed_after_seeding() {
 async fn search_filesystem_returns_results_for_glob() {
     let h = harness().await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![
             ("notes/a.md", "alpha", "2026-04-01T00:00:00Z"),
             ("notes/b.txt", "bravo", "2026-04-01T00:00:00Z"),
@@ -217,7 +225,7 @@ async fn search_filesystem_invalid_glob_returns_400_with_code() {
 async fn search_content_returns_results_with_matches() {
     let h = harness().await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![
             (
                 "a.md",
@@ -266,12 +274,12 @@ async fn search_response_populates_vault_and_vault_name() {
     // in step 10's workplan-write per Resolution F.
     let h = harness().await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![("a.md", "alpha pgvector", "2026-04-01T00:00:00Z")],
     )
     .await;
-    let expected_id = h.state.vaults[0].id.to_string();
-    let expected_name = h.state.vaults[0].name.clone();
+    let expected_id = h.vault_id.to_string();
+    let expected_name = h.vault_name.clone();
 
     // Filesystem result entries carry vault + vault_name.
     let app = router(h.state.clone());
@@ -340,14 +348,13 @@ fn unit_vec(positions: &[(usize, f32)]) -> Vec<f32> {
 }
 
 async fn seed_chunk(
-    state: &ApiState,
+    pool: SqlitePool,
     file_path: &'static str,
     chunk_index: u32,
     heading_path: &'static str,
     content: &'static str,
     embedding: Vec<f32>,
 ) {
-    let pool = state.vaults[0].store.pool();
     task::spawn_blocking(move || {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -382,12 +389,12 @@ async fn seed_chunk(
 async fn semantic_handler_returns_200_with_results_for_seeded_chunks() {
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
     )
     .await;
     seed_chunk(
-        &h.state,
+        h.pool(),
         "a.md",
         0,
         "Intro",
@@ -445,12 +452,12 @@ async fn semantic_handler_returns_400_for_invalid_prefix() {
 async fn semantic_handler_populates_vault_and_vault_name() {
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
     )
     .await;
     seed_chunk(
-        &h.state,
+        h.pool(),
         "a.md",
         0,
         "Intro",
@@ -458,8 +465,8 @@ async fn semantic_handler_populates_vault_and_vault_name() {
         unit_vec(&[(0, 1.0)]),
     )
     .await;
-    let expected_id = h.state.vaults[0].id.to_string();
-    let expected_name = h.state.vaults[0].name.clone();
+    let expected_id = h.vault_id.to_string();
+    let expected_name = h.vault_name.clone();
 
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
@@ -474,7 +481,7 @@ async fn semantic_handler_populates_vault_and_vault_name() {
 #[tokio::test]
 async fn semantic_handler_returns_hint_when_index_empty_and_files_present() {
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
-    seed_files(&h.state, vec![("a.md", "alpha", "2026-04-01T00:00:00Z")]).await;
+    seed_files(h.pool(), vec![("a.md", "alpha", "2026-04-01T00:00:00Z")]).await;
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
     let resp = app.oneshot(req).await.unwrap();
@@ -491,11 +498,11 @@ async fn semantic_handler_clamps_min_similarity_to_unit_range() {
     // (orthogonal cosine score is 0.5).
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
     seed_files(
-        &h.state,
+        h.pool(),
         vec![("a.md", "orthogonal", "2026-04-01T00:00:00Z")],
     )
     .await;
-    seed_chunk(&h.state, "a.md", 0, "", "orthogonal", unit_vec(&[(1, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 0, "", "orthogonal", unit_vec(&[(1, 1.0)])).await;
     let app = router(h.state.clone());
     let req = json_request(
         "POST",

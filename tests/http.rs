@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::config::Config;
+use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::VaultStatus;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -103,11 +105,14 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         vault_path: fx.vault.clone(),
         outbox_path: outbox_path.clone(),
         store: Arc::new(store),
+        status: VaultStatus::Active,
     };
     let state = ApiState {
-        vaults: Arc::new(vec![entry]),
-        embedder,
-        embedding_dimension: fx.config.embedding.dimension,
+        vault_manager: Arc::new(VaultManager::for_tests(
+            vec![entry],
+            embedder,
+            fx.config.embedding.dimension,
+        )),
     };
     let app = api::router(state);
 

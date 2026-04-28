@@ -26,6 +26,7 @@ use hypomnema::config::{
     Config, ConfigPath, EmbeddingConfig, HttpConfig, LoggingConfig, McpConfig, StorageConfig,
     WatcherConfig,
 };
+use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::legacy_state_migration;
@@ -99,6 +100,21 @@ async fn build_vault_entry(
         vault_path: row.path.clone(),
         outbox_path: outbox_path_for(config, &row.id),
         store: Arc::new(store),
+        status: row.status,
+    }
+}
+
+fn build_test_state(
+    entries: Vec<VaultEntry>,
+    embedder: Arc<dyn Embedder>,
+    embedding_dimension: u32,
+) -> ApiState {
+    ApiState {
+        vault_manager: Arc::new(VaultManager::for_tests(
+            entries,
+            embedder,
+            embedding_dimension,
+        )),
     }
 }
 
@@ -328,11 +344,7 @@ async fn cross_vault_search_returns_intermingled_results_with_vault_id() {
     let entry_a = build_vault_entry(&row_a, &config, embedder.clone()).await;
     let entry_b = build_vault_entry(&row_b, &config, embedder.clone()).await;
 
-    let state = ApiState {
-        vaults: Arc::new(vec![entry_a, entry_b]),
-        embedder,
-        embedding_dimension: config.embedding.dimension,
-    };
+    let state = build_test_state(vec![entry_a, entry_b], embedder, config.embedding.dimension);
     let daemon = spawn_daemon(state).await;
 
     let body: Value = http_client()
@@ -453,11 +465,7 @@ async fn legacy_state_migration_preserves_index() {
     // src/legacy_state_migration.rs.
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
     let entry = build_vault_entry(&row, &config, embedder.clone()).await;
-    let state = ApiState {
-        vaults: Arc::new(vec![entry]),
-        embedder,
-        embedding_dimension: config.embedding.dimension,
-    };
+    let state = build_test_state(vec![entry], embedder, config.embedding.dimension);
     let daemon = spawn_daemon(state).await;
 
     let body: Value = http_client()
@@ -560,11 +568,7 @@ async fn migration_idempotent_under_crash_window() {
     // HTTP search after the recovered migration.
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
     let entry = build_vault_entry(&row, &config, embedder.clone()).await;
-    let state = ApiState {
-        vaults: Arc::new(vec![entry]),
-        embedder,
-        embedding_dimension: config.embedding.dimension,
-    };
+    let state = build_test_state(vec![entry], embedder, config.embedding.dimension);
     let daemon = spawn_daemon(state).await;
 
     let body: Value = http_client()
@@ -620,11 +624,11 @@ async fn errored_vault_returns_empty_search_results() {
     );
 
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-    let state = ApiState {
-        vaults: Arc::new(Vec::<VaultEntry>::new()),
+    let state = build_test_state(
+        Vec::<VaultEntry>::new(),
         embedder,
-        embedding_dimension: config.embedding.dimension,
-    };
+        config.embedding.dimension,
+    );
     let daemon = spawn_daemon(state).await;
 
     let resp = http_client()
