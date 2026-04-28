@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
 
 use super::types::{ErrorBody, ErrorEnvelope};
+use crate::control_plane::ControlPlaneError;
 use crate::search::SemanticSearchError;
 
 pub(crate) struct ApiError {
@@ -28,6 +29,112 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal",
             message: "internal server error".to_string(),
+        }
+    }
+
+    pub(crate) fn vault_not_found(name_or_id: &str, hint: Option<&str>) -> Self {
+        let message = match hint {
+            Some(h) => format!("vault {name_or_id} not found (did you mean {h}?)"),
+            None => format!("vault {name_or_id} not found"),
+        };
+        ApiError {
+            status: StatusCode::NOT_FOUND,
+            code: "vault_not_found",
+            message,
+        }
+    }
+
+    pub(crate) fn vault_path_conflict(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            code: "vault_path_conflict",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn vault_name_conflict(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            code: "vault_name_conflict",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn vault_path_invalid(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: "vault_path_invalid",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn vault_errored(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "vault_errored",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn vault_op_conflict(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            code: "vault_op_conflict",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn registry_corrupt() -> Self {
+        ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "registry_corrupt",
+            message: "vault registry is corrupt; restore from backup".to_string(),
+        }
+    }
+}
+
+impl From<ControlPlaneError> for ApiError {
+    fn from(err: ControlPlaneError) -> Self {
+        match err {
+            ControlPlaneError::VaultNotFound { name_or_id, hint } => {
+                ApiError::vault_not_found(&name_or_id, hint.as_deref())
+            }
+            ControlPlaneError::VaultPathConflict {
+                existing_name,
+                path,
+            } => ApiError::vault_path_conflict(format!(
+                "path {} is already registered as vault {}",
+                path.display(),
+                existing_name
+            )),
+            ControlPlaneError::VaultNameConflict {
+                existing_path,
+                name,
+            } => ApiError::vault_name_conflict(format!(
+                "name {} is already in use by vault at {}",
+                name,
+                existing_path.display()
+            )),
+            ControlPlaneError::VaultPathInvalid { detail } => ApiError::vault_path_invalid(detail),
+            ControlPlaneError::VaultErrored {
+                name_or_id,
+                last_error,
+            } => {
+                let message = match last_error {
+                    Some(e) => format!("vault {name_or_id} is errored: {e}"),
+                    None => format!("vault {name_or_id} is errored"),
+                };
+                ApiError::vault_errored(message)
+            }
+            ControlPlaneError::VaultOpConflict { detail } => ApiError::vault_op_conflict(detail),
+            ControlPlaneError::RegistryCorrupt { detail } => {
+                tracing::error!(detail = %detail, "vault registry is corrupt");
+                ApiError::registry_corrupt()
+            }
+            ControlPlaneError::Internal(e) => {
+                tracing::error!(error = ?e, "internal API error from control plane");
+                ApiError::internal()
+            }
         }
     }
 }

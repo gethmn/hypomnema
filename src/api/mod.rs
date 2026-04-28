@@ -3,6 +3,7 @@ mod health;
 mod search;
 mod status;
 pub mod types;
+mod vaults;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,6 +51,11 @@ pub fn router(state: ApiState) -> Router {
         .route("/search/filesystem", post(search::filesystem))
         .route("/search/content", post(search::content))
         .route("/search/semantic", post(search::semantic))
+        .route("/vaults", post(vaults::create).get(vaults::list))
+        .route(
+            "/vaults/:name_or_id",
+            get(vaults::get).delete(vaults::terminate),
+        )
         .with_state(state)
 }
 

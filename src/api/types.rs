@@ -172,6 +172,41 @@ pub struct HealthResponse {
     pub status: String,
 }
 
+// ===== Vault control-plane request/response shapes =====
+//
+// Wire shapes pinned to docs/specs/vault-management.md § Control-Plane HTTP
+// Wire Shapes. Step 10 ships the minimal `VaultRow` projection (no
+// `file_count` / `last_indexed_at`); the spec marks those fields optional.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateVaultRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultRowJson {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultListResponse {
+    pub vaults: Vec<VaultRowJson>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminateVaultResponse {
+    pub terminated: bool,
+    pub id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ErrorEnvelope {
