@@ -1459,3 +1459,297 @@ async fn semantic_search_assumes_same_dimension_across_vaults() {
     assert_eq!(failed[0]["code"], "vault_search_failed");
     assert_eq!(failed[0]["vault_name"], "bravo");
 }
+
+// ===== Step 11 · Task 11.3: lifecycle handler tests =====
+//
+// Five new POST routes (`pause`, `resume`, `reset`, `rename`, `rescan`) on
+// top of `vault_harness()` (full `VaultManager::open` so the spawn ctx is
+// available). One dedicated `errored_vault_harness` covers the
+// path-inaccessible resume case by pre-inserting an Errored row before
+// `VaultManager::open` reconciles.
+
+async fn errored_vault_harness(
+    errored_name: &str,
+    last_error: &str,
+) -> (VaultHarness, std::path::PathBuf) {
+    let root = TempDir::new().unwrap();
+    let data_dir = root.path().join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let config = Arc::new(vault_test_config(&data_dir));
+    let registry = Arc::new(VaultRegistry::open(&data_dir).await.unwrap());
+
+    let bogus = root.path().join("not-there");
+    let id = VaultId::new();
+    registry
+        .insert(VaultRow {
+            id,
+            name: errored_name.to_string(),
+            path: bogus.clone(),
+            status: VaultStatus::Errored,
+            created_at: chrono::Utc::now(),
+            last_error: Some(last_error.to_string()),
+        })
+        .await
+        .unwrap();
+
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let manager = VaultManager::open(registry, config, embedder, 768, rx)
+        .await
+        .unwrap();
+    let state = ApiState {
+        vault_manager: Arc::new(manager),
+    };
+    (
+        VaultHarness {
+            _root: root,
+            state,
+            _shutdown_tx: tx,
+        },
+        bogus,
+    )
+}
+
+async fn count_chunks_via_manager(state: &ApiState) -> i64 {
+    let entries = state.vault_manager.active_vaults();
+    let pool = entries[0].store.pool();
+    task::spawn_blocking(move || -> i64 {
+        let conn = pool.get().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn post_vaults_pause_returns_200_with_updated_row() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("paused-target"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/paused-target/pause")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "paused-target");
+    assert_eq!(body["status"], "paused");
+}
+
+#[tokio::test]
+async fn post_vaults_pause_unknown_returns_404() {
+    let h = vault_harness().await;
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/missing/pause")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "vault_not_found");
+}
+
+#[tokio::test]
+async fn post_vaults_resume_returns_200_with_updated_row() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("resume-target"), &path).await;
+
+    // Pause first so resume has work to do.
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/resume-target/pause")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/resume-target/resume")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "resume-target");
+    assert_eq!(body["status"], "active");
+}
+
+#[tokio::test]
+async fn post_vaults_resume_errored_path_inaccessible_returns_503_vault_errored() {
+    let (h, _bogus) = errored_vault_harness("errd", "path missing").await;
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/errd/resume")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "vault_errored");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("path missing"),
+        "expected last_error in message: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn post_vaults_reset_returns_200_with_updated_row() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("reset-target"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/vaults/reset-target/reset", json!({})).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "reset-target");
+    assert_eq!(body["status"], "active");
+}
+
+#[tokio::test]
+async fn post_vaults_reset_with_rebuild_true_returns_200_and_clears_chunks() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    std::fs::write(path.join("a.md"), b"# Alpha\n\nBody one.\n").unwrap();
+    std::fs::write(path.join("b.md"), b"# Bravo\n\nBody two.\n").unwrap();
+    create_vault_via_api(&h.state, Some("rebuild-target"), &path).await;
+
+    let chunks_before = count_chunks_via_manager(&h.state).await;
+    assert!(
+        chunks_before > 0,
+        "initial scan should populate chunks; got {chunks_before}"
+    );
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/vaults/rebuild-target/reset",
+        json!({ "rebuild": true }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "active");
+
+    let chunks_after = count_chunks_via_manager(&h.state).await;
+    assert_eq!(
+        chunks_after, 0,
+        "rebuild should clear chunks; got {chunks_after}"
+    );
+}
+
+#[tokio::test]
+async fn post_vaults_rename_returns_200_with_new_name() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("oldname"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/vaults/oldname/rename",
+        json!({ "new_name": "newname" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "newname");
+}
+
+#[tokio::test]
+async fn post_vaults_rename_invalid_new_name_returns_422_vault_path_invalid() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("renametarget"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/vaults/renametarget/rename",
+        json!({ "new_name": "has spaces" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "vault_path_invalid");
+}
+
+#[tokio::test]
+async fn post_vaults_rename_collision_returns_409_vault_name_conflict() {
+    let h = vault_harness().await;
+    let path_a = fresh_dir(h._root.path(), "a");
+    let path_b = fresh_dir(h._root.path(), "b");
+    create_vault_via_api(&h.state, Some("alpha"), &path_a).await;
+    create_vault_via_api(&h.state, Some("bravo"), &path_b).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/vaults/alpha/rename",
+        json!({ "new_name": "bravo" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "vault_name_conflict");
+}
+
+#[tokio::test]
+async fn post_vaults_rescan_returns_200_with_rescan_initiated_at() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("rescan-target"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/rescan-target/rescan")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["name"], "rescan-target");
+    assert_eq!(body["status"], "active");
+    let initiated = body["rescan_initiated_at"]
+        .as_str()
+        .expect("rescan_initiated_at present");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(initiated).is_ok(),
+        "rescan_initiated_at not RFC3339: {initiated}"
+    );
+}
+
+#[tokio::test]
+async fn post_vaults_unknown_op_path_returns_404() {
+    let h = vault_harness().await;
+    let path = fresh_dir(h._root.path(), "v");
+    create_vault_via_api(&h.state, Some("sometarget"), &path).await;
+
+    let app = router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/vaults/sometarget/bogus")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

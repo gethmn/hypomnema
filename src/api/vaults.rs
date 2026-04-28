@@ -6,7 +6,10 @@ use chrono::SecondsFormat;
 
 use super::ApiState;
 use super::error::{ApiError, ApiJson};
-use super::types::{CreateVaultRequest, TerminateVaultResponse, VaultListResponse, VaultRowJson};
+use super::types::{
+    CreateVaultRequest, RenameRequest, RescanResponseJson, ResetRequest, TerminateVaultResponse,
+    VaultListResponse, VaultRowJson,
+};
 use crate::control_plane::CreateVaultRequest as ControlCreateRequest;
 use crate::vault_registry::VaultRow;
 
@@ -52,6 +55,54 @@ pub(crate) async fn terminate(
     Ok(Json(TerminateVaultResponse {
         terminated: true,
         id: id.to_string(),
+    }))
+}
+
+pub(crate) async fn pause(
+    State(s): State<ApiState>,
+    Path(name_or_id): Path<String>,
+) -> Result<Json<VaultRowJson>, ApiError> {
+    let row = s.vault_manager.pause(&name_or_id).await?;
+    Ok(Json(vault_row_to_json(row)))
+}
+
+pub(crate) async fn resume(
+    State(s): State<ApiState>,
+    Path(name_or_id): Path<String>,
+) -> Result<Json<VaultRowJson>, ApiError> {
+    let row = s.vault_manager.resume(&name_or_id).await?;
+    Ok(Json(vault_row_to_json(row)))
+}
+
+pub(crate) async fn reset(
+    State(s): State<ApiState>,
+    Path(name_or_id): Path<String>,
+    body: Option<ApiJson<ResetRequest>>,
+) -> Result<Json<VaultRowJson>, ApiError> {
+    let rebuild = body.map(|ApiJson(b)| b.rebuild).unwrap_or(false);
+    let row = s.vault_manager.reset(&name_or_id, rebuild).await?;
+    Ok(Json(vault_row_to_json(row)))
+}
+
+pub(crate) async fn rename(
+    State(s): State<ApiState>,
+    Path(name_or_id): Path<String>,
+    ApiJson(req): ApiJson<RenameRequest>,
+) -> Result<Json<VaultRowJson>, ApiError> {
+    let row = s.vault_manager.rename(&name_or_id, &req.new_name).await?;
+    Ok(Json(vault_row_to_json(row)))
+}
+
+pub(crate) async fn rescan(
+    State(s): State<ApiState>,
+    Path(name_or_id): Path<String>,
+) -> Result<Json<RescanResponseJson>, ApiError> {
+    let resp = s.vault_manager.rescan(&name_or_id).await?;
+    Ok(Json(RescanResponseJson {
+        row: vault_row_to_json(resp.row),
+        rescan_initiated_at: resp
+            .rescan_initiated_at
+            .to_rfc3339_opts(SecondsFormat::Micros, true),
     }))
 }
 

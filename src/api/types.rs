@@ -266,6 +266,24 @@ pub struct TerminateVaultResponse {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResetRequest {
+    #[serde(default)]
+    pub rebuild: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameRequest {
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RescanResponseJson {
+    #[serde(flatten)]
+    pub row: VaultRowJson,
+    pub rescan_initiated_at: String,
+}
+
 // ===== MCP-tool input shapes for vault control-plane wrappers =====
 //
 // Used by `src/mcp/server.rs` for the `vault_status` / `vault_create` /

@@ -56,6 +56,11 @@ pub fn router(state: ApiState) -> Router {
             "/vaults/:name_or_id",
             get(vaults::get).delete(vaults::terminate),
         )
+        .route("/vaults/:name_or_id/pause", post(vaults::pause))
+        .route("/vaults/:name_or_id/resume", post(vaults::resume))
+        .route("/vaults/:name_or_id/reset", post(vaults::reset))
+        .route("/vaults/:name_or_id/rename", post(vaults::rename))
+        .route("/vaults/:name_or_id/rescan", post(vaults::rescan))
         .with_state(state)
 }
 
