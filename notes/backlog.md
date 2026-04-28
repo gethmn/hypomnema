@@ -11,9 +11,20 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 ---
 
-## Multi-vault — committed to Round 3
+## Round-4 candidates
 
-Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); roadmap entry in [`notes/roadmap/archive/roadmap-2.md`](roadmap/archive/roadmap-2.md) § Round 3 (post-v0). Spec work pre-queued in Solo todos 64 (four spec amendments) and 65 (vault-management.md full spec from outline). Five open deferred decisions to be resolved at the round-3 workplan.
+Items raised at the round-3 boundary that have no roadmap slot yet. Round-4 (or later) workplans pull from here; un-scoped is a valid state.
+
+- **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred to round 4 because the round-3 workplan budget was already at scope without it.
+- **CHANGELOG.md adoption.** Round-3 ships as `v0.2.0` (round-3 shipping gate); the boundary is a natural moment to settle whether the project starts a CHANGELOG. Carried as a step-11 boundary follow-up.
+- **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is round-4+ if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
+- **Round-4 flake-hardening pass on `tests/outbox.rs::rename_emits_deleted_then_created_lines`.** Pre-existing ~17%-repro flake carried from steps 6/7/10; not encountered in step-11's 3× flake-check or full smoke matrix runs. Needs investigation against macOS / Linux event-coalescing semantics. Step-11 did not touch this surface.
+- **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as round-4+ if a use-case surfaces.
+- **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Round-4+.
+
+## Multi-vault — shipped in Round 3
+
+Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); shipped across roadmap-3 steps 9–11 (per-vault refactor → control plane create/list/status/terminate + cross-vault search → remaining lifecycle ops + `hmnd scan` removal). The four search/event spec amendments (Solo todo 64) and the vault-management.md fleshout (Solo todo 65) landed in step 10. The Compose-style declarative layer was deferred to round 4 (see § Round-4 candidates above).
 
 ## Agent-host integration — round-3-or-later, no roadmap slot yet
 
@@ -34,7 +45,7 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 
 ## Operational follow-ups
 
-- **Outbox flake under `cargo nextest run --fail-fast` cancellation.** Carried from steps 6 and 7; not encountered in step 8. Future flake-investigation candidate; not blocking round 3.
+- **Outbox flake under `cargo nextest run --fail-fast` cancellation.** Carried from steps 6 and 7; not encountered in steps 8–11 (step 11's 3× flake-check + full smoke matrix were clean). Future flake-investigation candidate. Now duplicated under § Round-4 candidates as the `rename_emits_deleted_then_created_lines`-specific entry; consolidate when round-4 workplan picks it up.
 - **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — round 3's first build that exercises sqlite-vec will need it again.
 - **Brand-identity override revisit on rmcp major version upgrade.** ADR-0012 § Negative consequences notes this: the `#[tool_handler(name = "hypomnema")]` macro syntax is rmcp-macros-1.5.0-specific.
 

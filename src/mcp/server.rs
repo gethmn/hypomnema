@@ -266,7 +266,7 @@ fn write_tools_disabled_envelope(tool_name: &str) -> Value {
         "error": {
             "code": "write_tools_disabled",
             "message": format!(
-                "{tool_name} is disabled by config; set [mcp] enable_write_tools = true to enable vault.create/terminate"
+                "{tool_name} is disabled by config; set [mcp] enable_write_tools = true to enable vault management write tools"
             ),
         }
     })

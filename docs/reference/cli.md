@@ -1,7 +1,7 @@
 # CLI Reference: `hmnd` and `hmn`
 
 **Version**: 0.3.0
-**Generated**: 2026-04-27
+**Generated**: 2026-04-28
 
 ---
 
@@ -176,13 +176,18 @@ When the daemon's response carries a top-level `hint` (e.g. `"semantic index is 
 
 Manage vaults on a running daemon. Each subcommand maps to a control-plane HTTP route ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)). Either a vault name or its surrogate ID may be passed for selectors; the daemon resolves at request entry. When a selector is omitted, `status` resolves to `default_vault_name` from the configuration ([§ `default_vault_name`](./configuration.md#default_vault_name)).
 
-Step 10 ships the read + create/terminate subset (`create`, `list`, `status`, `terminate`). The remaining lifecycle ops (`pause`, `resume`, `reset`, `rename`, `rescan`) are pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md) and ship in step 11.
+As of step 11, the full nine-operation lifecycle ships: read + create/terminate (`create`, `list`, `status`, `terminate`) plus the five lifecycle ops (`pause`, `resume`, `reset`, `rename`, `rescan`). All nine are pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md).
 
 **Usage**:
 ```
 hmn vault create [--name NAME] PATH
 hmn vault list
 hmn vault status [NAME|ID]
+hmn vault pause NAME|ID
+hmn vault resume NAME|ID
+hmn vault reset NAME|ID [--rebuild] [--yes]
+hmn vault rename NAME|ID --new-name NEW_NAME
+hmn vault rescan NAME|ID [--yes]
 hmn vault terminate NAME|ID [--yes]
 ```
 
@@ -191,11 +196,24 @@ hmn vault terminate NAME|ID [--yes]
 | Subcommand | Effect |
 |---|---|
 | `create [--name NAME] PATH` | Register a new vault at `PATH`. If `--name` is omitted, uses `default_vault_name` from the daemon's config. Allocates a UUIDv7 surrogate ID; creates the per-vault subdirectory under `<data_dir>/vaults/<id>/`; starts the watcher and indexer. Errors: `409 vault_path_conflict` (path already registered), `409 vault_name_conflict` (name already in use), `422 vault_path_invalid` (path does not exist, is not a directory, or would place `data_dir` inside the vault). |
-| `list` | Print every registered vault as a table (`ID  NAME  STATUS  CREATED  PATH`). With `--json`, emits the underlying `{"vaults": [...]}` shape verbatim — see [`docs/specs/vault-management.md` § Control-Plane HTTP Wire Shapes](../specs/vault-management.md#control-plane-http-wire-shapes) for the row fields shipped in step 10. |
+| `list` | Print every registered vault as a table (`ID  NAME  STATUS  CREATED  PATH`). With `--json`, emits the underlying `{"vaults": [...]}` shape verbatim — see [`docs/specs/vault-management.md` § Control-Plane HTTP Wire Shapes](../specs/vault-management.md#control-plane-http-wire-shapes) for the row fields. |
 | `status [NAME\|ID]` | Single-vault detail printed as a labelled key/value block (id, name, path, status, created_at, optional last_error). With no selector, resolves to `default_vault_name`. With `--json`, emits the `VaultRow` shape verbatim. Errors: `404 vault_not_found` (response carries a closest-name `hint` when the registry has a near match within Levenshtein distance 3). |
+| `pause NAME\|ID` | Transition `active → paused`. Drains the watcher + indexer (cooperative, 30s drain cap), preserves `index.sqlite` and `outbox.jsonl` in place. Search responses report the vault under `partial_results.skipped` while paused. Idempotent on already-paused (returns the existing row). Errors: `404 vault_not_found`. |
+| `resume NAME\|ID` | Transition `paused → active`, or `errored → active` when the underlying error is no longer present (e.g. the vault path is reachable again). Re-spawns the watcher + indexer; clears `last_error` on success. Idempotent on already-active. Errors: `404 vault_not_found`, `503 vault_errored` (when `errored → active` is attempted but the path is still inaccessible — `last_error` is updated rather than cleared). |
+| `reset NAME\|ID [--rebuild] [--yes]` | Clear `last_error`, drain and re-spawn the watcher + indexer. With `--rebuild`, additionally drop the `chunks` + `chunks_vec` tables and clear every `files.content_hash` in the per-vault `index.sqlite` — the next indexing pass re-embeds every file. The outbox and the `files` rows are preserved across `--rebuild`. `--yes` skips the rebuild confirmation prompt; required for non-interactive `--rebuild` runs. Plain `reset` (no `--rebuild`) is non-destructive and skips the prompt. Errors: `404 vault_not_found`. |
+| `rename NAME\|ID --new-name NEW_NAME` | Single registry UPDATE on the row's `name` column; rewrites the per-vault `meta.toml`. The surrogate ID and the per-vault subdirectory path are unchanged; outbox events continue to carry the same `vault` ID. Subsequent search responses carry the new `vault_name`. `NEW_NAME` must match `[A-Za-z0-9_-]+` and must not already be in use. Errors: `404 vault_not_found`, `409 vault_name_conflict`, `422 vault_path_invalid` (when the new name fails the regex). |
+| `rescan NAME\|ID [--yes]` | Force a full directory walk for the vault: every file is re-stat'd and re-hashed; outbox `modified` events are emitted only for files whose `content_hash` differs from the stored value (a fully-indexed vault with stable content emits few or zero events). For cold-start emission against every file regardless of hash, use `reset --rebuild` (which clears every `files.content_hash` first, so the subsequent indexing pass treats every file as newly seen). The HTTP response carries `rescan_initiated_at`; the rescan itself runs asynchronously. `--yes` skips the confirmation prompt. Rescan on a paused or errored vault is a silent no-op (returns the row unchanged; no signal sent). Errors: `404 vault_not_found`. |
 | `terminate NAME\|ID [--yes]` | Stop the watcher/indexer; remove the registry row; remove the per-vault subdirectory under `<data_dir>/vaults/<id>/`. **Never touches the vault path's own files.** Without `--yes`, prompts on stderr (`Terminate vault 'NAME'? (y/N)`) and reads from stdin; any answer that does not begin with `y`/`Y` aborts. With `--json` and an aborted prompt, emits `{"terminated": false, "aborted": true}` to stdout. With `--yes`, skips the prompt. Successful termination emits `{"terminated": true, "id": "<uuid>"}`. Terminate-then-create with the same name succeeds (the new vault gets a fresh UUID). |
 
 **Global options that apply** (from § Global Options above): `--daemon-url`, `--config`, `--json`.
+
+**Destructive-op confirmation prompts**. Three subcommands prompt on stderr unless `--yes` is passed:
+
+- `terminate` — `Terminate vault 'NAME'? (y/N)`
+- `reset --rebuild` — `Reset vault 'NAME' and rebuild chunks? (y/N)` (only the `--rebuild` form prompts; plain `reset` is non-destructive and skips the prompt)
+- `rescan` — `Rescan vault 'NAME'? This will re-emit outbox events. (y/N)`
+
+In all three cases, an answer that does not begin with `y`/`Y` aborts; with `--json` an aborted prompt emits the operation-specific aborted envelope (`{"terminated": false, "aborted": true}` / `{"reset": false, "aborted": true}` / `{"rescan": false, "aborted": true}`) to stdout. Concurrent destructive ops on the same vault serialize at the daemon (per-vault `op_lock`); operations on different vaults run in parallel.
 
 **Examples**:
 
@@ -220,6 +238,22 @@ hmn vault status
 
 # Status by surrogate ID
 hmn vault status 019dd258-3992-7c3b-7a2e-8c1d1a2b3c4d
+
+# Pause / resume
+hmn vault pause personal
+hmn vault resume personal
+
+# Reset (clears last_error; re-spawns watcher + indexer)
+hmn vault reset personal
+
+# Reset with full re-embed (drops chunks + chunks_vec; clears content_hash)
+hmn vault reset personal --rebuild --yes
+
+# Rename (registry UPDATE only; surrogate ID + subdirectory unchanged)
+hmn vault rename personal --new-name notes
+
+# Rescan (force a full walk; emits modified events for files whose content_hash drifted)
+hmn vault rescan notes --yes
 
 # Terminate with explicit confirmation
 hmn vault terminate personal
@@ -262,7 +296,7 @@ Serve the MCP surface over stdio. Intended for MCP-capable agent hosts (Claude C
 - Process exits when stdin is closed by the parent.
 - The MCP server identifies itself as `serverInfo.name = "hypomnema"`, `serverInfo.version = <crate version>` (brand-identity override per [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)).
 
-Step 10 advertises seven tools — the three search modes (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) plus the four vault control-plane operations that ship in step 10:
+Step 11 advertises twelve tools — the three search modes (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) plus the nine vault control-plane operations:
 
 | Tool | Maps to | Trust posture | Spec |
 |---|---|---|---|
@@ -272,13 +306,18 @@ Step 10 advertises seven tools — the three search modes (per [ADR-0004](../dec
 | `vault_list` | `GET /vaults` | Read | [vault-management.md](../specs/vault-management.md) |
 | `vault_status` | `GET /vaults/{id_or_name}` | Read | [vault-management.md](../specs/vault-management.md) |
 | `vault_create` | `POST /vaults` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_pause` | `POST /vaults/{id_or_name}/pause` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_resume` | `POST /vaults/{id_or_name}/resume` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_reset` | `POST /vaults/{id_or_name}/reset` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_rename` | `POST /vaults/{id_or_name}/rename` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_rescan` | `POST /vaults/{id_or_name}/rescan` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
 | `vault_terminate` | `DELETE /vaults/{id_or_name}` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
 
-Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` / `VaultRow` / `VaultListResponse` / `TerminateVaultResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `vault_not_found`, `vault_path_conflict`, `vault_name_conflict`, `vault_path_invalid`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
+Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` / `VaultRow` / `VaultListResponse` / `RescanResponseJson` / `TerminateVaultResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `vault_not_found`, `vault_path_conflict`, `vault_name_conflict`, `vault_path_invalid`, `vault_errored`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
 
-`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`).
+`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`). The five lifecycle tools (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) each take a required `target` field; `vault_reset` accepts an optional `rebuild` boolean (default `false`); `vault_rename` requires `new_name`. Idempotency guarantees match the HTTP layer (pause-on-paused / resume-on-active return the existing row).
 
-**Write-tool gating**. The two write tools (`vault_create`, `vault_terminate`) are advertised by default and may be disabled via `[mcp] enable_write_tools = false` in the daemon's config (see [configuration.md § `[mcp]`](./configuration.md#mcp)). When the gate is closed, `tools/call` against either tool returns a structured `write_tools_disabled` error envelope naming the gated tool and the config knob to flip; the read tools remain available. Step-11 lifecycle ops (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) inherit the same gate when they ship — see [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface).
+**Write-tool gating**. The seven write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`) are advertised by default and may be disabled via `[mcp] enable_write_tools = false` in the daemon's config (see [configuration.md § `[mcp]`](./configuration.md#mcp)). When the gate is closed, `tools/call` against any of the seven returns a structured `write_tools_disabled` error envelope naming the gated tool and the config knob to flip; the read tools remain available. The gate is single-flag at the daemon level — per-tool gating is round-4+ if a use-case surfaces. See [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface).
 
 **Example MCP host configuration**:
 

@@ -131,6 +131,8 @@ The migration story for an existing v0 deployment: on first startup with an empt
 
 ## Step 11 — Remaining lifecycle ops + Compose layer (round shipping gate)
 
+**Status**: Shipped 2026-04-28. See [`step-11-workplan.md`](./step-11-workplan.md) (archived to [`archive/step-11-workplan.md`](./archive/step-11-workplan.md) at the round-3 boundary ritual) for the workplan and [`notes/project-planning-workflow-notes.md`](../project-planning-workflow-notes.md) § Step 11 for the retrospective. The Compose-style declarative layer was deferred to round 4 (Resolution A); see [`notes/backlog.md`](../backlog.md) § Round-4 candidates.
+
 **Goal**: Round out the full vault lifecycle surface — `pause`, `resume`, `reset`, `rename`, `rescan` — over all three transports. Remove `hmnd scan` (subsumed by `hmn vault rescan`). Decide whether the Compose-style declarative provisioning layer ships in this round or queues to round 4 (per the deferred-decision list in the round-2 outline). On shipping the full **after-step-11 boundary ritual** runs (milestone tag — likely `v0.2.0` if the round bumps the minor; per-step + end-of-round retros).
 
 **Shipping criteria**:
