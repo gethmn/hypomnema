@@ -31,6 +31,55 @@ Human  ⇅  Orchestrator     (Solo agent OR Claude Code terminal session — tal
 
 ---
 
+## Agent runtime tiering
+
+Different roles do different shapes of work; size the model to the work, not to the role's importance. Solo's `list_agent_tools()` returns the registered runtimes by id; pick the right one when calling `spawn_process(agent_tool_id=...)`. If only the default `claude` runtime is registered, all roles collapse to that one runtime — but operators are expected to register tiered runtimes for token efficiency on multi-step builds.
+
+The table below names *reasoning tiers*, not specific runtimes. Map each tier to whatever Solo runtimes you've registered (Claude Code, OpenCode, Droid, etc.). The Anthropic reference column is illustrative — pick a tier-equivalent in whatever frontend you've registered.
+
+| Role | Reasoning tier | Anthropic reference | Why |
+|---|---|---|---|
+| Orchestrator | small | Haiku 4.5 (or Sonnet 4.6) | The bounded checklist in [§ Polling the coordinator](#polling-the-coordinator-cheap-check-and-re-arm) is mechanical pattern-matching; designed not to need deep reasoning. |
+| Coordinator — workplan write, salvage/discard calls, escalation routing | large | Opus 4.7 | One-shot heavy turns, ~3–5 per step. Big-context judgment work. |
+| Coordinator — wake-up loop (per-task spawn → wake → route → append → close) | medium | Sonnet 4.6 | Routing soft flags + appending outcome paragraphs + spawning next task is pattern-following with a small judgment layer. |
+| Task agent (default) | medium | Sonnet 4.6 | Most code work — Rust, axum, framework-tracing — fits the medium tier's reasoning budget. |
+| Task agent — ADR-adjacent / novel architecture / spec-promotion | large | Opus 4.7 | Workplan flags these explicitly (`**Risk**: medium-high` + `**load-bearing for tasks N+M**`); use a large-tier runtime only when the task warrants it. |
+
+**Operator setup**: register one Solo agent tool per tier you intend to use. Suggested names track frontend + tier so spawn calls read clearly: `claude-haiku`, `claude-sonnet`, `claude-opus` (Claude Code); `opencode-sonnet`, `opencode-gpt5` (OpenCode + chosen routing); `droid-default` (Factory Droid); `copilot-sonnet` (GitHub Copilot Claude). The playbook's spawn lines pass `agent_tool_id=<id-for-the-tier-you-want>`; orchestration doesn't care about the frontend, only the work shape.
+
+**Tier inference from runtime name** (the default — works without any extra config when the operator follows the suffix convention): when `list_agent_tools()` returns a registered runtime, infer its tier from the suffix:
+
+- *small* — `*-haiku`, `*-flash`, `*-mini`, `*-cheap`, `*-small`
+- *medium* — `*-sonnet`, `*-medium`, `*-default`
+- *large* — `*-opus`, `*-pro`, `*-max`, `*-large`
+
+For non-Claude runtimes whose model name doesn't fit one of those suffixes (e.g. `opencode-gpt5`, `droid-gemini-pro`, `copilot-grok`), the operator has two paths:
+
+1. **Rename to a tier-aligned suffix** the convention recognizes — `opencode-large`, `droid-large`, `copilot-medium`. Cheapest and most mechanical; loses model-name visibility in `list_processes` but spawn calls still read clearly.
+2. **Add a project-level `notes/agent-runtimes.md` mapping doc** with one row per registered runtime: `id | name | tier | notes`. Schema:
+
+   ```markdown
+   | id | name | tier | notes |
+   |---|---|---|---|
+   | 3 | claude-opus | large | Claude Code, Anthropic Max billing |
+   | 8 | claude-sonnet | medium | Claude Code, Max billing |
+   | 9 | claude-haiku | small | Claude Code, Max billing |
+   | 12 | opencode-gpt5 | large | OpenCode → OpenAI direct, per-token billing |
+   | 13 | droid-gemini-pro | large | Factory Droid, separate billing |
+   ```
+
+   The orchestrator reads `notes/agent-runtimes.md` on activation (after `whoami()` rename); the coordinator inherits the mapping when it spawns. The mapping doc is the **override surface**: it always wins over the suffix convention. Keep it short — one row per registered runtime, drop rows when you de-register.
+
+Default to the suffix convention. Reach for the mapping doc only when (a) you have model-name suffixes you want to keep readable, (b) one frontend serves multiple tiers and you want to surface that, or (c) you're routing through a billing-isolation provider whose name doesn't naturally suggest a tier.
+
+**Validating a new runtime before trusting it with task agents**: dry-run any newly-registered runtime through one full task before assigning it to a real loop. Watch for ritual completeness: read playbook → read todo → read scratchpad → execute → run quality gates → commit → post results comment → `todo_complete(true)` → stop. Weaker or non-Claude models tend to skip the commit (especially when the change is small), skip `todo_complete` (their idea of "done" diverges from the ritual's), or conflate soft-flag and escalation paths. If the dry-run fails any of those, the runtime isn't loop-ready — keep it for one-shot tasks the human supervises directly until the gap is understood.
+
+**Coordinator-internal escalation across phases**: a clean implementation has the orchestrator spawn the coordinator on Opus for the workplan-phase prompt, then on the human's "build" the orchestrator (or a hint in the build-phase forwarded message) signals the coordinator to drop to Sonnet for its wake-up loop. The mechanism for that runtime-swap depends on Solo's spawn semantics; in the simple case the operator manually picks the runtime when re-prompting on "build."
+
+If only one runtime is registered, the playbook's spawn lines collapse to a single `agent_tool_id=3` default; the tiering still applies to the human's pre-spawn decision (e.g., manually running the build-phase coordinator on a cheaper runtime via OpenCode while the workplan-phase coordinator runs on Opus via Claude Code).
+
+---
+
 ## ORCHESTRATOR section
 
 > **Audience**: the top-level agent that talks directly to the human. Could be a Solo agent or a Claude Code terminal session. If you are a coordinator or task agent, skip this section.
@@ -39,15 +88,15 @@ Human  ⇅  Orchestrator     (Solo agent OR Claude Code terminal session — tal
 
 A fresh agent that finds itself at the top of the hierarchy — talking directly to the human, no parent agent — is the orchestrator. Recognition triggers: human says "start step N", "build", "status"; or human references roadmap / workplan / coordinator concepts. On recognition:
 
-1. `whoami()` to confirm process identity.
+1. `whoami()` to confirm process identity (capture your `process_id` for step 3).
 2. Read this ORCHESTRATOR section in full. Do **not** read the COORDINATOR or TASK AGENT sections — those are for agents you'll spawn, not for you.
-3. Optionally rename your process to `orchestrator` (or `<project>-orchestrator`) for clarity in `list_processes` output. Not required.
+3. **Rename your process** to make the role visible in `list_processes`: `rename_process(process_id=<your-pid-from-whoami>, new_name="orchestrator")`. (Coordinator and task-agent processes are named at spawn time by their parent; the orchestrator has no parent to name it, so it self-names on role recognition.) The name is project-scoped, so `orchestrator` is unique within the current project; if you also work in other Solo projects, this stays unambiguous via `list_processes(project_id=...)`. Skip this step if `whoami()` already shows your name as `orchestrator` (idempotent — happens on subsequent recognitions in the same process).
 4. Confirm to the human you're set up and (if you don't already know) ask which step they want to start.
 
 ### Per-step kickoff (on "start step N")
 
 1. Read the step N todo (from the original 17–21 set) and the relevant section of `notes/roadmap/roadmap-<RN>.md` for the current round.
-2. **Spawn a fresh coordinator**: `spawn_process(kind="agent", agent_tool_id=<id>, name="step-NN-coordinator")`. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
+2. **Spawn a fresh coordinator**: `spawn_process(kind="agent", agent_tool_id=<coordinator-runtime-id>, name="step-NN-coordinator")`. Pick the runtime per [§ Agent runtime tiering](#agent-runtime-tiering): an Opus-tier runtime for the workplan phase (heavy one-shot reasoning), with the operator dropping to a Sonnet-tier runtime when re-prompting on "build" if separate runtimes are registered. Capture the returned `process_id`. **Never reuse an existing process for this role** — the orchestrator never becomes the coordinator. Even if you yourself are a Solo agent, you spawn a *new* Solo agent for this.
 3. Send the workplan-phase prompt to the new coordinator (template in [§ Workplan-phase prompt](#workplan-phase-prompt)). The coordinator's first piece of work is writing the workplan; the build phase follows on human approval, in the same process.
 4. Set an idle timer to wake when the coordinator finishes its workplan-phase output: `timer_fire_when_idle_any(processes=[<coordinator-pid>], max_wait_ms=1800000, body="<wake-up: step-NN coordinator went idle in workplan phase, check workplan>")`.
 5. On wake-up: read the workplan output, surface its path to the human for review. Do not modify it.
@@ -120,8 +169,8 @@ On entering the build phase:
 
 For each task (or batch) in workplan order:
 
-1. **Pre-flight checks.** Re-read the step-context scratchpad (your own context may have drifted; the scratchpad is the source of truth). Verify the previous task's outcome was recorded. If a previous task left an unresolved decision, do not advance — escalate.
-2. **Spawn task agent.** `spawn_process(kind="agent", agent_tool_id=3, name="step-NN-task-MM")`. For a batch, use the lowest task number in the batch (e.g., `step-01-task-03` for batch `[task-03, task-04]`). Capture the returned `process_id` and `agent_instructions`.
+1. **Pre-flight checks.** Read only what you need to route the current wake-up; the full scratchpad is the source of truth, but reading it end-to-end every fire is the dominant context-bloat shape (see [§ Reading discipline during wake-up routing](#reading-discipline-during-wake-up-routing)). The cheap path: read the most recent task's outcome paragraph in § Per-task outcomes (via `scratchpad_read(mode=section, ...)` or a targeted line range — *not* the full scratchpad). Each per-task outcome paragraph (per step 6.2 below) leads with a **dense status line** capturing: last task completed, commit sha, soft flag if any, forward-note presence, suggested next action. If the dense status line shows everything routine — task complete, no escalation, advance to the next task — proceed. Only dig into prior history (§ Decisions made during build, earlier outcome paragraphs) when the dense status line flags an unresolved item or you genuinely need the context for a non-routine call.
+2. **Spawn task agent.** `spawn_process(kind="agent", agent_tool_id=<task-agent-runtime-id>, name="step-NN-task-MM")`. Default to a Sonnet-tier runtime per [§ Agent runtime tiering](#agent-runtime-tiering); use an Opus-tier runtime only when the workplan flags the task as `**Risk**: medium-high` AND `load-bearing` AND involves novel architecture / ADR-adjacent decisions / spec promotion. If only the default `claude` runtime is registered, pass `agent_tool_id=3`. For a batch, use the lowest task number in the batch (e.g., `step-01-task-03` for batch `[task-03, task-04]`). Capture the returned `process_id` and `agent_instructions`.
 3. **Send the task prompt.** Use the template in [§ Task agent bootstrap prompt](#task-agent-bootstrap-prompt) below, filled in with: the task agent's process_id (from the spawn), the todo IDs being executed, the step-context scratchpad ID, the workplan task numbers. Send via `send_input(process_id=<task agent>, input=<filled template>, wait_ms=2000)`.
 4. **Schedule wake-up on idle.** `timer_fire_when_idle_any(processes=[<task agent process_id>], max_wait_ms=900000, body="<wake-up message>")`. The wake-up message must be self-contained and instruct future-you to: check the task agent's todo(s) status, read any new todo comments, decide outcome → advance / retry / escalate. Use the template in [§ Wake-up message](#wake-up-message). 15min max-wait is the default; raise for tasks the workplan flagged as long.
 5. **When the timer fires** (your PTY receives the wake-up message as a fresh user turn): execute the routing logic in [§ Wake-up routing](#wake-up-routing).
@@ -130,12 +179,25 @@ For each task (or batch) in workplan order:
       - `coordinator-only` → record in the step-context scratchpad's § Decisions made during build for boundary review. Do not forward.
       - `next-task-agent` → record in § Decisions made during build, then carry the substance into the forward-note in step 6.3.
       - `both` → do both.
-   2. **Append a per-task outcome paragraph** to the step-context scratchpad (`scratchpad_append`): which task(s) finished, what files changed, anything downstream tasks need to know.
+
+      **Round-3+ calibration**: the *Workplan-prose accuracy* shape (TASK AGENT § Soft flag below) is the dominant source of `coordinator-only` flags — ~0.5 flag-per-task across round 3's 24 tasks (12 instances total: step 9 = 3, step 10 = 5, step 11 = 4). All defer-to-boundary, all zero-human-round-trip. This shape is load-bearing across rounds, not anomalous; expect it and route normally without escalation.
+   2. **Append a per-task outcome paragraph** to the step-context scratchpad (`scratchpad_append`). **Lead with a dense status line** the next wake-up can route on without reading the rest of the paragraph. Suggested shape: `**Status:** Task N.M complete (commit \`<sha>\`). Soft flag: <none | coordinator-only deferred to <boundary | smoke> | next-task-agent forwarded below>. Next: <advance to N.(M+1) | wait on escalation X | run boundary ritual>.` Then continue with the body: which task(s) finished, what files changed, anything downstream tasks need to know. The dense status line is the wake-up loop's routing surface (per step 1 above); the rest of the paragraph is for boundary review and humans reading history.
    3. **If anything material applies to the next task agent**, append a `**Forward note for Task M+1:**` paragraph at the end of the outcome from 6.2. Substance comes from the soft flag's downstream impact (if any) plus anything else you noticed during wake-up routing that the next agent should know. The next task agent's bootstrap prompt references this paragraph by location.
 
    The forward note is the load-bearing context-passing artifact across steps 1–3 (named "context-passing baton" in the step-1 retro, ran in step 2, shipped in step 3 through a 3.2 → 3.4 → 3.5 chain). Treat it as a first-class deliverable, not a side-effect of the outcome paragraph.
 7. **Close the task agent.** `close_process(process_id=<task agent>)`. Task agents are ephemeral.
 8. Move to the next task.
+
+### Reading discipline during wake-up routing
+
+The wake-up loop is the hot path of a build — runs once per task plus once per interruption. Do not read whole files for structural decisions. Targeted reads beat full reads:
+
+- **Salvage/discard call on uncommitted code from a dead task agent**: run the language's compile-check (`cargo check --test <name>` for Rust integration tests, equivalent elsewhere) plus `wc -l` and a heading-grep on the file. If it compiles cleanly and the size is plausible against the workplan, that's signal enough to salvage without reading every line. Reserve full-file verification for the *task agent's* re-spawn; the coordinator's job is the salvage/discard call, not the verification itself.
+- **Workplan re-reads**: use `grep -n "^##\|^###" <workplan>` for the heading outline, then `Read(offset=, limit=)` only the section you need (typically the current task's section, ~50–150 lines). Workplans grow large; full re-reads at every wake-up are pure waste.
+- **Playbook re-reads**: the wake-up routing logic is condensed in [§ Wake-up routing](#wake-up-routing) below. After your first wake-up, you should already have it cached — re-read only when a routing decision feels unfamiliar (true `coordinator-only` flag with no precedent, novel escalation shape, surprising soft-flag audience).
+- **Scratchpad re-reads**: see [§ Per-task execution loop](#per-task-or-per-batch-execution-loop) step 1 — read the most recent task's dense status line first; dig into history only when it flags an unresolved item.
+
+If you find yourself reading >500 lines per wake-up routinely, that's a signal to drop the wake-up loop to a smaller model (per [§ Agent runtime tiering](#agent-runtime-tiering)) or to refactor the wake-up checklist to avoid the read. *Coordinator-context-bloat heuristic; first named in round-4 step-12 mid-build after a 1454-line full-read for a salvage decision that `cargo check` plus a heading scan would have answered.*
 
 ### Wake-up routing
 
@@ -144,7 +206,7 @@ When you wake up because the task agent went idle, do *not* assume "idle = done.
 1. `todo_get(<each task todo>, include_comments=true)`.
 2. **If the todo is `completed`** AND has a results comment → record outcome in scratchpad, close the task agent, advance.
 3. **If the todo has a `needs-human` tag** → the task agent escalated. Read the comment for context. Mirror the escalation up: create a coordinator-level escalation todo (see [§ Escalation](#escalation)) referencing the task's escalation todo. Stop the loop and wait for resolution (timer in [§ Escalation polling](#escalation-polling)).
-4. **If the todo is open with no recent comment AND task agent is idle** → status check. Send to the task agent: `"Status check: are you done with todo <id>? If yes, mark it complete and post a results comment. If no, what's the blocker?"` Re-arm a 5-min idle timer.
+4. **If the todo is open with no recent comment AND task agent is idle** → first **peek the rendered tail** of the task agent's process (`send_input(process_id=<task agent>, input="", wait_ms=2000)` then read the resulting output). If the tail shows a transport-layer error like `API Error: Stream idle timeout - partial response received`, the agent is alive but stalled mid-response — the status-check input below also serves as a resume request. Then send: `"Status check: are you done with todo <id>? If yes, mark it complete and post a results comment. If no, what's the blocker?"` Re-arm a 5-min idle timer. *API-error-stall-recovery pattern; first observed in round-3 step-9 task-9.2.*
 5. **If the task agent is dead/unresponsive** (`get_process_status` shows non-Running, or hangs) → see [§ Failure handling](#failure-handling).
 
 ### Batching rules
@@ -217,6 +279,9 @@ Compute and capture the following from the step-context scratchpad, the task tod
 - Per task: wall-clock from todo created_at to completed_at.
 - Total coordinator wake-up count (count of timer fires that landed in the coordinator's PTY).
 - Any context-drift symptom you noticed (you forgot something the scratchpad recorded, you re-read the scratchpad more than 3 times for the same task, etc.).
+
+**Silence-as-data on forward-noted flakes**
+- If a flake was forward-noted from a prior step into this step's workplan and didn't reproduce across this step's quality-gate sweeps (full `cargo test`, 3× flake-checks on the targeted file), record the silence in the per-step retro under § Notes — *that's data for the round-boundary retro, not a resolution*. The flake stays open in the round-N-candidates list (or wherever it was tracked) until reproduced and fixed. *First named in round-3 step-11.*
 
 The eval output goes directly into the per-step retro entry in `notes/project-planning-workflow-notes.md` (see § Step boundary ritual step 4 below). Use the retro template at the top of that file's Retrospectives section. Also post the eval as a comment on the step's outer todo (id 17–21) so the human can review without opening the workflow notes file.
 
@@ -294,6 +359,15 @@ When **NOT** to use a soft flag:
 - You're uncertain whether the choice was right → escalate.
 
 Soft flags are for *"I made a defensible choice in the task's natural latitude — here's what and why."* Not *"I might have made the wrong choice, please confirm."*
+
+### Verify forward-noted reconciliations before applying
+
+If your bootstrap prompt or the rolling-context scratchpad's forward-note paragraph asks you to reconcile prose drift, fix workplan-body wording, or apply a correction the prior task surfaced — **verify the claimed drift is actually present before editing**. Two real shapes have happened:
+
+- The prior task's observation was itself the drift; the prose was already correct.
+- The prose has been resolved by virtue of an intervening commit and no longer needs the named change.
+
+Read the source-of-truth (the spec, the shipped code, the actual file the forward note names) before applying any edit. If verification shows no edit is needed, record that in your results comment (e.g. `verify-before-editing pass: <item> already correct, no edit applied`) and continue. *Soft-flag self-correction at boundary pattern; first observed in round-3 step-10 task-10.8 + step-11 task-11.6 + step-11 task-11.8.*
 
 ### Escalation (when to stop early)
 
