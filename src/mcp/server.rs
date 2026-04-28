@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::api::types::{
     ContentQueryJson, CreateVaultRequest, FilesystemQueryJson, SemanticQueryJson, VaultCreateInput,
+    VaultPauseInput, VaultRenameInput, VaultRescanInput, VaultResetInput, VaultResumeInput,
     VaultStatusInput, VaultTerminateInput,
 };
 use crate::client::{DaemonClient, is_connect_error};
@@ -155,6 +156,109 @@ impl HypomnemaMcpServer {
             Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
         }
     }
+
+    #[tool(
+        description = "Pause a vault: stop its watcher and indexer; index preserved; vault \
+                       silently skipped from default search scope. Disabled when \
+                       [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § pause."
+    )]
+    async fn vault_pause(&self, Parameters(input): Parameters<VaultPauseInput>) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_pause"));
+        }
+        match self.client.pause_vault(&input.target).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Resume a paused or errored vault: restart watcher and indexer; clears \
+                       last_error if the vault was errored. Disabled when \
+                       [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § resume."
+    )]
+    async fn vault_resume(
+        &self,
+        Parameters(input): Parameters<VaultResumeInput>,
+    ) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_resume"));
+        }
+        match self.client.resume_vault(&input.target).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Reset a vault: clear last_error and restart watcher + indexer. With \
+                       rebuild=true, also drop and rebuild chunks + chunks_vec (preserves files + \
+                       outbox). Disabled when [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § reset."
+    )]
+    async fn vault_reset(&self, Parameters(input): Parameters<VaultResetInput>) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_reset"));
+        }
+        match self.client.reset_vault(&input.target, input.rebuild).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Rename a vault. Updates the registry row's name and the per-vault \
+                       meta.toml; the vault's surrogate id and on-disk path are unchanged. \
+                       Disabled when [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § rename."
+    )]
+    async fn vault_rename(
+        &self,
+        Parameters(input): Parameters<VaultRenameInput>,
+    ) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_rename"));
+        }
+        match self
+            .client
+            .rename_vault(&input.target, &input.new_name)
+            .await
+        {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Trigger a one-shot rescan of a vault: walks the vault directory and emits \
+                       modified events for files whose stat or content_hash changed. Disabled \
+                       when [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § rescan."
+    )]
+    async fn vault_rescan(
+        &self,
+        Parameters(input): Parameters<VaultRescanInput>,
+    ) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_rescan"));
+        }
+        match self.client.rescan_vault(&input.target).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
 }
 
 fn write_tools_disabled_envelope(tool_name: &str) -> Value {
@@ -208,10 +312,11 @@ mod tests {
     use super::*;
     use crate::api::types::{
         ContentMatchJson, ContentResultJson, ContentSearchResponse, FilesystemResultJson,
-        FilesystemSearchResponse, SemanticResultJson, SemanticSearchResponse,
+        FilesystemSearchResponse, RescanResponseJson, SemanticResultJson, SemanticSearchResponse,
         TerminateVaultResponse, VaultListResponse, VaultRowJson,
     };
     use crate::config::Config;
+    use std::sync::{Arc, Mutex};
 
     struct MockDaemon {
         base_url: String,
@@ -729,6 +834,320 @@ mod tests {
         assert!(
             message.contains(&url),
             "message should contain configured URL, got {message:?}"
+        );
+    }
+
+    fn unbound_url() -> String {
+        // Used by the gated tests: short-circuit fires before any HTTP call,
+        // so binding then dropping a port produces a usable URL where a stray
+        // request would obviously error — but no request is expected.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_pause_succeeds_when_write_tools_enabled() {
+        let app = Router::new().route(
+            "/vaults/:name_or_id/pause",
+            post(|AxumPath(name): AxumPath<String>| async move {
+                let mut row = sample_vault_row(&name);
+                row.status = "paused".into();
+                axum::Json(row)
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_pause(Parameters(VaultPauseInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("personal"));
+        assert_eq!(value["status"], json!("paused"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_pause_returns_write_tools_disabled_when_gated() {
+        let url = unbound_url();
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_pause(Parameters(VaultPauseInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_pause"),
+            "message should reference the gated tool, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_resume_succeeds_when_write_tools_enabled() {
+        let app =
+            Router::new().route(
+                "/vaults/:name_or_id/resume",
+                post(|AxumPath(name): AxumPath<String>| async move {
+                    axum::Json(sample_vault_row(&name))
+                }),
+            );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_resume(Parameters(VaultResumeInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("personal"));
+        assert_eq!(value["status"], json!("active"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_resume_returns_write_tools_disabled_when_gated() {
+        let url = unbound_url();
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_resume(Parameters(VaultResumeInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_resume"),
+            "message should reference the gated tool, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_reset_succeeds_when_write_tools_enabled() {
+        let app =
+            Router::new().route(
+                "/vaults/:name_or_id/reset",
+                post(|AxumPath(name): AxumPath<String>| async move {
+                    axum::Json(sample_vault_row(&name))
+                }),
+            );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_reset(Parameters(VaultResetInput {
+                target: "personal".into(),
+                rebuild: false,
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("personal"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_reset_returns_write_tools_disabled_when_gated() {
+        let url = unbound_url();
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_reset(Parameters(VaultResetInput {
+                target: "personal".into(),
+                rebuild: true,
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_reset"),
+            "message should reference the gated tool, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_reset_with_rebuild_passes_rebuild_through_to_daemon() {
+        // Defends the rebuild round-trip: the server hands `input.rebuild` to
+        // `client.reset_vault(target, rebuild)`, which serializes
+        // `{"rebuild": <bool>}` on the wire. Capture the body server-side and
+        // assert it parses to `rebuild = true`.
+        let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let captured_for_handler = captured.clone();
+        let app = Router::new().route(
+            "/vaults/:name_or_id/reset",
+            post(
+                |AxumPath(name): AxumPath<String>, body: axum::body::Bytes| async move {
+                    let parsed: Value = serde_json::from_slice(&body).expect("body is JSON");
+                    *captured_for_handler.lock().unwrap() = Some(parsed);
+                    axum::Json(sample_vault_row(&name))
+                },
+            ),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_reset(Parameters(VaultResetInput {
+                target: "personal".into(),
+                rebuild: true,
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("handler should have captured a request body");
+        assert_eq!(
+            body,
+            json!({ "rebuild": true }),
+            "rebuild=true should round-trip through the client to the wire"
+        );
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_rename_succeeds_when_write_tools_enabled() {
+        let app = Router::new().route(
+            "/vaults/:name_or_id/rename",
+            post(|body: axum::body::Bytes| async move {
+                let parsed: Value = serde_json::from_slice(&body).expect("body is JSON");
+                let new_name = parsed["new_name"]
+                    .as_str()
+                    .expect("new_name is a string")
+                    .to_string();
+                axum::Json(sample_vault_row(&new_name))
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_rename(Parameters(VaultRenameInput {
+                target: "personal".into(),
+                new_name: "renamed".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("renamed"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_rename_returns_write_tools_disabled_when_gated() {
+        let url = unbound_url();
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_rename(Parameters(VaultRenameInput {
+                target: "personal".into(),
+                new_name: "renamed".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_rename"),
+            "message should reference the gated tool, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_rescan_succeeds_when_write_tools_enabled() {
+        let app = Router::new().route(
+            "/vaults/:name_or_id/rescan",
+            post(|AxumPath(name): AxumPath<String>| async move {
+                axum::Json(RescanResponseJson {
+                    row: sample_vault_row(&name),
+                    rescan_initiated_at: "2026-04-28T09:31:27.123456Z".into(),
+                })
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_rescan(Parameters(VaultRescanInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("personal"));
+        assert_eq!(
+            value["rescan_initiated_at"],
+            json!("2026-04-28T09:31:27.123456Z")
+        );
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_rescan_returns_write_tools_disabled_when_gated() {
+        let url = unbound_url();
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_rescan(Parameters(VaultRescanInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_rescan"),
+            "message should reference the gated tool, got {message:?}"
         );
     }
 }

@@ -326,6 +326,58 @@ pub struct VaultTerminateInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct VaultPauseInput {
+    #[schemars(
+        description = "Vault name or surrogate id of the vault to pause. Stops watcher and indexer; index preserved; vault is silently skipped from default search scope."
+    )]
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultResumeInput {
+    #[schemars(
+        description = "Vault name or surrogate id of the vault to resume. Restarts watcher and indexer; clears last_error if the vault was errored."
+    )]
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultResetInput {
+    #[schemars(
+        description = "Vault name or surrogate id of the vault to reset. Clears last_error and restarts watcher + indexer."
+    )]
+    pub target: String,
+    #[serde(default)]
+    #[schemars(
+        description = "When true, also drop and rebuild chunks + chunks_vec (preserves files + outbox). Defaults to false."
+    )]
+    pub rebuild: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultRenameInput {
+    #[schemars(description = "Vault name or surrogate id of the vault to rename.")]
+    pub target: String,
+    #[schemars(
+        description = "New vault name. Must match [A-Za-z0-9_-]+ and not collide with another vault's name."
+    )]
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultRescanInput {
+    #[schemars(
+        description = "Vault name or surrogate id of the vault to rescan. Triggers a one-shot scanner pass; emits modified events for files whose stat or content_hash changed."
+    )]
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct ErrorEnvelope {
     pub error: ErrorBody,
 }

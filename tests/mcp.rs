@@ -427,10 +427,13 @@ async fn mcp_tools_list_advertises_all_tools() {
         .map(|t| t["name"].as_str().expect("tool name is a string"))
         .collect();
     // Step 10 added 4 vault tools (vault_list/status/create/terminate) on
-    // top of the step-8 search trio. `vault_create` and `vault_terminate`
-    // are always advertised even when `[mcp] enable_write_tools = false`;
-    // gating short-circuits at call time. See workplan § Task 10.6 § C.
-    assert_eq!(names.len(), 7, "expected 7 tools, got {names:?}");
+    // top of the step-8 search trio. Step 11 added the 5 lifecycle ops
+    // (vault_pause/resume/reset/rename/rescan). All write tools — create,
+    // terminate, pause, resume, reset, rename, rescan — are advertised even
+    // when `[mcp] enable_write_tools = false`; gating short-circuits at call
+    // time. See step-10 workplan § Task 10.6 § C and step-11 workplan §
+    // Task 11.5.
+    assert_eq!(names.len(), 12, "expected 12 tools, got {names:?}");
     for expected in [
         "search_filesystem",
         "search_content",
@@ -439,6 +442,11 @@ async fn mcp_tools_list_advertises_all_tools() {
         "vault_status",
         "vault_create",
         "vault_terminate",
+        "vault_pause",
+        "vault_resume",
+        "vault_reset",
+        "vault_rename",
+        "vault_rescan",
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
