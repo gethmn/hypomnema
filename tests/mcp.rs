@@ -438,10 +438,7 @@ async fn mcp_tools_list_advertises_all_tools() {
         "vault_create",
         "vault_terminate",
     ] {
-        assert!(
-            names.contains(&expected),
-            "missing {expected} in {names:?}"
-        );
+        assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
 
     client.shutdown().await;
