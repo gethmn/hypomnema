@@ -91,6 +91,8 @@ The migration story for an existing v0 deployment: on first startup with an empt
 
 ## Step 10 — Vault control plane (read + create/terminate) + cross-vault search
 
+**Status**: Shipped 2026-04-28 — workplan at [`step-10-workplan.md`](./step-10-workplan.md) (archive after the boundary ritual).
+
 **Goal**: `hmnd` exposes the read and create/terminate vault operations over its three transports — HTTP, the `hmn` CLI, and MCP tools. The four search specs and `change-events` spec are amended in this step (Solo todo 64). The `vault-management.md` spec is fleshed from outline to full spec at workplan-write phase (Solo todo 65). Cross-vault search semantics — result ordering, pagination, fan-out execution, partial-failure handling, paused/errored vault inclusion — are resolved in this step's workplan.
 
 **Shipping criteria**:

@@ -57,7 +57,7 @@ Hypomnema has no awareness of its consumers. It exposes the same operations to a
 
 | Consumer | Transport | Notes |
 |----------|-----------|-------|
-| AI agents (Iris, Claude Code, others) | MCP via stdio (`hmn mcp`) | Primary consumer shape. v0 ships MCP through the `hmn mcp` CLI subcommand (a thin stdio shim that translates MCP tool calls into HTTP requests against `hmnd`); the deferred Unix-socket transport will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md). v0 exposes search tools only; vault-management MCP tools land in round 3. |
+| AI agents (Iris, Claude Code, others) | MCP via stdio (`hmn mcp`) | Primary consumer shape. v0 ships MCP through the `hmn mcp` CLI subcommand (a thin stdio shim that translates MCP tool calls into HTTP requests against `hmnd`); the deferred Unix-socket transport will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md). Step 10 ships the read + create/terminate vault tools (`vault_list`, `vault_status`, `vault_create`, `vault_terminate`) alongside the three search tools; the remaining lifecycle ops (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) ship in step 11. |
 | HTTP clients, skills.sh packages, ad-hoc scripts | HTTP | Same operations as MCP |
 | `hmn` CLI | Calls the HTTP endpoint locally; also serves the MCP-over-stdio shim via `hmn mcp` | Thin wrapper for humans (search, status, **and vault management** — [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) and for agent hosts (the MCP shim) |
 | Event subscribers | Tail the per-vault JSONL outbox | No push, consumers poll the file |
@@ -114,8 +114,8 @@ See [ADR-0003](../decisions/0003-indexing-in-the-daemon.md) for why indexing hap
 
 | Container | Technology | Purpose |
 |-----------|------------|---------|
-| Vault Registry | rusqlite | Authoritative list of registered vaults: id, name, path, status, created_at, last_error. Lives at `<data_dir>/vaults.sqlite`. Daemon reconciles on startup. See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md). |
-| Control-plane API | Axum (HTTP); MCP deferred | Expose vault lifecycle operations (create / list / status / pause / resume / reset / rename / rescan / terminate). v0 ships the HTTP surface only; vault-management MCP tools are round-3 work. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md). |
+| Vault Registry | rusqlite | Authoritative list of registered vaults: id, name, path, status, created_at, last_error. Lives at `<data_dir>/vaults.sqlite`. Daemon reconciles on startup, including an orphan-subdir cleanup pass under `<data_dir>/vaults/`. See [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md). |
+| Vault Manager / Control-plane API | Axum (HTTP) + rmcp (MCP) | Expose vault lifecycle operations. Per-vault async-mutex serializes ops on the same vault; ops on different vaults run in parallel. Step 10 ships `create` / `list` / `status` / `terminate` over both transports; step 11 adds the remaining lifecycle ops (`pause` / `resume` / `reset` / `rename` / `rescan`). MCP write tools are gated by `[mcp] enable_write_tools`. See [ADR-0011](../decisions/0011-vault-management-on-hmn.md) and [`docs/specs/vault-management.md`](../specs/vault-management.md). |
 | Watcher (per vault) | `notify` + `notify-debouncer-full` | Detect Markdown file changes under one watched directory; filter out sync-conflict files; emit debounced change events. One instance per active vault. |
 | Indexer (per vault) | pulldown-cmark, rusqlite, reqwest (to embedding service) | Walk one vault, compute content hashes, split files into heading-aware chunks, embed via local HTTP, persist to that vault's store. One instance per active vault. |
 | Store (per vault) | rusqlite + r2d2 + sqlite-vec | One SQLite file per vault at `<data_dir>/vaults/<vault_id>/index.sqlite`: files table, chunks table (metadata), vec0 virtual table (embeddings). All three indexes (filesystem, content, semantic) per vault live here. |
@@ -143,20 +143,33 @@ CREATE TABLE vaults (
 
 The registry lives at `<data_dir>/vaults.sqlite` (a top-level SQLite file alongside the per-vault subdirectories). On startup, the daemon reads the registry, verifies each vault's path exists and `<data_dir>/vaults/<id>/` is present, and starts a watcher + indexer pair for each `active` vault. Vaults whose path is missing transition to `errored` with a recorded `last_error`; the daemon stays running and other vaults continue to serve.
 
-Control-plane mutations against the registry are serialized per-vault (operations on different vaults run in parallel). Atomic write semantics on `vaults.sqlite` ensure crash safety; a corrupt registry causes the daemon to refuse serving until the file is restored.
+Control-plane mutations against the registry are serialized per-vault (operations on different vaults run in parallel — see § Vault Manager / Control Plane below for the per-vault async-mutex shape). Atomic write semantics on `vaults.sqlite` ensure crash safety; a corrupt registry causes the daemon to refuse serving until the file is restored.
 
 See [ADR-0009](../decisions/0009-multi-vault-per-daemon.md) and [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md).
 
-### Control-plane API
+### Vault Manager / Control Plane
 
-Axum routes under `/vaults` mirror the operations defined in ADR-0010:
+The Vault Manager owns the runtime state behind the registry: a map of active vault entries (each holding the watcher + indexer + outbox handles, the per-vault store handle, and a `tokio::sync::watch` shutdown sender) plus the registry connection itself. The daemon's `ApiState` holds a single `Arc<VaultManager>`; every HTTP handler that touches vault state goes through this Arc.
+
+**Per-vault async-mutex shape.** Each vault entry sits behind a `tokio::sync::Mutex` keyed by surrogate ID. Operations against the same vault (e.g. two concurrent `terminate` requests for the same name) serialize on this mutex. Operations against different vaults run in parallel — there is no daemon-wide lock on control-plane mutations. The mutex is held across the registry write and the spawn/teardown of the vault's runner; search handlers take an `Arc` clone of the vault's runner before going async, so an in-flight search is never blocked by a `terminate` and never aborted by one (the Arc keeps the runner alive for the duration of the search; the next search after `terminate` no longer sees the vault).
+
+**Lifecycle**. Step 10 ships `create` and `terminate` against this manager:
+
+- **`create`** canonicalizes the requested path, validates it (path exists, is a directory, does not place `<data_dir>` under itself), inserts a registry row with a fresh UUIDv7 ID and the configured `default_vault_name` when no `--name` was supplied, creates `<data_dir>/vaults/<id>/`, opens the per-vault `index.sqlite`, writes `meta.toml`, and spawns the watcher + indexer + outbox writer. Errors map to the spec's HTTP envelope catalog (`vault_path_conflict` 409, `vault_name_conflict` 409, `vault_path_invalid` 422).
+- **`terminate`** signals the per-vault `watch::Sender<bool>` to drain the runner cooperatively (30s timeout; on timeout the consumer task is force-cancelled via the `JoinHandle::abort_handle()` extracted before the timeout), removes the per-vault subdirectory under `<data_dir>/vaults/<id>/`, and deletes the registry row. The vault path's own files are never touched.
+
+**Reconciliation on startup**. `VaultManager::open` walks the registry and starts a runner pair for each `active` row (vaults whose path is now missing or unreadable transition to `errored` with a recorded `last_error`; the daemon stays running). A second pass reconciles `<data_dir>/vaults/<id>/` directories that have no matching registry row — the orphan-subdir cleanup pass — best-effort, with `WARN`-level logging on failure. Step 9 already handled the inverse (registry row present but per-vault subdirectory missing — that case recreates the subdirectory at open time); step 10 adds the orphan-subdir half so a crash mid-`terminate` doesn't leave the daemon shipping disk space it can't address.
+
+**Closest-name hints**. `vault_not_found` envelopes carry an optional `hint` field naming the closest existing vault by Levenshtein distance ≤ 3 over current registry names. The distance routine is inlined; no new crate dependency.
+
+**Step-10 control-plane HTTP routes** (the four shipping in step 10):
 
 - `POST /vaults` — create
-- `GET /vaults`, `GET /vaults/{id}` — list, get
-- `POST /vaults/{id}/{pause|resume|reset|rename|rescan}` — lifecycle
-- `DELETE /vaults/{id}` — terminate
+- `GET /vaults` — list
+- `GET /vaults/{id_or_name}` — get one
+- `DELETE /vaults/{id_or_name}` — terminate
 
-The same operations are exposed as MCP tools (same handlers, same wire shapes). Which subset ships in which round is a workplan-time decision; spec coverage is unconditional. The CLI surface is `hmn vault …` per [ADR-0011](../decisions/0011-vault-management-on-hmn.md).
+The remaining lifecycle ops (`pause` / `resume` / `reset` / `rename` / `rescan`) are pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md) and ship in step 11. The same operations are exposed as MCP tools using the same handlers and wire shapes; step 10 ships `vault_list` / `vault_status` / `vault_create` / `vault_terminate` (the last two gated by `[mcp] enable_write_tools`). Which subset ships in which round is a workplan-time decision; spec coverage is unconditional. The CLI surface is `hmn vault …` per [ADR-0011](../decisions/0011-vault-management-on-hmn.md).
 
 ### Watcher
 
@@ -190,9 +203,16 @@ Step 5 shipped the HTTP surface: `/search/filesystem` and `/search/content` over
 
 Step 7 shipped the third route: `POST /search/semantic`. The handler embeds the natural-language query via the same local embedding client the indexer uses, runs a kNN MATCH against `chunks_vec`, and returns a top-level envelope of `{ results, hint? }` per [`docs/specs/semantic-search.md`](../specs/semantic-search.md). Embedding-service failures at query time (transport error, HTTP 5xx, or a vector whose dimension disagrees with the schema) are mapped to a new error envelope code `embedding_unavailable` (HTTP 503) — the daemon never crashes due to embedding-service issues, anywhere in the runtime. See [step-6 workplan § Build-time amendment 3](../roadmap/step-06-workplan.md) for the load-bearing precedent at index time and [step-7 workplan § Resolution E](../roadmap/step-07-workplan.md#e-error-envelope-code-for-embedding-service-unavailable) for the query-time complement.
 
-**Cross-vault search semantics (step-9 internal pre-staging)**. Search handlers iterate `registry.list_active()` and execute each per-vault query against that vault's `Store`. Filesystem and content modes concatenate per-vault result slices in **registry-list order** and apply the request's `limit` to the concatenated list. Semantic mode merges per-vault top-K candidates by score (descending) and re-truncates at `limit`, preserving cross-vault top-N. For N=1 — the only state reachable from a single legacy `[vault]` migration — the wire output is byte-identical to v0.1.0 modulo the populated `vault` and `vault_name` fields. The full cross-vault semantics — ordering across vaults beyond registry-list order, pagination across N independent indexes, fan-out execution model, partial-failure handling, treatment of paused/errored vaults, semantic global top-N — are pinned in step 10's workplan-write phase.
+**Cross-vault search semantics (step 10).** Search handlers fan out across the active vaults (concurrently, via `tokio::join_all` over per-vault async tasks), each task taking an `Arc` clone of the target vault's runner before going async. The default scope is every `active` vault; passing a request-side `vaults: [...]` filter (or `--vaults` on the CLI) narrows the fan-out subset. Unknown names appear in the response's `partial_results.failed` array with `code: "vault_not_found"` and the search proceeds; an empty filter array returns `invalid_request`.
 
-**Spec-text amendment forward-pointer**. The four search and event spec docs ([`docs/specs/filesystem-search.md`](../specs/filesystem-search.md), [`docs/specs/content-search.md`](../specs/content-search.md), [`docs/specs/semantic-search.md`](../specs/semantic-search.md), and [`docs/specs/change-events.md`](../specs/change-events.md)) still describe the v0.1.0 "always absent in v0" wording for the per-result `vault` and `vault_name` fields — step 9 ships ahead of those specs. The amendments land in step 10's workplan-write phase; until then, the integration tests in `tests/multi_vault_internal.rs` are the authoritative source of truth for the populated wire shape.
+Per-mode merge:
+
+- **Filesystem and content** modes concatenate per-vault result slices, then re-sort globally by `path` ascending with the surrogate vault ID as the lexicographic tie-break, then truncate at the request's `limit`.
+- **Semantic** mode merges per-vault top-K candidates by score descending with the surrogate vault ID as the tie-break, then re-truncates at `limit` preserving cross-vault top-N.
+
+Each result carries the surrogate `vault` (id) and the point-in-time `vault_name` (display label, never durable — the outbox carries `vault` only).
+
+**Partial results** (`partial_results: { skipped: [...], failed: [...] }`) is an additive envelope field present only when at least one in-scope vault was paused, errored, or hit a runtime error mid-query — and omitted when all in-scope vaults completed successfully. Paused / errored vaults inside the default scope are reported in `skipped`; per-vault search errors that are recoverable (storage class) land in `failed`. Request-validation errors (`invalid_glob`, `invalid_regex`, `invalid_prefix`) bubble out as the top-level error envelope rather than landing in `failed`; they're cross-vault-consistent and should fail loud. Full semantics — including pagination across N independent indexes, streaming response shapes, multi-model-embedding-per-vault — are pinned in [`docs/specs/vault-management.md` § Cross-Vault Search Semantics](../specs/vault-management.md#cross-vault-search-semantics) with the deferrals noted; pagination and streaming are round-4+ candidates.
 
 ### Outbox Writer
 
@@ -268,7 +288,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Model switching is a re-index | Migrating to a different embedding model is an operation, not a config flip | Documented; considered acceptable for v0 scope (see [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Concurrent control-plane operations on same vault | Race in registry mutations or per-vault state | Operations on the same vault are serialized at the daemon; operations on different vaults run in parallel ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
 | Vault registry corruption | `vaults.sqlite` partial write or filesystem damage | Atomic write semantics for control-plane mutations; daemon refuses to serve on read failure until the file is restored |
-| Cross-vault search semantics partially specified | Step 9 pins minimal cross-vault shape (filesystem/content concatenate by registry-list order; semantic merges by score and re-truncates). Full semantics — ordering beyond registry-list, pagination, fan-out execution, partial-failure, paused/errored treatment, semantic global top-N — not yet pinned | Wire shapes are forward-compat; full resolution lands in step 10's workplan-write phase ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions)) |
+| Pagination across N independent indexes | Each per-vault index has its own SQL pagination cursor; combining them across vaults requires either a global cursor (heavy) or a fan-in re-merge per page (state-ful). Step 10 ships unpaginated cross-vault search; large multi-vault result sets must use `--limit`. | Deferred to round 4+ per [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions); wire shape stays forward-compat (request-side cursor field is reserved). |
 
 ---
 

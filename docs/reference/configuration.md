@@ -42,6 +42,7 @@ bind = "127.0.0.1:7777"
 [mcp]
 transport = "stdio"   # or "socket"
 socket = "~/.local/share/hypomnema/mcp.sock"  # only if transport = "socket"
+enable_write_tools = true   # set false to deny vault_create / vault_terminate
 
 # Embedding service (OpenAI-compatible)
 [embedding]
@@ -152,8 +153,11 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 |--------|------|----------|---------|-------------|
 | `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | Forward-compat knob describing how MCP clients reach the daemon. **v0 implements only `transport = "stdio"`, served by the `hmn mcp` subcommand on the CLI binary** (not by `hmnd`). Setting `transport = "socket"` parses and validates but is **not bound** in v0; `hmnd` emits a `WARN`-level log at startup and continues running. The deferred socket transport will live in `hmnd` when it ships. See [step-08 workplan § Resolution D](../roadmap/step-08-workplan.md#d-connection-lifecycle-stdio-process-per-connection-vs-socket-long-lived) for the deferral rationale and binary-placement reasoning, and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) for the formal record. |
 | `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path. **Parsed and validated in v0 but not bound** — see `transport` above. When the socket transport ships, the file will be created with mode `0600` (owner-only) per the deferred forward-compat decision in [step-08 workplan § Resolution E](../roadmap/step-08-workplan.md#e-authentication-on-the-socket-transport). |
+| `enable_write_tools` | bool | no | `true` | Round-3 step-10 gate for vault write tools (`vault_create`, `vault_terminate`). When `true` (the default), all seven MCP tools — the three search tools plus `vault_list` / `vault_status` / `vault_create` / `vault_terminate` — are advertised. When `false`, the read-only tools (`search_filesystem`, `search_content`, `search_semantic`, `vault_list`, `vault_status`) remain advertised and `tools/call` against `vault_create` or `vault_terminate` returns a structured `write_tools_disabled` error envelope (the tool stays in the `tools/list` response — gating happens at call time, per [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface)). Step-11 lifecycle ops (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) inherit the same gate when they ship. |
 
 > **MCP via the CLI**: the v0 MCP entry point is `hmn mcp` — see [`cli.md` § `hmn mcp`](./cli.md#mcp) and [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) for the binary-placement reasoning. Agent hosts (Claude Code, Iris) configure `hmn` as the MCP command; `hmn mcp` translates MCP tool calls into HTTP requests against the running `hmnd`.
+
+> **Why default-on for `enable_write_tools`**: the round-3 trust posture is localhost-only by default; agents that already invoke search tools have read access to every file in every vault. Per-tool gating fragments config without ergonomic gain (write tools share a single trust posture). Operators wanting strict opt-out get a single-line edit. See [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface) for the full rationale.
 
 ---
 

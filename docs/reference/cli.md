@@ -151,9 +151,12 @@ hmn search filesystem "notes/databases/*.md"
 hmn search content "pgvector"
 hmn search semantic "how do we prevent spurious reindexes"
 hmn search content "pgvector" --vaults personal,work
+hmn search content "pgvector" --vaults personal --vaults work   # repeating works too
 ```
 
 As of step 7, all three modes — `hmn search filesystem`, `hmn search content`, and `hmn search semantic` — are functional. Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each filesystem/content result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
+
+**`--vaults` semantics** (step 10): values are matched against vault names first, then surrogate IDs. Unknown values do **not** fail the request — they appear in the response's `partial_results.failed` array with `code: "vault_not_found"` and the search proceeds against the recognized subset. Passing `--vaults` with an empty value list (e.g. `--vaults ""`) is rejected as `invalid_request`. Omitting `--vaults` queries every active vault. Paused or errored vaults that fall in scope are reported in `partial_results.skipped` with their current `status` and `reason` (the registry's `last_error` for `errored`); see [`docs/specs/vault-management.md` § Cross-Vault Search Semantics](../specs/vault-management.md#cross-vault-search-semantics).
 
 `hmn search semantic` text-mode output renders one block per result: a leading `<file_path>  (score: N.NN)` line (cosine similarity in `[0.0, 1.0]`, two decimals), the slash-joined heading path on its own indented `> …` line (omitted when every heading segment is empty), and the chunk text on a final indented line. Example:
 
@@ -169,73 +172,70 @@ notes/design/watchers.md  (score: 0.71)
 
 When the daemon's response carries a top-level `hint` (e.g. `"semantic index is building"` — see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Empty index), the CLI prints it on its own line, parenthesized: `(semantic index is building)`. The hint appears after the result blocks if both are present; in the empty-index case the hint stands alone. When the embedding service is unreachable or returns an unexpected dimension at query time, the daemon returns HTTP 503 with envelope code `embedding_unavailable`; the CLI surfaces the message and exits non-zero.
 
-> **Note**: Round-3 step 9 (the per-vault internal refactor) pins a minimal cross-vault shape: filesystem and content modes concatenate per-vault results in registry-list order, applying `--limit` to the concatenated list; semantic mode merges per-vault top-K candidates by score (descending) and re-truncates at `--limit`. The full cross-vault semantics — ordering across vaults beyond registry-list order, pagination across N independent indexes, fan-out execution model, partial-failure handling, treatment of paused/errored vaults, semantic global top-N — are pinned in step 10's workplan-write phase. See [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions). The wire shapes (per-result `vault` + `vault_name`, request-side `vaults` filter) are forward-compat with any resolution.
-
 #### `vault`
 
-Manage vaults on a running daemon. Each subcommand maps to a control-plane HTTP route ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)). Either a vault name or its surrogate ID may be passed for selectors; the daemon resolves at request entry. When a selector is omitted, the daemon resolves to `default_vault_name` from the configuration.
+Manage vaults on a running daemon. Each subcommand maps to a control-plane HTTP route ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)). Either a vault name or its surrogate ID may be passed for selectors; the daemon resolves at request entry. When a selector is omitted, `status` resolves to `default_vault_name` from the configuration ([§ `default_vault_name`](./configuration.md#default_vault_name)).
+
+Step 10 ships the read + create/terminate subset (`create`, `list`, `status`, `terminate`). The remaining lifecycle ops (`pause`, `resume`, `reset`, `rename`, `rescan`) are pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md) and ship in step 11.
 
 **Usage**:
 ```
 hmn vault create [--name NAME] PATH
 hmn vault list
 hmn vault status [NAME|ID]
-hmn vault pause NAME|ID
-hmn vault resume NAME|ID
-hmn vault reset NAME|ID
-hmn vault rename [NAME|ID] --name NEW_NAME
-hmn vault rescan [NAME|ID]
-hmn vault terminate NAME|ID
+hmn vault terminate NAME|ID [--yes]
 ```
 
 **Subcommand summary**:
 
 | Subcommand | Effect |
 |---|---|
-| `create [--name NAME] PATH` | Register a new vault at `PATH`. If `--name` is omitted, uses `default_vault_name`. Allocates an ID; creates the per-vault subdirectory; starts the watcher and indexer. |
-| `list` | Print all registered vaults with their id, name, path, status, file count, last-indexed timestamp. |
-| `status [NAME\|ID]` | Single-vault detail. With no selector, resolves to `default_vault_name`. |
-| `pause NAME\|ID` | Stop the watcher and indexer for the named vault; vault remains registered. |
-| `resume NAME\|ID` | Restart the watcher and indexer for a paused vault. |
-| `reset NAME\|ID` | Clear `last_error`; restart the watcher and indexer. |
-| `rename [NAME\|ID] --name NEW_NAME` | Single registry UPDATE; index unchanged. The surrogate ID is unchanged. |
-| `rescan [NAME\|ID]` | Force a full reconciliation; emits change events as if from a cold start. Subsumes the v0 `hmnd scan` subcommand. |
-| `terminate NAME\|ID` | Stop the watcher/indexer; remove the registry row; remove the per-vault subdirectory under `data_dir`. **Never touches the vault path's own files.** |
+| `create [--name NAME] PATH` | Register a new vault at `PATH`. If `--name` is omitted, uses `default_vault_name` from the daemon's config. Allocates a UUIDv7 surrogate ID; creates the per-vault subdirectory under `<data_dir>/vaults/<id>/`; starts the watcher and indexer. Errors: `409 vault_path_conflict` (path already registered), `409 vault_name_conflict` (name already in use), `422 vault_path_invalid` (path does not exist, is not a directory, or would place `data_dir` inside the vault). |
+| `list` | Print every registered vault as a table (`ID  NAME  STATUS  CREATED  PATH`). With `--json`, emits the underlying `{"vaults": [...]}` shape verbatim — see [`docs/specs/vault-management.md` § Control-Plane HTTP Wire Shapes](../specs/vault-management.md#control-plane-http-wire-shapes) for the row fields shipped in step 10. |
+| `status [NAME\|ID]` | Single-vault detail printed as a labelled key/value block (id, name, path, status, created_at, optional last_error). With no selector, resolves to `default_vault_name`. With `--json`, emits the `VaultRow` shape verbatim. Errors: `404 vault_not_found` (response carries a closest-name `hint` when the registry has a near match within Levenshtein distance 3). |
+| `terminate NAME\|ID [--yes]` | Stop the watcher/indexer; remove the registry row; remove the per-vault subdirectory under `<data_dir>/vaults/<id>/`. **Never touches the vault path's own files.** Without `--yes`, prompts on stderr (`Terminate vault 'NAME'? (y/N)`) and reads from stdin; any answer that does not begin with `y`/`Y` aborts. With `--json` and an aborted prompt, emits `{"terminated": false, "aborted": true}` to stdout. With `--yes`, skips the prompt. Successful termination emits `{"terminated": true, "id": "<uuid>"}`. Terminate-then-create with the same name succeeds (the new vault gets a fresh UUID). |
+
+**Global options that apply** (from § Global Options above): `--daemon-url`, `--config`, `--json`.
 
 **Examples**:
 
 ```bash
-# Create a default-named vault
+# Create a default-named vault (uses default_vault_name from config)
 hmn vault create ~/personal
 
 # Create a named vault
 hmn vault create --name personal ~/personal
 
-# List all vaults
+# List all vaults (table view)
 hmn vault list
+
+# List as JSON
+hmn vault list --json
 
 # Status of one vault (by name)
 hmn vault status personal
 
+# Status of the default vault (selector omitted)
+hmn vault status
+
 # Status by surrogate ID
-hmn vault status vault_abc123
+hmn vault status 019dd258-3992-7c3b-7a2e-8c1d1a2b3c4d
 
-# Rename
-hmn vault rename personal --name my-vault
+# Terminate with explicit confirmation
+hmn vault terminate personal
+# Terminate vault 'personal'? (y/N) y
+# terminated: true
+# id:         019dd258-3992-7c3b-7a2e-8c1d1a2b3c4d
 
-# Pause / resume
-hmn vault pause my-vault
-hmn vault resume my-vault
+# Terminate non-interactively (e.g. in scripts)
+hmn vault terminate personal --yes
 
-# Force a fresh scan
-hmn vault rescan my-vault
-
-# Terminate then recreate (idempotent in practice)
-hmn vault terminate my-vault
-hmn vault create --name my-vault ~/my-vault
+# Terminate then recreate the same name (fresh ID)
+hmn vault terminate personal --yes
+hmn vault create --name personal ~/personal
 ```
 
-See [vault-management spec](../specs/vault-management.md) for the full schema, error catalog, and edge cases.
+See [vault-management spec](../specs/vault-management.md) for the full schema, error catalog, and edge cases. The HTTP control-plane routes that back these subcommands are documented in [§ Architecture Overview](../architecture/overview.md#vault-manager--control-plane); the MCP tool surface is documented under [`hmn mcp`](#mcp) below.
 
 #### `status`
 
@@ -262,15 +262,23 @@ Serve the MCP surface over stdio. Intended for MCP-capable agent hosts (Claude C
 - Process exits when stdin is closed by the parent.
 - The MCP server identifies itself as `serverInfo.name = "hypomnema"`, `serverInfo.version = <crate version>` (brand-identity override per [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)).
 
-The three tools advertised match the three search modes one-for-one (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)):
+Step 10 advertises seven tools — the three search modes (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) plus the four vault control-plane operations that ship in step 10:
 
-| Tool | Maps to | Spec |
-|---|---|---|
-| `search_filesystem` | `POST /search/filesystem` | [filesystem-search.md](../specs/filesystem-search.md) |
-| `search_content` | `POST /search/content` | [content-search.md](../specs/content-search.md) |
-| `search_semantic` | `POST /search/semantic` | [semantic-search.md](../specs/semantic-search.md) |
+| Tool | Maps to | Trust posture | Spec |
+|---|---|---|---|
+| `search_filesystem` | `POST /search/filesystem` | Read | [filesystem-search.md](../specs/filesystem-search.md) |
+| `search_content` | `POST /search/content` | Read | [content-search.md](../specs/content-search.md) |
+| `search_semantic` | `POST /search/semantic` | Read | [semantic-search.md](../specs/semantic-search.md) |
+| `vault_list` | `GET /vaults` | Read | [vault-management.md](../specs/vault-management.md) |
+| `vault_status` | `GET /vaults/{id_or_name}` | Read | [vault-management.md](../specs/vault-management.md) |
+| `vault_create` | `POST /vaults` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
+| `vault_terminate` | `DELETE /vaults/{id_or_name}` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
 
-Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
+Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` / `VaultRow` / `VaultListResponse` / `TerminateVaultResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `vault_not_found`, `vault_path_conflict`, `vault_name_conflict`, `vault_path_invalid`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
+
+`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`).
+
+**Write-tool gating**. The two write tools (`vault_create`, `vault_terminate`) are advertised by default and may be disabled via `[mcp] enable_write_tools = false` in the daemon's config (see [configuration.md § `[mcp]`](./configuration.md#mcp)). When the gate is closed, `tools/call` against either tool returns a structured `write_tools_disabled` error envelope naming the gated tool and the config knob to flip; the read tools remain available. Step-11 lifecycle ops (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) inherit the same gate when they ship — see [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface).
 
 **Example MCP host configuration**:
 
