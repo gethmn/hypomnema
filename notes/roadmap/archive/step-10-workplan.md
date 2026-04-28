@@ -1,8 +1,8 @@
 # Step 10 Workplan — Vault control plane (read + create/terminate) + cross-vault search
 
-**Step**: 10 of 11 (round 3 of 3). Lights up the user-visible control plane on top of step 9's per-vault foundation. See [`roadmap-3.md`](./roadmap-3.md) for the round and [`archive/step-09-workplan.md`](./archive/step-09-workplan.md) for the immediately prior step (the per-vault internal refactor + registry foundation).
+**Step**: 10 of 11 (round 3 of 3). Lights up the user-visible control plane on top of step 9's per-vault foundation. See [`../roadmap-3.md`](../roadmap-3.md) for the round and [`step-09-workplan.md`](./step-09-workplan.md) for the immediately prior step (the per-vault internal refactor + registry foundation).
 
-**Status**: Workplan written 2026-04-28; awaiting human review before build phase.
+**Status**: Shipped 2026-04-28. See [`../../project-planning-workflow-notes.md`](../../project-planning-workflow-notes.md) § Step 10 for the retrospective.
 
 **Round-2/3 lessons carrying forward** (from [`notes/project-planning-workflow-notes.md`](../project-planning-workflow-notes.md) § End-of-round retrospective + § Step 9):
 
