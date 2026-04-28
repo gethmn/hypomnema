@@ -16,6 +16,7 @@ use crate::embedding::{Embedder, StubEmbedder};
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
 
 use super::manager::{ControlPlaneError, CreateVaultRequest, VaultManager};
+use crate::store::Store;
 
 const DIM: u32 = 768;
 
@@ -810,6 +811,380 @@ async fn concurrent_pause_and_search_dont_deadlock() {
         .unwrap()
         .expect("pause result");
     assert_eq!(pause_res.status, VaultStatus::Paused);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), search_h)
+        .await
+        .expect("searches did not complete within 5s — possible deadlock")
+        .unwrap();
+}
+
+// -- step-11 task 11.2: reset (with --rebuild) + rescan -------------------
+
+async fn count_chunks(store: &Store) -> i64 {
+    let pool = store.pool();
+    tokio::task::spawn_blocking(move || -> i64 {
+        let conn = pool.get().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+async fn count_chunks_vec(store: &Store) -> i64 {
+    let pool = store.pool();
+    tokio::task::spawn_blocking(move || -> i64 {
+        let conn = pool.get().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM chunks_vec", [], |r| r.get(0))
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+async fn count_files(store: &Store) -> i64 {
+    let pool = store.pool();
+    tokio::task::spawn_blocking(move || -> i64 {
+        let conn = pool.get().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .unwrap()
+    })
+    .await
+    .unwrap()
+}
+
+async fn read_file_content_hashes(store: &Store) -> Vec<String> {
+    let pool = store.pool();
+    tokio::task::spawn_blocking(move || -> Vec<String> {
+        let conn = pool.get().unwrap();
+        let mut stmt = conn.prepare("SELECT content_hash FROM files").unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    })
+    .await
+    .unwrap()
+}
+
+fn outbox_lines(path: &Path) -> Vec<String> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+async fn wait_for_outbox_count(path: &Path, expected: usize, timeout: std::time::Duration) {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let count = outbox_lines(path).len();
+        if count >= expected {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "outbox at {} did not reach expected count {expected} (got {count}) within {timeout:?}",
+                path.display()
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn reset_without_rebuild_clears_last_error_and_restarts_runner() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+
+    let path = fresh_vault_dir(root.path(), "ev");
+    let id = VaultId::new();
+    registry
+        .insert(VaultRow {
+            id: id.clone(),
+            name: "errd".to_string(),
+            path: path.clone(),
+            status: VaultStatus::Errored,
+            created_at: Utc::now(),
+            last_error: Some("prior reconcile failure".to_string()),
+        })
+        .await
+        .unwrap();
+
+    let manager = open_manager(config, registry.clone(), embedder, rx).await;
+    // Reconcile skipped the errored row — no runner in the map.
+    assert!(manager.active_vaults().is_empty());
+
+    let updated = manager
+        .reset("errd", false)
+        .await
+        .expect("reset succeeds on errored row");
+    assert_eq!(updated.id, id);
+    assert_eq!(updated.status, VaultStatus::Active);
+    assert!(updated.last_error.is_none());
+
+    let on_disk = registry.get_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(on_disk.status, VaultStatus::Active);
+    assert!(on_disk.last_error.is_none());
+    assert_eq!(manager.active_vaults().len(), 1);
+}
+
+#[tokio::test]
+async fn reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    std::fs::write(path.join("a.md"), b"# Alpha\n\nBody one.\n").unwrap();
+    std::fs::write(path.join("b.md"), b"# Bravo\n\nBody two.\n").unwrap();
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let store_before = manager.active_vaults()[0].store.clone();
+    assert_eq!(count_files(&store_before).await, 2);
+    assert!(
+        count_chunks(&store_before).await > 0,
+        "initial scan populates chunks"
+    );
+    assert!(
+        count_chunks_vec(&store_before).await > 0,
+        "initial scan populates chunks_vec"
+    );
+
+    drop(store_before);
+
+    let updated = manager
+        .reset("alpha", true)
+        .await
+        .expect("reset --rebuild succeeds");
+    assert_eq!(updated.id, row.id);
+
+    let store_after = manager.active_vaults()[0].store.clone();
+    assert_eq!(
+        count_files(&store_after).await,
+        2,
+        "files retained after rebuild"
+    );
+    assert_eq!(
+        count_chunks(&store_after).await,
+        0,
+        "chunks cleared by rebuild"
+    );
+    assert_eq!(
+        count_chunks_vec(&store_after).await,
+        0,
+        "chunks_vec cleared by rebuild"
+    );
+    let hashes = read_file_content_hashes(&store_after).await;
+    for h in &hashes {
+        assert!(h.is_empty(), "content_hash zeroed by rebuild, got {h:?}");
+    }
+}
+
+#[tokio::test]
+async fn reset_with_rebuild_preserves_outbox() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config.clone(), registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    std::fs::write(path.join("a.md"), b"# Alpha\n\nBody one.\n").unwrap();
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let outbox_path =
+        vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
+    let known_event_bytes = b"{\"vault\":\"sentinel\",\"path\":\"x.md\"}\n";
+    std::fs::write(&outbox_path, known_event_bytes).unwrap();
+    let before_bytes = std::fs::read(&outbox_path).unwrap();
+
+    manager
+        .reset("alpha", true)
+        .await
+        .expect("reset --rebuild succeeds");
+
+    let after_bytes = std::fs::read(&outbox_path).unwrap();
+    assert_eq!(
+        before_bytes, after_bytes,
+        "outbox.jsonl bytes must be unchanged across reset --rebuild"
+    );
+}
+
+#[tokio::test]
+async fn reset_returns_vault_not_found_for_unknown() {
+    let (_root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let err = manager
+        .reset("does-not-exist", false)
+        .await
+        .expect_err("reset against unknown vault must error");
+    match err {
+        ControlPlaneError::VaultNotFound { name_or_id, .. } => {
+            assert_eq!(name_or_id, "does-not-exist");
+        }
+        other => panic!("expected VaultNotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn rescan_returns_rescan_initiated_at_timestamp() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+
+    let before = Utc::now();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), manager.rescan("alpha"))
+        .await
+        .expect("rescan returned within 5s — async response should not block on scan completion")
+        .expect("rescan succeeds");
+    let after = Utc::now();
+
+    assert_eq!(response.row.name, "alpha");
+    assert!(
+        response.rescan_initiated_at >= before && response.rescan_initiated_at <= after,
+        "rescan_initiated_at {} must fall within [{}, {}]",
+        response.rescan_initiated_at,
+        before,
+        after
+    );
+}
+
+#[tokio::test]
+async fn rescan_re_emits_outbox_events_for_all_files_after_rebuild() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config.clone(), registry, embedder, rx).await;
+
+    let path = fresh_vault_dir(root.path(), "v");
+    let files: &[(&str, &[u8])] = &[
+        ("a.md", b"# Alpha\n\nBody one.\n"),
+        ("b.md", b"# Bravo\n\nBody two.\n"),
+        ("c.md", b"# Charlie\n\nBody three.\n"),
+    ];
+    for (name, content) in files {
+        std::fs::write(path.join(name), content).unwrap();
+    }
+    let row = manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path,
+        })
+        .await
+        .unwrap();
+    let outbox_path =
+        vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
+
+    // Initial scan populates the index but does not emit outbox events.
+    assert!(outbox_lines(&outbox_path).is_empty());
+
+    manager
+        .reset("alpha", true)
+        .await
+        .expect("reset --rebuild succeeds");
+    assert!(
+        outbox_lines(&outbox_path).is_empty(),
+        "reset --rebuild must not write to outbox"
+    );
+
+    manager.rescan("alpha").await.expect("rescan accepted");
+    wait_for_outbox_count(
+        &outbox_path,
+        files.len(),
+        std::time::Duration::from_secs(10),
+    )
+    .await;
+
+    let lines = outbox_lines(&outbox_path);
+    assert_eq!(lines.len(), files.len());
+    let mut paths: Vec<String> = Vec::new();
+    for line in &lines {
+        let v: serde_json::Value = serde_json::from_str(line).expect("outbox line is valid JSON");
+        let event_type = v.get("event_type").and_then(|s| s.as_str()).unwrap_or("");
+        assert!(
+            event_type == "modified" || event_type == "created",
+            "expected modified|created event, got {event_type:?} (line: {line})"
+        );
+        paths.push(v.get("path").and_then(|s| s.as_str()).unwrap().to_string());
+    }
+    paths.sort();
+    let mut expected: Vec<String> = files.iter().map(|(n, _)| (*n).to_string()).collect();
+    expected.sort();
+    assert_eq!(paths, expected);
+}
+
+#[tokio::test]
+async fn rescan_returns_vault_not_found_for_unknown() {
+    let (_root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = open_manager(config, registry, embedder, rx).await;
+
+    let err = manager
+        .rescan("does-not-exist")
+        .await
+        .expect_err("rescan against unknown vault must error");
+    match err {
+        ControlPlaneError::VaultNotFound { name_or_id, .. } => {
+            assert_eq!(name_or_id, "does-not-exist");
+        }
+        other => panic!("expected VaultNotFound, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn concurrent_reset_and_search_dont_deadlock() {
+    let (root, config, registry, embedder, _tx, rx) = setup().await;
+    let manager = Arc::new(open_manager(config, registry, embedder, rx).await);
+
+    let path_a = fresh_vault_dir(root.path(), "a");
+    let path_b = fresh_vault_dir(root.path(), "b");
+    manager
+        .create(CreateVaultRequest {
+            name: Some("alpha".to_string()),
+            path: path_a,
+        })
+        .await
+        .unwrap();
+    manager
+        .create(CreateVaultRequest {
+            name: Some("bravo".to_string()),
+            path: path_b,
+        })
+        .await
+        .unwrap();
+
+    let m1 = manager.clone();
+    let m2 = manager.clone();
+    let reset_h = tokio::spawn(async move { m1.reset("alpha", false).await });
+    let search_h = tokio::spawn(async move {
+        for _ in 0..32 {
+            let _ = m2.search_scope().await.expect("search_scope");
+            tokio::task::yield_now().await;
+        }
+    });
+
+    let reset_res = tokio::time::timeout(std::time::Duration::from_secs(5), reset_h)
+        .await
+        .expect("reset did not complete within 5s — possible deadlock")
+        .unwrap()
+        .expect("reset result");
+    assert_eq!(reset_res.status, VaultStatus::Active);
 
     tokio::time::timeout(std::time::Duration::from_secs(5), search_h)
         .await

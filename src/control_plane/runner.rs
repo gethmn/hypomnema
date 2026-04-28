@@ -28,6 +28,13 @@ pub struct VaultRunner {
 
 pub(crate) struct RunnerLifecycle {
     pub shutdown_tx: watch::Sender<bool>,
+    /// Rescan request channel. The manager increments the inner counter via
+    /// `send_modify(|v| *v = v.wrapping_add(1))` to wake the consumer's
+    /// rescan arm; the consumer walks the vault and emits `created` /
+    /// `modified` events for each file via the same `apply_event` path that
+    /// drives live watcher events. Mirrors the shutdown-channel pattern so
+    /// the consumer's `select!` covers both signals.
+    pub rescan_tx: watch::Sender<u64>,
     pub consumer_handle: JoinHandle<()>,
     pub watcher: Watcher,
 }

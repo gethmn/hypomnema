@@ -176,6 +176,7 @@ pub async fn run_consumer(
     scanner: Scanner,
     outbox: Outbox,
     mut shutdown_rx: watch::Receiver<bool>,
+    mut rescan_rx: watch::Receiver<u64>,
 ) {
     // Honour the initial value too — if shutdown already fired before we
     // started polling, drain and exit without waiting for another change.
@@ -194,6 +195,16 @@ pub async fn run_consumer(
                     break;
                 }
             }
+            res = rescan_rx.changed() => {
+                // A rescan request was signalled. If the sender was dropped
+                // (manager teardown without a graceful shutdown), fall back
+                // to the shutdown path so we drain and exit.
+                if res.is_err() {
+                    drain_remaining(&mut rx, &scanner, &outbox).await;
+                    break;
+                }
+                run_rescan(&scanner, &outbox).await;
+            }
             event = rx.recv() => {
                 match event {
                     Some(ev) => apply_event(ev, &scanner, &outbox).await,
@@ -202,6 +213,40 @@ pub async fn run_consumer(
             }
         }
     }
+}
+
+/// Walk the vault and re-emit `Upsert` events for every file. Drives the
+/// existing per-file `apply_event` pipeline so files whose `content_hash`
+/// drifted from the on-disk hash produce `modified` events; new files
+/// produce `created` events. On an up-to-date vault every `reindex_path`
+/// returns `HashUnchanged`, which `apply_event` silently swallows — that is
+/// the documented "rescan-without-rebuild on a quiet vault produces few
+/// events" edge case (see `docs/specs/vault-management.md` § rescan and
+/// `notes/roadmap/step-11-workplan.md` § Task 11.2 cold-start emission
+/// policy). Operators wanting cold-start emission for every file should
+/// pair `rescan` with `reset --rebuild`, which clears `content_hash` and
+/// forces re-emit.
+async fn run_rescan(scanner: &Scanner, outbox: &Outbox) {
+    let rels = match scanner.vault_paths().await {
+        Ok(rels) => rels,
+        Err(e) => {
+            tracing::warn!(
+                vault_id = %outbox.vault_id(),
+                error = ?e,
+                "rescan: walk failed"
+            );
+            return;
+        }
+    };
+    tracing::info!(
+        vault_id = %outbox.vault_id(),
+        file_count = rels.len(),
+        "rescan: starting"
+    );
+    for rel in rels {
+        apply_event(WatchEvent::Upsert(rel), scanner, outbox).await;
+    }
+    tracing::info!(vault_id = %outbox.vault_id(), "rescan: complete");
 }
 
 async fn drain_remaining(rx: &mut mpsc::Receiver<WatchEvent>, scanner: &Scanner, outbox: &Outbox) {
@@ -347,7 +392,8 @@ mod tests {
             .await
             .expect("open outbox");
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let consumer = tokio::spawn(run_consumer(rx, scanner, outbox, shutdown_rx));
+        let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+        let consumer = tokio::spawn(run_consumer(rx, scanner, outbox, shutdown_rx, rescan_rx));
 
         LiveVault {
             watcher,

@@ -219,6 +219,21 @@ impl Scanner {
         Ok(report)
     }
 
+    /// Walk the vault and return relative `.md` paths. Used by the
+    /// rescan-on-demand path: the consumer task drives one `Upsert` event
+    /// per returned path through `apply_event`, re-emitting outbox events
+    /// for files whose content_hash drifted from the on-disk hash.
+    pub async fn vault_paths(&self) -> Result<Vec<String>> {
+        let vault = self.vault.clone();
+        let ignores = self.ignores.clone();
+        task::spawn_blocking(move || -> Result<Vec<String>> {
+            let walked = walk::walk_vault(&vault, &ignores)?;
+            Ok(walked.entries.into_iter().map(|e| e.rel_path).collect())
+        })
+        .await
+        .context("spawn_blocking join error in Scanner::vault_paths")?
+    }
+
     pub async fn reindex_path(&self, rel: &str) -> Result<ReindexOutcome> {
         let abs = self.vault.join(rel);
         let metadata = match tokio::fs::metadata(&abs).await {
@@ -460,7 +475,13 @@ fn decide_upsert(
     prior: Option<&StoredFile>,
 ) -> Result<UpsertDecision> {
     if let Some(prev) = prior {
-        if prev.size == size && prev.mtime == mtime {
+        // Empty `content_hash` is the project's "needs re-embedding" sentinel
+        // (set by migration-0004 and `reset --rebuild`; see
+        // `src/store/schema.rs:51`). The stat gate must NOT short-circuit on
+        // it: `reset --rebuild` zeroes content_hash without touching size /
+        // mtime, and the operator's follow-up `rescan` walks every file
+        // expecting reindex_path to re-embed each one.
+        if prev.size == size && prev.mtime == mtime && !prev.content_hash.is_empty() {
             return Ok(UpsertDecision::EarlyDone(ProcessEffect::StatGateHit));
         }
     }

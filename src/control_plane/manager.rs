@@ -139,6 +139,16 @@ impl From<anyhow::Error> for ControlPlaneError {
     }
 }
 
+/// Response payload for `VaultManager::rescan`. The rescan itself is
+/// asynchronous; this payload carries the timestamp at which the daemon
+/// accepted the request, plus the vault row as currently persisted in the
+/// registry.
+#[derive(Debug, Clone)]
+pub struct RescanResponse {
+    pub row: VaultRow,
+    pub rescan_initiated_at: chrono::DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateVaultRequest {
     /// `None` resolves to `config.default_vault_name`; if that is empty
@@ -662,6 +672,7 @@ impl VaultManager {
                 spawn.config.as_ref(),
                 self.inner.embedder.clone(),
                 spawn.shutdown_rx.clone(),
+                false,
             )
             .await
             .map_err(|e| ControlPlaneError::Internal(e.context("spawning lifecycle for resume")))?;
@@ -829,6 +840,221 @@ impl VaultManager {
         Ok(updated)
     }
 
+    /// Reset a vault: drain its lifecycle, optionally rebuild its index
+    /// tables, clear `last_error`, and bring it back up Active.
+    ///
+    /// Without `--rebuild` this is the cheap "kick the vault" path: the
+    /// content_hash gate keeps untouched files from re-embedding when the
+    /// fresh lifecycle's initial scan reads them. With `--rebuild` the
+    /// per-vault `chunks_vec` / `chunks` are emptied and `files.content_hash`
+    /// is zeroed; the spawn skips the initial scan so `content_hash` stays
+    /// empty and a follow-up `rescan` re-emits `modified` events for every
+    /// file (the operator workflow for "force re-embed everything").
+    ///
+    /// Two paths mirror `resume`'s shape:
+    /// - **Runner in map** (Active or Paused with the runner still installed):
+    ///   take `op_lock`, drain via `shutdown_with_timeout`, optionally run
+    ///   the rebuild SQL on the runner's existing `Arc<Store>`, spawn a
+    ///   fresh `RunnerLifecycle`, and install it.
+    /// - **Runner not in map** (Errored at startup-reconcile): validate path
+    ///   accessibility, optionally open the store fresh and run the rebuild
+    ///   SQL, then spawn a full new runner under the outer write-lock.
+    pub async fn reset(
+        &self,
+        name_or_id: &str,
+        rebuild: bool,
+    ) -> Result<VaultRow, ControlPlaneError> {
+        let spawn = self.spawn_ctx_or_err()?;
+
+        let row = self.get(name_or_id).await?;
+        let id = row.id.clone();
+
+        if let Some(runner) = self.runner_for(&id) {
+            let _op_guard = runner.op_lock.lock().await;
+
+            // Soft-deletion ordering (workplan § Task 11.2): drain the
+            // lifecycle first, then run rebuild SQL on the now-quiet store,
+            // then spawn a fresh lifecycle. Running the SQL while the old
+            // consumer was still draining could let it observe partially-
+            // deleted chunks_vec rows mid-transaction; running it after the
+            // new consumer was spawned would race the consumer's reads.
+            runner.shutdown_with_timeout(LIFECYCLE_DRAIN_TIMEOUT).await;
+
+            if rebuild {
+                let store = runner.entry().store.clone();
+                run_rebuild_sql(store)
+                    .await
+                    .map_err(|e| ControlPlaneError::Internal(e.context("running rebuild SQL")))?;
+            }
+
+            spawn
+                .registry
+                .update_status(&id, VaultStatus::Active, None)
+                .await
+                .map_err(|e| {
+                    ControlPlaneError::Internal(e.context("updating registry status to active"))
+                })?;
+
+            let updated = spawn
+                .registry
+                .get_by_id(&id)
+                .await
+                .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                    detail: format!("{e:#}"),
+                })?
+                .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                    name_or_id: name_or_id.to_string(),
+                    hint: None,
+                })?;
+
+            // skip_initial_scan = rebuild: the rebuild SQL just zeroed
+            // content_hash; running the initial scan would re-populate it
+            // and defeat the "rebuild then rescan" cold-start workflow.
+            let (entry, lifecycle) = spawn_runner_parts(
+                &updated,
+                spawn.config.as_ref(),
+                self.inner.embedder.clone(),
+                spawn.shutdown_rx.clone(),
+                rebuild,
+            )
+            .await
+            .map_err(|e| ControlPlaneError::Internal(e.context("spawning lifecycle for reset")))?;
+
+            *runner.lifecycle.lock().await = Some(lifecycle);
+            runner.replace_entry(Arc::new(entry));
+
+            info!(
+                vault_id = %id,
+                vault_name = %updated.name,
+                rebuild,
+                "control_plane: reset vault"
+            );
+            Ok(updated)
+        } else {
+            // Errored row at startup-reconcile: no runner in the map. Treat
+            // it the same as the runner-in-map path modulo "no lifecycle to
+            // drain"; the rebuild SQL still needs the store, opened fresh.
+            if !path_is_accessible(&row.path) {
+                return Err(ControlPlaneError::VaultErrored {
+                    name_or_id: name_or_id.to_string(),
+                    last_error: row.last_error.clone(),
+                });
+            }
+
+            if rebuild {
+                let store = Store::open(
+                    &id,
+                    &spawn.config.storage.data_dir.0,
+                    &spawn.config.storage.index_file,
+                    &spawn.config.embedding,
+                )
+                .await
+                .map_err(|e| {
+                    ControlPlaneError::Internal(
+                        e.context("opening per-vault store for rebuild on errored vault"),
+                    )
+                })?;
+                let store = Arc::new(store);
+                run_rebuild_sql(store)
+                    .await
+                    .map_err(|e| ControlPlaneError::Internal(e.context("running rebuild SQL")))?;
+            }
+
+            spawn
+                .registry
+                .update_status(&id, VaultStatus::Active, None)
+                .await
+                .map_err(|e| {
+                    ControlPlaneError::Internal(e.context("updating registry status to active"))
+                })?;
+
+            let updated = spawn
+                .registry
+                .get_by_id(&id)
+                .await
+                .map_err(|e| ControlPlaneError::RegistryCorrupt {
+                    detail: format!("{e:#}"),
+                })?
+                .ok_or_else(|| ControlPlaneError::VaultNotFound {
+                    name_or_id: name_or_id.to_string(),
+                    hint: None,
+                })?;
+
+            let (entry, lifecycle) = spawn_runner_parts(
+                &updated,
+                spawn.config.as_ref(),
+                self.inner.embedder.clone(),
+                spawn.shutdown_rx.clone(),
+                rebuild,
+            )
+            .await
+            .map_err(|e| ControlPlaneError::Internal(e.context("spawning runner for reset")))?;
+
+            let runner = VaultRunner::new(entry, lifecycle);
+            {
+                let mut guard = self
+                    .inner
+                    .runners
+                    .write()
+                    .expect("vault manager runners RwLock poisoned");
+                guard.insert(id.clone(), Arc::new(runner));
+            }
+
+            info!(
+                vault_id = %id,
+                vault_name = %updated.name,
+                rebuild,
+                "control_plane: reset vault"
+            );
+            Ok(updated)
+        }
+    }
+
+    /// Trigger a fresh scanner walk on an active vault. Asynchronous: the
+    /// response returns immediately with `rescan_initiated_at`; the
+    /// consumer task picks up the rescan signal and walks/emits in the
+    /// background.
+    ///
+    /// **Cold-start emission policy**: `rescan` walks the vault and drives
+    /// each file through the same `apply_event(Upsert)` pipeline the live
+    /// watcher uses. Files whose `content_hash` matches on disk are silent
+    /// (the indexer's hash-comparison short-circuit). On an up-to-date
+    /// vault this means few outbox events. Operators wanting "every file
+    /// re-emits" should pair `rescan` with `reset --rebuild` (which clears
+    /// `content_hash` and forces re-emit).
+    ///
+    /// Rescan on a paused or errored vault (no live consumer to signal) is
+    /// a no-op that still returns a successful response with the timestamp
+    /// — the operator's expectation is "I asked, the daemon acknowledged."
+    /// The `lifecycle.is_some()` gate decides whether the signal is sent.
+    pub async fn rescan(&self, name_or_id: &str) -> Result<RescanResponse, ControlPlaneError> {
+        let _spawn = self.spawn_ctx_or_err()?;
+
+        let row = self.get(name_or_id).await?;
+        let id = row.id.clone();
+
+        let runner = self.runner_for(&id);
+        let _op_guard = if let Some(r) = runner.as_ref() {
+            Some(r.op_lock.lock().await)
+        } else {
+            None
+        };
+
+        if let Some(r) = runner.as_ref() {
+            let lifecycle_guard = r.lifecycle.lock().await;
+            if let Some(lc) = lifecycle_guard.as_ref() {
+                lc.rescan_tx.send_modify(|v| *v = v.wrapping_add(1));
+            }
+        }
+
+        let rescan_initiated_at = Utc::now();
+        info!(vault_id = %id, vault_name = %row.name, "control_plane: rescan initiated");
+        Ok(RescanResponse {
+            row,
+            rescan_initiated_at,
+        })
+    }
+
     fn runner_for(&self, id: &VaultId) -> Option<Arc<VaultRunner>> {
         let guard = self
             .inner
@@ -968,19 +1194,30 @@ async fn spawn_runner_for_row(
     embedder: Arc<dyn Embedder>,
     parent_shutdown_rx: watch::Receiver<bool>,
 ) -> Result<VaultRunner> {
-    let (entry, lifecycle) = spawn_runner_parts(row, config, embedder, parent_shutdown_rx).await?;
+    let (entry, lifecycle) =
+        spawn_runner_parts(row, config, embedder, parent_shutdown_rx, false).await?;
     Ok(VaultRunner::new(entry, lifecycle))
 }
 
 /// Open the per-vault store, run the initial scan, and spawn the watcher +
 /// consumer. Returns the entry/lifecycle pair separately so step-11 ops
-/// (resume) can install a fresh lifecycle into an existing
+/// (resume / reset) can install a fresh lifecycle into an existing
 /// `Arc<VaultRunner>` without minting a new runner.
+///
+/// `skip_initial_scan` is true on the `reset --rebuild` path: rebuild has
+/// just zeroed `files.content_hash` in the per-vault store, and the operator
+/// is expected to follow up with `rescan` to re-emit `modified` events for
+/// every file. Running the initial scan here would silently re-populate
+/// `content_hash` (matching the on-disk hash again), defeating the rescan's
+/// re-emit and contradicting the `reset_with_rebuild_clears_*` test
+/// assertion that `content_hash = ''` after reset --rebuild. All other call
+/// sites (open/create/resume) keep the initial scan.
 async fn spawn_runner_parts(
     row: &VaultRow,
     config: &Config,
     embedder: Arc<dyn Embedder>,
     parent_shutdown_rx: watch::Receiver<bool>,
+    skip_initial_scan: bool,
 ) -> Result<(VaultEntry, RunnerLifecycle)> {
     let store = Store::open(
         &row.id,
@@ -992,22 +1229,24 @@ async fn spawn_runner_parts(
     .with_context(|| format!("opening store for {}", row.id))?;
     let store = Arc::new(store);
 
-    let scanner = Scanner::new(&row.path, config, &store, embedder.clone())
-        .with_context(|| format!("constructing scanner for {}", row.id))?;
-    let report = scanner
-        .run()
-        .await
-        .with_context(|| format!("running initial scan for {}", row.id))?;
-    info!(
-        vault_id = %row.id,
-        vault_name = %row.name,
-        "control_plane: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
-        report.inserted,
-        report.updated,
-        report.hash_unchanged,
-        report.deleted,
-        report.duration.as_secs_f64()
-    );
+    if !skip_initial_scan {
+        let scanner = Scanner::new(&row.path, config, &store, embedder.clone())
+            .with_context(|| format!("constructing scanner for {}", row.id))?;
+        let report = scanner
+            .run()
+            .await
+            .with_context(|| format!("running initial scan for {}", row.id))?;
+        info!(
+            vault_id = %row.id,
+            vault_name = %row.name,
+            "control_plane: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
+            report.inserted,
+            report.updated,
+            report.hash_unchanged,
+            report.deleted,
+            report.duration.as_secs_f64()
+        );
+    }
 
     let outbox_path =
         vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
@@ -1043,11 +1282,16 @@ async fn spawn_runner_parts(
         let _ = per_vault_tx_for_join.send(true);
     });
 
+    // Per-vault rescan signal. Manager.rescan() bumps this counter; the
+    // consumer's `select!` covers both shutdown and rescan.
+    let (rescan_tx, rescan_rx) = watch::channel(0u64);
+
     let consumer_handle = tokio::spawn(watcher::run_consumer(
         rx,
         scanner_for_consumer,
         outbox,
         per_vault_rx,
+        rescan_rx,
     ));
 
     let entry = VaultEntry {
@@ -1063,10 +1307,39 @@ async fn spawn_runner_parts(
         entry,
         RunnerLifecycle {
             shutdown_tx: per_vault_tx,
+            rescan_tx,
             consumer_handle,
             watcher: watcher_handle,
         },
     ))
+}
+
+/// Run the `--rebuild` SQL on a per-vault store: drop every chunk row,
+/// drop every chunks_vec row, and zero `files.content_hash` so the next
+/// rescan re-embeds every file. Mirrors migration 0004's chunks-only
+/// pattern (per `src/store/schema.rs`'s "needs re-embedding" sentinel).
+/// Outbox is preserved per spec — the durable event log is independent of
+/// the per-vault index tables.
+async fn run_rebuild_sql(store: Arc<Store>) -> Result<()> {
+    task::spawn_blocking(move || -> Result<()> {
+        let mut conn = store
+            .pool()
+            .get()
+            .context("acquiring connection from pool for rebuild")?;
+        let tx = conn
+            .transaction()
+            .context("beginning rebuild transaction")?;
+        tx.execute("DELETE FROM chunks_vec", [])
+            .context("deleting chunks_vec rows")?;
+        tx.execute("DELETE FROM chunks", [])
+            .context("deleting chunks rows")?;
+        tx.execute("UPDATE files SET content_hash = ''", [])
+            .context("zeroing files.content_hash")?;
+        tx.commit().context("committing rebuild transaction")?;
+        Ok(())
+    })
+    .await
+    .context("spawn_blocking join error in run_rebuild_sql")?
 }
 
 fn create_subdir_and_meta(vault_dir: &Path, row: &VaultRow) -> Result<()> {

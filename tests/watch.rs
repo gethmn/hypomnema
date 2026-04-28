@@ -120,7 +120,14 @@ async fn start(fx: &Fixture) -> Live {
     .await
     .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let consumer = tokio::spawn(watcher::run_consumer(rx, scanner, outbox, shutdown_rx));
+    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+    let consumer = tokio::spawn(watcher::run_consumer(
+        rx,
+        scanner,
+        outbox,
+        shutdown_rx,
+        rescan_rx,
+    ));
 
     Live {
         watcher,

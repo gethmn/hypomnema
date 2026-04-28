@@ -204,11 +204,13 @@ async fn spawn_watcher_runtime(
     let scanner_for_consumer =
         Scanner::new(&row.path, config, &store, embedder).expect("construct scanner (consumer)");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner_for_consumer,
         outbox,
         shutdown_rx,
+        rescan_rx,
     ));
 
     WatcherRuntime {

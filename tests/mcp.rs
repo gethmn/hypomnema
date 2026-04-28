@@ -166,11 +166,13 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         .await
         .expect("open outbox");
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner,
         outbox,
         shutdown_rx.clone(),
+        rescan_rx,
     ));
 
     let entry = VaultEntry {
