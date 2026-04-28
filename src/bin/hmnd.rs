@@ -5,12 +5,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+use hypomnema::api::mcp_http::{self, McpHttpState};
 use hypomnema::api::{self, ApiState};
 use hypomnema::config::Config;
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, EmbeddingClient, embed_health_probe};
 use hypomnema::legacy_state_migration;
 use hypomnema::logging::{self, BinaryKind};
+use hypomnema::mcp::{HypomnemaBackend, InProcessBackend};
 use hypomnema::shutdown;
 use hypomnema::vault_registry::VaultRegistry;
 
@@ -129,7 +131,28 @@ async fn run_daemon(config: Config) -> Result<()> {
     let api_state = ApiState {
         vault_manager: vault_manager.clone(),
     };
-    let app = api::router(api_state);
+    let mut app = api::router(api_state);
+
+    if config.mcp.http.enabled {
+        let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
+            Arc::new(InProcessBackend::new(vault_manager.clone()));
+        let mcp_state = McpHttpState {
+            backend,
+            default_vault_name: config.default_vault_name.clone(),
+            enable_write_tools: config.mcp.enable_write_tools,
+        };
+        app = app.merge(mcp_http::router(mcp_state));
+        tracing::info!(
+            path = %config.mcp.http.path,
+            enabled = config.mcp.http.enabled,
+            "hmnd: mcp http transport mounted"
+        );
+    } else {
+        tracing::info!(
+            enabled = config.mcp.http.enabled,
+            "hmnd: mcp http transport disabled"
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(&config.http.bind)
         .await

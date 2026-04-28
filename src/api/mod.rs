@@ -1,5 +1,6 @@
 pub(crate) mod error;
 mod health;
+pub mod mcp_http;
 pub(crate) mod search;
 mod status;
 pub mod types;

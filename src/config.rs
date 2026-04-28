@@ -102,6 +102,8 @@ pub struct McpConfig {
     pub socket: ConfigPath,
     #[serde(default = "default_enable_write_tools")]
     pub enable_write_tools: bool,
+    #[serde(default)]
+    pub http: McpHttpConfig,
 }
 
 impl Default for McpConfig {
@@ -110,6 +112,7 @@ impl Default for McpConfig {
             transport: default_mcp_transport(),
             socket: default_mcp_socket(),
             enable_write_tools: default_enable_write_tools(),
+            http: McpHttpConfig::default(),
         }
     }
 }
@@ -124,6 +127,32 @@ fn default_mcp_socket() -> ConfigPath {
 
 fn default_enable_write_tools() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpHttpConfig {
+    #[serde(default = "default_mcp_http_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_http_path")]
+    pub path: String,
+}
+
+impl Default for McpHttpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_http_enabled(),
+            path: default_mcp_http_path(),
+        }
+    }
+}
+
+fn default_mcp_http_enabled() -> bool {
+    true
+}
+
+fn default_mcp_http_path() -> String {
+    "/mcp".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -385,6 +414,10 @@ impl Config {
             bail!("default_vault_name must not be empty");
         }
 
+        if self.mcp.http.path != "/mcp" {
+            bail!("mcp.http.path must be \"/mcp\" in this version of Hypomnema");
+        }
+
         parse_level(&self.logging.level, "logging.level")?;
         parse_level(&self.logging.notify_level, "logging.notify_level")?;
         parse_level(&self.logging.tokio_level, "logging.tokio_level")?;
@@ -504,5 +537,35 @@ mod tests {
         assert_eq!(cfg.embedding.dimension, 768);
         assert_eq!(cfg.logging.level, "info");
         assert_eq!(cfg.default_vault_name, "default");
+    }
+
+    #[test]
+    fn mcp_http_enabled_default_true() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.mcp.http.enabled);
+        assert_eq!(cfg.mcp.http.path, "/mcp");
+    }
+
+    #[test]
+    fn mcp_http_enabled_explicit_false() {
+        let cfg: Config = toml::from_str("[mcp.http]\nenabled = false\n").unwrap();
+        assert!(!cfg.mcp.http.enabled);
+        assert_eq!(cfg.mcp.http.path, "/mcp");
+    }
+
+    #[test]
+    fn mcp_http_path_default_accepts() {
+        let mut cfg: Config = toml::from_str("").unwrap();
+        cfg.validate().expect("default mcp.http.path validates");
+    }
+
+    #[test]
+    fn mcp_http_path_other_rejected() {
+        let mut cfg: Config = toml::from_str("[mcp.http]\npath = \"/foo\"\n").unwrap();
+        let err = cfg.validate().expect_err("non-/mcp path should reject");
+        assert_eq!(
+            err.to_string(),
+            "mcp.http.path must be \"/mcp\" in this version of Hypomnema"
+        );
     }
 }
