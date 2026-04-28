@@ -811,3 +811,71 @@ Every per-step retro follows this shape so the structured data accumulates compa
 4. *Push to origin was missed at the round-3 boundary.* Discovered at round-4 step-12.1 push time on 2026-04-28 when checking remote state — `origin/main` was 30 commits behind local and the `v0.2.0` tag had no remote ref. Human's note at the time: "not sure how or why we missed the step to push the code and tag at the end of round 3." The § Step boundary ritual at the top of this file does not list push, and the round-3 close-out (per the playbook's § Step boundary ritual) ran literally as written — so the gap is in the ritual definition, not in execution. Pushed `bf29dd7..4b5675e` (30 commits) plus `v0.2.0` after-the-fact during round 4. **Round-4 carry-forward**: add an explicit "push `HEAD` and any new tag(s) to `origin`" step to § Step boundary ritual, at minimum for the milestone-tag step that closes a round; for non-shipping intermediate steps, push-or-stay-local can be a per-round call. *Postmortem note added after round 3 closed; not part of the original round-3 close-out.*
 
 **End of round 3.** The v0.2.0 milestone has been hit: a daemon that internally manages N vaults via `<data_dir>/vaults.sqlite`, exposes the full nine-op vault lifecycle (create/list/status/pause/resume/reset/rename/rescan/terminate) over HTTP + CLI + MCP, fans search out across all active vaults with per-result vault disambiguation + `partial_results` diagnostic + request-side `vaults` filter, and removes the v0 `hmnd scan` subcommand in favor of `hmn vault rescan`. The next roadmap doc covers round-4 candidates (yet to be decided by the human); the round-3 archive lives at `notes/roadmap/archive/roadmap-3.md` (moved at this boundary alongside `step-11-workplan.md`). The workflow notes file continues; round 4 will add per-step retros and an end-of-round retro for its steps below.
+
+---
+
+## Round 4 retrospective
+
+### Step 12 (shipped 2026-04-28)
+
+**Structured Eval**
+
+*Batching outcomes:*
+- Solo task 12.1 (spec promotion + ADR-0013 + canon sync): scope = 7 docs files. Adjacent-task overlap: downstream tasks depended on trait names defined in ADR-0013. Assessment: appropriate solo — spec promo + multi-ADR amendment is a doc-shape task where batch gain is low.
+- Solo task 12.2 (HypomnemaBackend trait + Arc<dyn> server): scope = 4 files (`src/mcp/backend.rs`, `src/mcp/server.rs`, `src/mcp/mod.rs`, `Cargo.toml` features). Assessment: appropriate solo — load-bearing interface definition; downstreams (12.3, 12.4) depended on the trait surface.
+- Solo task 12.3 (InProcessBackend): scope = 3 files (`src/mcp/backend_in_process.rs`, `src/api/search.rs`, `src/api/vaults.rs`). Assessment: appropriate solo — free-function extraction from existing handlers is a surgical refactor requiring focused attention.
+- Solo task 12.4 ([mcp.http] config + HTTP-MCP route + Origin middleware): scope = 4 files (`src/config.rs`, `src/api/mcp_http.rs`, `src/bin/hmnd.rs`, `src/api/mod.rs`). Assessment: appropriate solo — the wiring task with the highest risk; pre-verified rmcp mount shape, hand-rolled Origin middleware.
+- Solo task 12.5 (integration tests): scope = 2 files (`tests/mcp_http.rs`, `Cargo.toml`). Assessment: appropriate solo — 5-story coverage matrix is test-shape work that benefits from uninterrupted composition.
+- Solo task 12.6 (manual-testing runbook refresh): scope = 6 manual-testing files. Assessment: appropriate solo — runbook refresh touching multiple narrative docs.
+- Solo task 12.7 (manual smoke matrix): no code files; results documented in this retro. Assessment: appropriate solo — smoke is inherently interactive.
+- Solo task 12.8 (reference docs verify + roadmap-4 status): scope = 4 files. Assessment: appropriate solo — boundary-doc task.
+
+*Escalations:*
+- Count: 0.
+
+*Retries:*
+- Tasks with retries: none.
+- 2-retry ceiling hit without success: none.
+
+*Time and overhead:*
+- Total wall-clock: ~2h (estimated; single-round, 8 tasks).
+- Coordinator wake-up count: low — the round-4 orchestrator ran all tasks in a single session.
+- Context drift symptoms: none observed. The `hmn mcp` stdio framing discovery (newline-delimited JSON, not LSP Content-Length) surfaced during smoke step 10 and was resolved in-session without escalation.
+
+**Notes**
+
+Round 4 was the simplest round: a single step, clean task decomposition, zero escalations, zero retries. The `HypomnemaBackend` trait extraction was the sharpest design call — splitting `DaemonClient` (HTTP shim for stdio-MCP path) and `InProcessBackend` (direct calls for HTTP-MCP path) into a common trait avoided code duplication and kept the tool handlers reusable across transports. The hand-rolled Origin middleware (rather than tower-http's `CorsLayer`) kept the blast radius small and the intent explicit — DNS-rebinding defense, not CORS.
+
+The rmcp `transport-streamable-http-server` feature mounted cleanly on axum 0.7 via `Router::nest_service`; no fallback handler needed. The workplan's fallback option (thin axum handler wrapping the tower service) was not required.
+
+One discovery in smoke: `hmn mcp` uses newline-delimited JSON, not LSP Content-Length framing. This was documented in the rmcp source but not anticipated in the smoke script; caused a brief friction loop during smoke step 10. Not a workflow problem, but worth a one-liner in the manual-testing runbook for future reference.
+
+The `mcp-http-transport` skill recommended at round-3's step-7 retro boundary — codifying the rmcp + axum integration pattern — was evaluated but not written: the pattern is simple enough (3 lines of route setup + a middleware function) that a skill would be over-engineering for the surface area. The verdict: not worth a skill file; the implementation is self-documenting.
+
+---
+
+### End-of-round retrospective (after step 12 ships — round 4)
+
+**What worked?**
+
+1. *Single-step round delivered cleanly.* The 1-step-round choice (vs. the 2-step alternative that would have split scaffolding from vault-tool coverage) was correct: the `HypomnemaBackend` trait made the tool coverage additive on top of the existing in-process backend, so the "wiring" and "coverage" tasks had no meaningful boundary between them. The 2-step split would have been artificial.
+
+2. *Spec-fleshout-at-workplan-write discipline scales to a 1-step round.* All 5 proposal open questions were resolved at workplan-write; zero scope-question escalations during build. The workplan-prose-vs-load-bearing-decision drift rate held at ~0.5/task (estimated 3–4 instances across 8 tasks; all `coordinator-only`, all zero-human-round-trip).
+
+3. *The round-3 patterns codified in the playbook were applied correctly.* `soft-flag self-correction at boundary` (Task 12.8), `silence-as-data for not-encountered flakes` (outbox flake: silent across step-12's full-suite sweep), `manual smoke as load-bearing gate` (Task 12.7 — zero regressions found, all 10 smoke scenarios green). 6-of-6 smoke records now across all rounds; pattern holds.
+
+4. *Push-to-origin was added to the boundary ritual* per the round-3 postmortem note. Round 4 will push after tagging.
+
+**What surprised us?**
+
+- *rmcp stdio uses newline-delimited JSON, not LSP Content-Length framing.* The Content-Length approach (standard for language servers) was the first assumption; discovering the actual format required reading the rmcp source. Zero user-visible impact; surfaced only during smoke step 10.
+
+**What would we change for the next round (round 5)?**
+
+1. *If a round is a single step, consider whether the smoke script should be written as a reusable shell script alongside the runbook.* The ad-hoc curl pipelines in this smoke session work, but a `smoke-mcp-http.sh` script would be immediately runnable by the human at any future point (regression test, upgrade verify, etc.). Low cost; good ergonomics.
+
+2. *CHANGELOG.md adoption has been deferred since the round-3 retro (item 2 there).* If round 5 starts at `v0.3.0` and the first user-facing consumer (Iris) plugs in at that boundary, having a `CHANGELOG.md` becomes a practical need rather than a hygiene question. Worth deciding at round-5 roadmap-write time.
+
+3. *The "mcp-http-transport" skill was evaluated and declined* (see step-12 retro). Round-5 planning can drop it from the candidates list.
+
+**End of round 4.** The v0.3.0 milestone has been hit: `hmnd` now exposes its full 12-tool MCP surface (3 search + 9 vault-management) over Streamable HTTP at `/mcp` on its existing Axum router, with loopback-only Origin validation as DNS-rebinding defense. Stdio MCP and HTTP-MCP coexist against the same daemon state. An MCP-HTTP-capable agent host can issue `initialize` → `tools/list` → `tools/call` over a plain HTTP connection to a local `hmnd`. The round-4 archive lives at `notes/roadmap/archive/roadmap-4.md` (moved at this boundary alongside `step-12-workplan.md`). The workflow notes file continues; round 5 will add per-step retros and an end-of-round retro for its steps below.
