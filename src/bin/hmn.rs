@@ -202,7 +202,11 @@ fn vaults_or_none(v: Vec<String>) -> Option<Vec<String>> {
 async fn cmd_mcp(config: &Config, override_url: Option<&str>) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)
         .context("constructing DaemonClient for mcp subcommand")?;
-    let server = hypomnema::mcp::HypomnemaMcpServer { client };
+    let server = hypomnema::mcp::HypomnemaMcpServer {
+        client,
+        default_vault_name: config.default_vault_name.clone(),
+        enable_write_tools: config.mcp.enable_write_tools,
+    };
     hypomnema::mcp::serve_stdio(server)
         .await
         .context("serving MCP over stdio")

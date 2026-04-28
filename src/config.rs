@@ -100,6 +100,8 @@ pub struct McpConfig {
     pub transport: String,
     #[serde(default = "default_mcp_socket")]
     pub socket: ConfigPath,
+    #[serde(default = "default_enable_write_tools")]
+    pub enable_write_tools: bool,
 }
 
 impl Default for McpConfig {
@@ -107,6 +109,7 @@ impl Default for McpConfig {
         Self {
             transport: default_mcp_transport(),
             socket: default_mcp_socket(),
+            enable_write_tools: default_enable_write_tools(),
         }
     }
 }
@@ -117,6 +120,10 @@ fn default_mcp_transport() -> String {
 
 fn default_mcp_socket() -> ConfigPath {
     ConfigPath(expand_tilde(Path::new("~/.local/share/hypomnema/mcp.sock")))
+}
+
+fn default_enable_write_tools() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

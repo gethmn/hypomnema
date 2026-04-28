@@ -411,7 +411,7 @@ async fn mcp_initialize_returns_server_info() {
 }
 
 #[tokio::test]
-async fn mcp_tools_list_advertises_three_tools() {
+async fn mcp_tools_list_advertises_all_tools() {
     let daemon = spawn_live_daemon(fixture()).await;
     let mut client = McpClient::spawn(&daemon.cfg_path, &daemon.base_url).await;
     client.handshake().await;
@@ -424,19 +424,25 @@ async fn mcp_tools_list_advertises_three_tools() {
         .iter()
         .map(|t| t["name"].as_str().expect("tool name is a string"))
         .collect();
-    assert_eq!(names.len(), 3, "expected 3 tools, got {names:?}");
-    assert!(
-        names.contains(&"search_filesystem"),
-        "missing search_filesystem in {names:?}"
-    );
-    assert!(
-        names.contains(&"search_content"),
-        "missing search_content in {names:?}"
-    );
-    assert!(
-        names.contains(&"search_semantic"),
-        "missing search_semantic in {names:?}"
-    );
+    // Step 10 added 4 vault tools (vault_list/status/create/terminate) on
+    // top of the step-8 search trio. `vault_create` and `vault_terminate`
+    // are always advertised even when `[mcp] enable_write_tools = false`;
+    // gating short-circuits at call time. See workplan § Task 10.6 § C.
+    assert_eq!(names.len(), 7, "expected 7 tools, got {names:?}");
+    for expected in [
+        "search_filesystem",
+        "search_content",
+        "search_semantic",
+        "vault_list",
+        "vault_status",
+        "vault_create",
+        "vault_terminate",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "missing {expected} in {names:?}"
+        );
+    }
 
     client.shutdown().await;
     daemon.shutdown().await;

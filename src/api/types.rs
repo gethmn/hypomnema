@@ -266,6 +266,46 @@ pub struct TerminateVaultResponse {
     pub id: String,
 }
 
+// ===== MCP-tool input shapes for vault control-plane wrappers =====
+//
+// Used by `src/mcp/server.rs` for the `vault_status` / `vault_create` /
+// `vault_terminate` MCP tools. Mirrors the HTTP control-plane wire shapes,
+// rephrased for MCP ergonomics (e.g. `target` rather than path-segment
+// addressing, `name` defaults to config-level `default_vault_name`).
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultStatusInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Vault name or surrogate id. Defaults to the daemon's configured default vault when omitted."
+    )]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultCreateInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Optional vault name. Defaults to the daemon's configured default vault name when omitted."
+    )]
+    pub name: Option<String>,
+    #[schemars(
+        description = "Absolute path to the vault directory. Must exist and be a directory; the daemon never creates the directory itself."
+    )]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct VaultTerminateInput {
+    #[schemars(
+        description = "Vault name or surrogate id of the vault to terminate. Permanently removes the registry row, per-vault index, and event log; never touches the vault directory itself."
+    )]
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct ErrorEnvelope {

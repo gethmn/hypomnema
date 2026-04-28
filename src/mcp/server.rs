@@ -4,12 +4,17 @@ use rmcp::model::CallToolResult;
 use rmcp::{tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 
-use crate::api::types::{ContentQueryJson, FilesystemQueryJson, SemanticQueryJson};
+use crate::api::types::{
+    ContentQueryJson, CreateVaultRequest, FilesystemQueryJson, SemanticQueryJson, VaultCreateInput,
+    VaultStatusInput, VaultTerminateInput,
+};
 use crate::client::{DaemonClient, is_connect_error};
 
 #[derive(Clone)]
 pub struct HypomnemaMcpServer {
     pub client: DaemonClient,
+    pub default_vault_name: String,
+    pub enable_write_tools: bool,
 }
 
 // Brand-identity override: surface "hypomnema" as the MCP serverInfo.name to MCP hosts
@@ -69,6 +74,98 @@ impl HypomnemaMcpServer {
             Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
         }
     }
+
+    #[tool(
+        description = "List all registered vaults with their status, path, and creation time. \
+                       See docs/specs/vault-management.md § Operations."
+    )]
+    async fn vault_list(&self) -> CallToolResult {
+        match self.client.list_vaults().await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Get detail for a single vault by name or ID. Defaults to the configured \
+                       default vault when target is omitted. \
+                       See docs/specs/vault-management.md § Operations."
+    )]
+    async fn vault_status(
+        &self,
+        Parameters(input): Parameters<VaultStatusInput>,
+    ) -> CallToolResult {
+        let target = input
+            .target
+            .as_deref()
+            .unwrap_or(self.default_vault_name.as_str());
+        match self.client.get_vault(target).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Create a new vault. Path must be absolute and exist. Name defaults to the \
+                       configured default name. Disabled when [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § create."
+    )]
+    async fn vault_create(
+        &self,
+        Parameters(input): Parameters<VaultCreateInput>,
+    ) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope("vault_create"));
+        }
+        let req = CreateVaultRequest {
+            name: input.name,
+            path: input.path,
+        };
+        match self.client.create_vault(&req).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+
+    #[tool(
+        description = "Permanently remove a vault from the registry; deletes its index and event \
+                       log; never touches the vault directory itself. Disabled when \
+                       [mcp] enable_write_tools = false. \
+                       See docs/specs/vault-management.md § Operations § terminate."
+    )]
+    async fn vault_terminate(
+        &self,
+        Parameters(input): Parameters<VaultTerminateInput>,
+    ) -> CallToolResult {
+        if !self.enable_write_tools {
+            return CallToolResult::structured_error(write_tools_disabled_envelope(
+                "vault_terminate",
+            ));
+        }
+        match self.client.terminate_vault(&input.target).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => CallToolResult::structured_error(envelope_from_anyhow(&self.client, &err)),
+        }
+    }
+}
+
+fn write_tools_disabled_envelope(tool_name: &str) -> Value {
+    json!({
+        "error": {
+            "code": "write_tools_disabled",
+            "message": format!(
+                "{tool_name} is disabled by config; set [mcp] enable_write_tools = true to enable vault.create/terminate"
+            ),
+        }
+    })
 }
 
 fn envelope_from_anyhow(client: &DaemonClient, err: &anyhow::Error) -> Value {
@@ -98,9 +195,10 @@ mod tests {
 
     use anyhow::anyhow;
     use axum::Router;
+    use axum::extract::Path as AxumPath;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use axum::routing::post;
+    use axum::routing::{delete, get, post};
     use serde_json::json;
     use tempfile::TempDir;
     use tokio::net::TcpListener;
@@ -111,6 +209,7 @@ mod tests {
     use crate::api::types::{
         ContentMatchJson, ContentResultJson, ContentSearchResponse, FilesystemResultJson,
         FilesystemSearchResponse, SemanticResultJson, SemanticSearchResponse,
+        TerminateVaultResponse, VaultListResponse, VaultRowJson,
     };
     use crate::config::Config;
 
@@ -156,7 +255,21 @@ mod tests {
     fn server_against(url: &str) -> HypomnemaMcpServer {
         let cfg = smoke_config();
         let client = DaemonClient::from_config(&cfg, Some(url)).unwrap();
-        HypomnemaMcpServer { client }
+        HypomnemaMcpServer {
+            client,
+            default_vault_name: cfg.default_vault_name.clone(),
+            enable_write_tools: true,
+        }
+    }
+
+    fn server_against_with_writes(url: &str, enable_write_tools: bool) -> HypomnemaMcpServer {
+        let cfg = smoke_config();
+        let client = DaemonClient::from_config(&cfg, Some(url)).unwrap();
+        HypomnemaMcpServer {
+            client,
+            default_vault_name: cfg.default_vault_name.clone(),
+            enable_write_tools,
+        }
     }
 
     #[tokio::test]
@@ -390,6 +503,232 @@ mod tests {
         assert!(
             message.contains("connection refused"),
             "message should embed cause, got {message:?}"
+        );
+    }
+
+    fn sample_vault_row(name: &str) -> VaultRowJson {
+        VaultRowJson {
+            id: "018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".into(),
+            name: name.into(),
+            path: format!("/tmp/{name}"),
+            status: "active".into(),
+            created_at: "2026-04-28T00:00:00Z".into(),
+            last_error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_list_returns_list() {
+        let app = Router::new().route(
+            "/vaults",
+            get(|| async {
+                axum::Json(VaultListResponse {
+                    vaults: vec![sample_vault_row("default"), sample_vault_row("personal")],
+                })
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against(&mock.base_url);
+
+        let result = server.vault_list().await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["vaults"][0]["name"], json!("default"));
+        assert_eq!(value["vaults"][1]["name"], json!("personal"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_status_returns_single() {
+        let app =
+            Router::new().route(
+                "/vaults/:name_or_id",
+                get(|AxumPath(name): AxumPath<String>| async move {
+                    axum::Json(sample_vault_row(&name))
+                }),
+            );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against(&mock.base_url);
+
+        let result = server
+            .vault_status(Parameters(VaultStatusInput {
+                target: Some("personal".into()),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("personal"));
+        assert_eq!(value["status"], json!("active"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_status_uses_default_vault_name_when_target_omitted() {
+        // Defends the `default_vault_name` fallback: with `target = None`,
+        // the tool addresses the daemon at the configured default name.
+        let app =
+            Router::new().route(
+                "/vaults/:name_or_id",
+                get(|AxumPath(name): AxumPath<String>| async move {
+                    axum::Json(sample_vault_row(&name))
+                }),
+            );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against(&mock.base_url);
+
+        let result = server
+            .vault_status(Parameters(VaultStatusInput { target: None }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        // server_against uses Config::default_for_smoke_test which sets
+        // default_vault_name = "default".
+        assert_eq!(value["name"], json!("default"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_create_succeeds_when_write_tools_enabled() {
+        let app = Router::new().route(
+            "/vaults",
+            post(|| async { axum::Json(sample_vault_row("notes")) }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_create(Parameters(VaultCreateInput {
+                name: Some("notes".into()),
+                path: "/tmp/notes".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["name"], json!("notes"));
+        assert_eq!(value["status"], json!("active"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_create_returns_write_tools_disabled_when_gated() {
+        // No mock daemon needed — the short-circuit must fire before any HTTP
+        // call happens. Bind a port to get a usable URL, drop the listener so
+        // a stray request would error obviously, but expect no request.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://{addr}");
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_create(Parameters(VaultCreateInput {
+                name: None,
+                path: "/tmp/x".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_create"),
+            "message should reference the gated tool, got {message:?}"
+        );
+        assert!(
+            message.contains("enable_write_tools"),
+            "message should reference the config knob, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_terminate_succeeds_when_write_tools_enabled() {
+        let app = Router::new().route(
+            "/vaults/:name_or_id",
+            delete(|AxumPath(_name): AxumPath<String>| async move {
+                axum::Json(TerminateVaultResponse {
+                    terminated: true,
+                    id: "018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".into(),
+                })
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against_with_writes(&mock.base_url, true);
+
+        let result = server
+            .vault_terminate(Parameters(VaultTerminateInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["terminated"], json!(true));
+        assert_eq!(value["id"], json!("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0"));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_terminate_returns_write_tools_disabled_when_gated() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://{addr}");
+        let server = server_against_with_writes(&url, false);
+
+        let result = server
+            .vault_terminate(Parameters(VaultTerminateInput {
+                target: "personal".into(),
+            }))
+            .await;
+
+        assert!(result.is_error.unwrap_or(false), "expected gated error");
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("write_tools_disabled"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("vault_terminate"),
+            "message should reference the gated tool, got {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_vault_list_propagates_daemon_unreachable_envelope() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://{addr}");
+        let server = server_against(&url);
+
+        let result = server.vault_list().await;
+
+        assert!(result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["error"]["code"], json!("daemon_unreachable"));
+        let message = value["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains(&url),
+            "message should contain configured URL, got {message:?}"
         );
     }
 }
