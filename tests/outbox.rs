@@ -45,7 +45,12 @@ fn fixture() -> Fixture {
     )
     .expect("write config.toml");
     let config = Config::load(Some(&cfg_path)).expect("load config");
-    let vault = config.vault.0.clone();
+    let vault = config
+        .vault
+        .as_ref()
+        .expect("test config must define [vault] block")
+        .0
+        .clone();
     let data_dir = config.storage.data_dir.0.clone();
     Fixture {
         _root: root,

@@ -10,6 +10,7 @@ pub mod client;
 pub mod config;
 pub mod embedding;
 pub mod indexer;
+pub mod legacy_state_migration;
 pub mod logging;
 pub mod mcp;
 pub mod outbox;

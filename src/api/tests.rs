@@ -8,10 +8,11 @@ use tower::ServiceExt;
 
 use std::sync::{Arc, Mutex};
 
-use super::{ApiState, router};
+use super::{ApiState, VaultEntry, router};
 use crate::config::EmbeddingConfig;
 use crate::embedding::{EmbedFuture, Embedder, EmbeddingError, StubEmbedder};
-use crate::store::Store;
+use crate::store::{SqlitePool, Store};
+use crate::vault_registry::VaultId;
 
 // 4 MB is plenty for these test bodies; we set a finite cap to satisfy
 // `to_bytes` without inviting unbounded reads.
@@ -21,6 +22,14 @@ struct Harness {
     _dir: TempDir,
     _vault: TempDir,
     state: ApiState,
+    vault_path: std::path::PathBuf,
+    outbox_path: std::path::PathBuf,
+}
+
+impl Harness {
+    fn pool(&self) -> SqlitePool {
+        self.state.vaults[0].store.pool()
+    }
 }
 
 async fn harness() -> Harness {
@@ -30,30 +39,39 @@ async fn harness() -> Harness {
 async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     let dir = TempDir::new().unwrap();
     let vault = TempDir::new().unwrap();
+    let vault_id = VaultId::new();
     let store = Store::open(
-        &crate::vault_registry::VaultId::new(),
+        &vault_id,
         dir.path(),
         "index.sqlite",
         &EmbeddingConfig::default(),
     )
     .await
     .unwrap();
+    let outbox_path = dir.path().join("outbox.jsonl");
+    let entry = VaultEntry {
+        id: vault_id,
+        name: "test".to_string(),
+        vault_path: vault.path().to_path_buf(),
+        outbox_path: outbox_path.clone(),
+        store: Arc::new(store),
+    };
     let state = ApiState {
-        pool: store.pool(),
-        vault: vault.path().to_path_buf(),
-        outbox_path: dir.path().join("outbox.jsonl"),
+        vaults: Arc::new(vec![entry]),
         embedder,
         embedding_dimension: 768,
     };
     Harness {
         _dir: dir,
         _vault: vault,
+        vault_path: state.vaults[0].vault_path.clone(),
+        outbox_path,
         state,
     }
 }
 
 async fn seed_files(state: &ApiState, rows: Vec<(&'static str, &'static str, &'static str)>) {
-    let pool = state.pool.clone();
+    let pool = state.vaults[0].store.pool();
     task::spawn_blocking(move || {
         let conn = pool.get().unwrap();
         for (path, content, indexed_at) in rows {
@@ -121,11 +139,8 @@ async fn status_reports_zero_files_when_index_empty() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["indexed_file_count"], 0);
     assert!(body["last_indexed_at"].is_null());
-    assert_eq!(body["vault"], h.state.vault.display().to_string());
-    assert_eq!(
-        body["outbox"]["path"],
-        h.state.outbox_path.display().to_string()
-    );
+    assert_eq!(body["vault"], h.vault_path.display().to_string());
+    assert_eq!(body["outbox"]["path"], h.outbox_path.display().to_string());
     assert_eq!(body["outbox"]["size_bytes"], 0);
 }
 
@@ -140,7 +155,7 @@ async fn status_reports_count_and_last_indexed_after_seeding() {
         ],
     )
     .await;
-    std::fs::write(&h.state.outbox_path, b"line1\n").unwrap();
+    std::fs::write(&h.outbox_path, b"line1\n").unwrap();
     let app = router(h.state.clone());
     let req = Request::builder()
         .method("GET")
@@ -245,37 +260,38 @@ async fn search_content_invalid_regex_returns_400_with_code() {
 }
 
 #[tokio::test]
-async fn search_response_omits_vault_field_in_v0() {
+async fn search_response_populates_vault_and_vault_name() {
+    // Step 9 onward: every search result carries `vault` (id) and
+    // `vault_name`. Spec text amendment for the four search specs lands
+    // in step 10's workplan-write per Resolution F.
     let h = harness().await;
     seed_files(
         &h.state,
         vec![("a.md", "alpha pgvector", "2026-04-01T00:00:00Z")],
     )
     .await;
+    let expected_id = h.state.vaults[0].id.to_string();
+    let expected_name = h.state.vaults[0].name.clone();
 
-    // Filesystem result entries omit vault.
+    // Filesystem result entries carry vault + vault_name.
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/filesystem", json!({})).await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
     let entry = &body["results"][0];
-    assert!(
-        entry.get("vault").is_none(),
-        "filesystem entry should omit `vault`; got {entry}"
-    );
+    assert_eq!(entry["vault"].as_str(), Some(expected_id.as_str()));
+    assert_eq!(entry["vault_name"].as_str(), Some(expected_name.as_str()));
 
-    // Content result entries omit vault.
+    // Content result entries carry vault + vault_name.
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/content", json!({ "query": "pgvector" })).await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
     let entry = &body["results"][0];
-    assert!(
-        entry.get("vault").is_none(),
-        "content entry should omit `vault`; got {entry}"
-    );
+    assert_eq!(entry["vault"].as_str(), Some(expected_id.as_str()));
+    assert_eq!(entry["vault_name"].as_str(), Some(expected_name.as_str()));
 }
 
 // ===== Semantic-search test helpers =====
@@ -331,7 +347,7 @@ async fn seed_chunk(
     content: &'static str,
     embedding: Vec<f32>,
 ) {
-    let pool = state.pool.clone();
+    let pool = state.vaults[0].store.pool();
     task::spawn_blocking(move || {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
@@ -426,7 +442,7 @@ async fn semantic_handler_returns_400_for_invalid_prefix() {
 }
 
 #[tokio::test]
-async fn semantic_handler_omits_vault_field_in_v0_response() {
+async fn semantic_handler_populates_vault_and_vault_name() {
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
     seed_files(
         &h.state,
@@ -442,6 +458,8 @@ async fn semantic_handler_omits_vault_field_in_v0_response() {
         unit_vec(&[(0, 1.0)]),
     )
     .await;
+    let expected_id = h.state.vaults[0].id.to_string();
+    let expected_name = h.state.vaults[0].name.clone();
 
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
@@ -449,10 +467,8 @@ async fn semantic_handler_omits_vault_field_in_v0_response() {
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
     let entry = &body["results"][0];
-    assert!(
-        entry.get("vault").is_none(),
-        "semantic entry should omit `vault`; got {entry}"
-    );
+    assert_eq!(entry["vault"].as_str(), Some(expected_id.as_str()));
+    assert_eq!(entry["vault_name"].as_str(), Some(expected_name.as_str()));
 }
 
 #[tokio::test]
@@ -499,7 +515,7 @@ async fn semantic_handler_default_limit_caps_at_default() {
     // more chunks are present. Seed 105 identical-vector chunks, omit
     // `limit`, expect exactly 100 results.
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
-    let pool = h.state.pool.clone();
+    let pool = h.pool();
     task::spawn_blocking(move || {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();

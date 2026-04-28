@@ -588,13 +588,23 @@ mod tests {
         let mut cfg = Config::default_for_smoke_test(vault.to_path_buf());
         // Validator normally canonicalizes vault; mimic that for tests so paths
         // line up with WalkDir's canonicalization-based outside-vault check.
-        cfg.vault.0 = fs::canonicalize(vault).unwrap();
+        let canonical = fs::canonicalize(vault).unwrap();
+        cfg.vault = Some(crate::config::ConfigPath(canonical));
         cfg
+    }
+
+    fn smoke_vault_path(config: &Config) -> std::path::PathBuf {
+        config
+            .vault
+            .as_ref()
+            .expect("smoke_config sets [vault]")
+            .0
+            .clone()
     }
 
     fn stub_scanner(config: &Config, store: &Store) -> Scanner {
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-        Scanner::new(&config.vault.0, config, store, embedder).unwrap()
+        Scanner::new(&smoke_vault_path(config), config, store, embedder).unwrap()
     }
 
     /// Embedder used by failure-path tests. Returns a `Status { code: 503, ... }`
@@ -1298,7 +1308,7 @@ mod tests {
         .unwrap();
         let recorder = RecordingEmbedder::new(768);
         let scanner = Scanner::new(
-            &config.vault.0,
+            &smoke_vault_path(&config),
             &config,
             &store,
             recorder.clone() as Arc<dyn Embedder>,
@@ -1371,7 +1381,7 @@ mod tests {
         .unwrap();
         let failing = AlwaysSkipEmbedder::new();
         let scanner = Scanner::new(
-            &config.vault.0,
+            &smoke_vault_path(&config),
             &config,
             &store,
             failing.clone() as Arc<dyn Embedder>,
@@ -1417,7 +1427,7 @@ mod tests {
         .unwrap();
         let failing = AlwaysDimensionMismatchEmbedder::new();
         let scanner = Scanner::new(
-            &config.vault.0,
+            &smoke_vault_path(&config),
             &config,
             &store,
             failing.clone() as Arc<dyn Embedder>,
@@ -1464,7 +1474,7 @@ mod tests {
         .unwrap();
         let recorder = RecordingEmbedder::new(768);
         let scanner = Scanner::new(
-            &config.vault.0,
+            &smoke_vault_path(&config),
             &config,
             &store,
             recorder.clone() as Arc<dyn Embedder>,
@@ -1525,10 +1535,20 @@ mod tests {
         .unwrap();
 
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-        let scanner_a =
-            Scanner::new(&config_a.vault.0, &config_a, &store_a, embedder.clone()).unwrap();
-        let scanner_b =
-            Scanner::new(&config_b.vault.0, &config_b, &store_b, embedder.clone()).unwrap();
+        let scanner_a = Scanner::new(
+            &smoke_vault_path(&config_a),
+            &config_a,
+            &store_a,
+            embedder.clone(),
+        )
+        .unwrap();
+        let scanner_b = Scanner::new(
+            &smoke_vault_path(&config_b),
+            &config_b,
+            &store_b,
+            embedder.clone(),
+        )
+        .unwrap();
 
         scanner_a.run().await.unwrap();
         scanner_b.run().await.unwrap();

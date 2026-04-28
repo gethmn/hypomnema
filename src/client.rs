@@ -110,7 +110,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::api::{ApiState, router};
+    use crate::api::{ApiState, VaultEntry, router};
     use crate::config::EmbeddingConfig;
     use crate::embedding::{Embedder, StubEmbedder};
     use crate::store::Store;
@@ -144,10 +144,15 @@ mod tests {
         .await
         .unwrap();
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
-        let state = ApiState {
-            pool: store.pool(),
-            vault: vault.path().to_path_buf(),
+        let entry = VaultEntry {
+            id: crate::vault_registry::VaultId::new(),
+            name: "test".to_string(),
+            vault_path: vault.path().to_path_buf(),
             outbox_path: dir.path().join("outbox.jsonl"),
+            store: Arc::new(store),
+        };
+        let state = ApiState {
+            vaults: Arc::new(vec![entry]),
             embedder,
             embedding_dimension: 768,
         };

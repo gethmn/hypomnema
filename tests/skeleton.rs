@@ -141,7 +141,11 @@ fn hmnd_config_validate_succeeds_against_valid_config() {
 }
 
 #[test]
-fn hmnd_config_validate_exits_3_when_vault_missing() {
+fn hmnd_config_validate_accepts_missing_legacy_vault_for_migration() {
+    // Step 9 onward: an inaccessible legacy [vault] path is no longer a
+    // config-validate failure (Resolution E Case 1 — the daemon migrates
+    // the legacy block into a registry row in `errored` status at runtime).
+    // `hmnd config-validate` therefore exits 0 against a missing vault path.
     let root = ScopedTmp(unique_tmp("cfgvalid-novault"));
     let absent = root.0.join("does-not-exist");
     let cfg_path = write_config(&root.0, &format!("vault = \"{}\"\n", absent.display()));
@@ -154,16 +158,10 @@ fn hmnd_config_validate_exits_3_when_vault_missing() {
 
     assert_eq!(
         out.status.code(),
-        Some(3),
-        "missing-vault config must exit 3, got {:?}; stderr={}",
+        Some(0),
+        "missing-vault config must now exit 0 (legacy migration handles it at runtime), got {:?}; stderr={}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let vault_str = absent.to_string_lossy();
-    assert!(
-        stderr.contains(vault_str.as_ref()),
-        "stderr must name the missing vault path `{vault_str}`: {stderr}"
     );
 }
 

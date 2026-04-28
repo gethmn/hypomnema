@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hypomnema::api::{self, ApiState};
+use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
@@ -40,7 +40,12 @@ fn fixture() -> Fixture {
     )
     .expect("write config.toml");
     let config = Config::load(Some(&cfg_path)).expect("load config");
-    let vault = config.vault.0.clone();
+    let vault = config
+        .vault
+        .as_ref()
+        .expect("test config must define [vault] block")
+        .0
+        .clone();
     let data_dir = config.storage.data_dir.0.clone();
     Fixture {
         _root: root,
@@ -92,10 +97,15 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
 
     let outbox_path =
         vault_data_dir(&fx.data_dir, &fx.vault_id).join(&fx.config.storage.outbox_file);
-    let state = ApiState {
-        pool: store.pool(),
-        vault: fx.vault.clone(),
+    let entry = VaultEntry {
+        id: fx.vault_id.clone(),
+        name: "test".to_string(),
+        vault_path: fx.vault.clone(),
         outbox_path: outbox_path.clone(),
+        store: Arc::new(store),
+    };
+    let state = ApiState {
+        vaults: Arc::new(vec![entry]),
         embedder,
         embedding_dimension: fx.config.embedding.dimension,
     };
@@ -471,9 +481,11 @@ async fn filesystem_search_truncated_when_limit_below_total() {
 }
 
 #[tokio::test]
-async fn search_responses_omit_vault_field_in_v0() {
+async fn search_responses_populate_vault_and_vault_name() {
+    // Step 9: every search result carries `vault` (id) + `vault_name`.
     let fx = fixture();
     seed_default_vault(&fx);
+    let expected_id = fx.vault_id.to_string();
     let daemon = spawn_live_daemon(fx).await;
 
     let body: Value = http()
@@ -488,10 +500,8 @@ async fn search_responses_omit_vault_field_in_v0() {
         .await
         .expect("JSON");
     for entry in body["results"].as_array().unwrap() {
-        assert!(
-            entry.get("vault").is_none(),
-            "filesystem entry must omit `vault`; got {entry}"
-        );
+        assert_eq!(entry["vault"].as_str(), Some(expected_id.as_str()));
+        assert_eq!(entry["vault_name"].as_str(), Some("test"));
     }
 
     let body: Value = http()
@@ -506,10 +516,8 @@ async fn search_responses_omit_vault_field_in_v0() {
         .await
         .expect("JSON");
     for entry in body["results"].as_array().unwrap() {
-        assert!(
-            entry.get("vault").is_none(),
-            "content entry must omit `vault`; got {entry}"
-        );
+        assert_eq!(entry["vault"].as_str(), Some(expected_id.as_str()));
+        assert_eq!(entry["vault_name"].as_str(), Some("test"));
     }
 
     daemon.shutdown().await;

@@ -171,6 +171,7 @@ mod tests {
                         mtime: "2026-04-27T00:00:00Z".into(),
                         content_hash: "abc".into(),
                         vault: None,
+                        vault_name: None,
                     }],
                     truncated: false,
                 })
@@ -210,6 +211,7 @@ mod tests {
                             text: "the quick brown fox".into(),
                         }],
                         vault: None,
+                        vault_name: None,
                     }],
                     truncated: false,
                 })
@@ -252,6 +254,7 @@ mod tests {
                         heading_path: vec!["H1".into(), "H2".into()],
                         text: "some chunk text".into(),
                         vault: None,
+                        vault_name: None,
                     }],
                     hint: None,
                 })

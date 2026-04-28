@@ -42,6 +42,8 @@ pub struct FilesystemResultJson {
     pub content_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -98,6 +100,8 @@ pub struct ContentResultJson {
     pub matches: Vec<ContentMatchJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -145,6 +149,8 @@ pub struct SemanticResultJson {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -202,14 +202,21 @@ fn rejects_bad_logging_level() {
 }
 
 #[test]
-fn rejects_missing_vault() {
+fn accepts_missing_legacy_vault_for_migration_to_errored() {
+    // Step 9 onward: an inaccessible legacy [vault] path no longer fails
+    // config validation. The legacy-state migration handles it by inserting
+    // a registry row in `errored` status (Resolution E Case 1). Config::load
+    // therefore succeeds and leaves the path as-given.
     let root = ScopedTmp(unique_tmp("missing-vault"));
     let absent = root.0.join("does-not-exist");
     let cfg_path = write_config(&root.0, &format!("vault = \"{}\"\n", absent.display()));
 
-    let err = Config::load(Some(&cfg_path)).expect_err("expected rejection for missing vault");
-    let msg = format!("{err:#}");
-    assert!(msg.contains("vault"), "{msg}");
+    let cfg = Config::load(Some(&cfg_path)).expect("inaccessible legacy [vault] must parse");
+    assert_eq!(
+        cfg.vault.as_ref().map(|c| c.0.clone()),
+        Some(absent),
+        "vault path is preserved as-given when canonicalize fails"
+    );
 }
 
 #[test]

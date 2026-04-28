@@ -329,6 +329,7 @@ mod tests {
             heading_path: heading_path.into_iter().map(String::from).collect(),
             text: text.to_string(),
             vault: None,
+            vault_name: None,
         }
     }
 
@@ -401,6 +402,7 @@ mod tests {
             mtime: "2026-04-01T00:00:00Z".to_string(),
             content_hash: "sha256:00".to_string(),
             vault: None,
+            vault_name: None,
         };
         assert_eq!(
             filesystem_line(&r),

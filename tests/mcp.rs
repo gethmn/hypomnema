@@ -23,7 +23,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hypomnema::api::{self, ApiState};
+use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::config::{Config, EmbeddingConfig};
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
@@ -79,7 +79,12 @@ fn fixture() -> Fixture {
     )
     .expect("write config.toml");
     let config = Config::load(Some(&cfg_path)).expect("load config");
-    let vault = config.vault.0.clone();
+    let vault = config
+        .vault
+        .as_ref()
+        .expect("test config must define [vault] block")
+        .0
+        .clone();
     let data_dir = config.storage.data_dir.0.clone();
     Fixture {
         _root: root,
@@ -166,10 +171,15 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         shutdown_rx.clone(),
     ));
 
-    let state = ApiState {
-        pool: store.pool(),
-        vault: fx.vault.clone(),
+    let entry = VaultEntry {
+        id: fx.vault_id.clone(),
+        name: "test".to_string(),
+        vault_path: fx.vault.clone(),
         outbox_path,
+        store: Arc::new(store),
+    };
+    let state = ApiState {
+        vaults: Arc::new(vec![entry]),
         embedder,
         embedding_dimension: fx.config.embedding.dimension,
     };

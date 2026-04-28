@@ -48,7 +48,12 @@ pub fn expand_tilde(p: &Path) -> PathBuf {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub vault: ConfigPath,
+    // Optional in step 9 onward (per workplan Resolution C — accept-and-warn-
+    // and-translate). When present, the legacy [vault] block is auto-migrated
+    // into a `vaults.sqlite` row at first startup; subsequent starts log a
+    // deprecation WARN and let the registry win.
+    #[serde(default)]
+    pub vault: Option<ConfigPath>,
     #[serde(default)]
     pub http: HttpConfig,
     #[serde(default)]
@@ -61,6 +66,12 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default = "default_default_vault_name")]
+    pub default_vault_name: String,
+}
+
+fn default_default_vault_name() -> String {
+    "default".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -326,36 +337,45 @@ impl Config {
     }
 
     fn validate(&mut self) -> Result<()> {
-        let vault = &self.vault.0;
-        let canonical_vault = fs::canonicalize(vault).with_context(|| {
-            format!(
-                "vault path is not accessible: {} (does it exist?)",
-                vault.display()
-            )
-        })?;
-        let meta = fs::metadata(&canonical_vault)
-            .with_context(|| format!("reading metadata for vault {}", canonical_vault.display()))?;
-        if !meta.is_dir() {
-            bail!(
-                "vault path must be a directory: {}",
-                canonical_vault.display()
-            );
-        }
-        fs::read_dir(&canonical_vault).with_context(|| {
-            format!(
-                "vault directory is not readable: {}",
-                canonical_vault.display()
-            )
-        })?;
-        self.vault.0 = canonical_vault.clone();
+        // Step 9 onward: the legacy [vault] block is best-effort validated.
+        // An inaccessible legacy path is *not* a startup error; the
+        // legacy-state migration handles it by inserting a registry row in
+        // `errored` status (Resolution E Case 1). When the path does exist
+        // and canonicalize succeeds, we still apply the v0 contract checks
+        // (must be a directory; data_dir must not live under vault per
+        // ADR-0006).
+        if let Some(ref vault) = self.vault {
+            if let Ok(canonical_vault) = fs::canonicalize(&vault.0) {
+                let meta = fs::metadata(&canonical_vault).with_context(|| {
+                    format!("reading metadata for vault {}", canonical_vault.display())
+                })?;
+                if !meta.is_dir() {
+                    bail!(
+                        "vault path must be a directory: {}",
+                        canonical_vault.display()
+                    );
+                }
+                fs::read_dir(&canonical_vault).with_context(|| {
+                    format!(
+                        "vault directory is not readable: {}",
+                        canonical_vault.display()
+                    )
+                })?;
 
-        let resolved_data_dir = resolve_existing_ancestors(&self.storage.data_dir.0);
-        if resolved_data_dir.starts_with(&canonical_vault) {
-            bail!(
-                "storage.data_dir ({}) must not be under vault ({}). See ADR-0006.",
-                self.storage.data_dir.0.display(),
-                canonical_vault.display()
-            );
+                let resolved_data_dir = resolve_existing_ancestors(&self.storage.data_dir.0);
+                if resolved_data_dir.starts_with(&canonical_vault) {
+                    bail!(
+                        "storage.data_dir ({}) must not be under vault ({}). See ADR-0006.",
+                        self.storage.data_dir.0.display(),
+                        canonical_vault.display()
+                    );
+                }
+                self.vault = Some(ConfigPath(canonical_vault));
+            }
+        }
+
+        if self.default_vault_name.trim().is_empty() {
+            bail!("default_vault_name must not be empty");
         }
 
         parse_level(&self.logging.level, "logging.level")?;
@@ -368,13 +388,14 @@ impl Config {
     #[cfg(test)]
     pub fn default_for_smoke_test(vault: PathBuf) -> Self {
         Self {
-            vault: ConfigPath(vault),
+            vault: Some(ConfigPath(vault)),
             http: HttpConfig::default(),
             mcp: McpConfig::default(),
             embedding: EmbeddingConfig::default(),
             watcher: WatcherConfig::default(),
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
+            default_vault_name: default_default_vault_name(),
         }
     }
 }
@@ -468,9 +489,13 @@ mod tests {
     #[test]
     fn smoke_default_uses_caller_vault() {
         let cfg = Config::default_for_smoke_test(PathBuf::from("/tmp/smoke-vault"));
-        assert_eq!(cfg.vault.0, PathBuf::from("/tmp/smoke-vault"));
+        assert_eq!(
+            cfg.vault.as_ref().map(|c| c.0.clone()),
+            Some(PathBuf::from("/tmp/smoke-vault"))
+        );
         assert_eq!(cfg.http.bind, "127.0.0.1:7777");
         assert_eq!(cfg.embedding.dimension, 768);
         assert_eq!(cfg.logging.level, "info");
+        assert_eq!(cfg.default_vault_name, "default");
     }
 }
