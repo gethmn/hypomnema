@@ -249,4 +249,77 @@ mod tests {
         let schema = schema_for!(FilesystemSearchResponse);
         assert!(schema.as_object().is_some_and(|o| !o.is_empty()));
     }
+
+    #[test]
+    fn filesystem_search_response_serializes_vault_and_vault_name() {
+        // Per workplan § Task 9.6 + Resolution F: every step-9 search result
+        // carries `vault` (id) and `vault_name`. Pin the populated wire shape
+        // at the serde level so any drift in the per-result struct surfaces
+        // here, independent of handler-level annotation.
+        let resp = FilesystemSearchResponse {
+            results: vec![FilesystemResultJson {
+                path: "notes/a.md".to_string(),
+                size: 5,
+                mtime: "2026-04-25T00:00:00Z".to_string(),
+                content_hash: "sha256:00".to_string(),
+                vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
+                vault_name: Some("default".to_string()),
+            }],
+            truncated: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        let entry = &v["results"][0];
+        assert_eq!(
+            entry["vault"].as_str(),
+            Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0")
+        );
+        assert_eq!(entry["vault_name"].as_str(), Some("default"));
+    }
+
+    #[test]
+    fn content_search_response_serializes_vault_and_vault_name() {
+        let resp = ContentSearchResponse {
+            results: vec![ContentResultJson {
+                path: "notes/a.md".to_string(),
+                match_count: 1,
+                matches: vec![ContentMatchJson {
+                    line: 1,
+                    text: "alpha".to_string(),
+                }],
+                vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
+                vault_name: Some("default".to_string()),
+            }],
+            truncated: false,
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        let entry = &v["results"][0];
+        assert_eq!(
+            entry["vault"].as_str(),
+            Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0")
+        );
+        assert_eq!(entry["vault_name"].as_str(), Some("default"));
+    }
+
+    #[test]
+    fn semantic_search_response_serializes_vault_and_vault_name() {
+        let resp = SemanticSearchResponse {
+            results: vec![SemanticResultJson {
+                score: 0.95,
+                file_path: "notes/a.md".to_string(),
+                chunk_index: 0,
+                heading_path: vec!["Intro".to_string()],
+                text: "alpha body".to_string(),
+                vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
+                vault_name: Some("default".to_string()),
+            }],
+            hint: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        let entry = &v["results"][0];
+        assert_eq!(
+            entry["vault"].as_str(),
+            Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0")
+        );
+        assert_eq!(entry["vault_name"].as_str(), Some("default"));
+    }
 }

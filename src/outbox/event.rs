@@ -126,6 +126,30 @@ mod tests {
     }
 
     #[test]
+    fn outbox_event_serializes_vault_id_only() {
+        // Per workplan § Task 9.6 + ADR-0009: outbox lines carry `vault: <id>`
+        // but never `vault_name` (durable channel; names rot). This test pins
+        // the no-name invariant so a future drift adding a name field shows
+        // up as a clear assertion failure.
+        let id = VaultId::from_string("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string());
+        let ev = ChangeEvent::now(
+            id,
+            EventType::Modified,
+            "notes/a.md".to_string(),
+            Some("sha256:abc".to_string()),
+        );
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(
+            s.contains("\"vault\":"),
+            "outbox line must carry vault id; got: {s}"
+        );
+        assert!(
+            !s.contains("vault_name"),
+            "outbox line must NOT carry vault_name; got: {s}"
+        );
+    }
+
+    #[test]
     fn outbox_event_carries_vault_id() {
         // Per workplan § Task 9.4: every outbox event line carries the
         // vault: <id> field. This test pins the wire shape against a known
