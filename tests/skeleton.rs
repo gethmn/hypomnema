@@ -102,10 +102,6 @@ fn hmnd_help_succeeds() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("scan"),
-        "hmnd help missing `scan`: {stdout}"
-    );
-    assert!(
         stdout.contains("config-validate"),
         "hmnd help missing `config-validate`: {stdout}"
     );
@@ -160,65 +156,6 @@ fn hmnd_config_validate_accepts_missing_legacy_vault_for_migration() {
         out.status.code(),
         Some(0),
         "missing-vault config must now exit 0 (legacy migration handles it at runtime), got {:?}; stderr={}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn hmnd_scan_succeeds_against_one_file_vault() {
-    let root = ScopedTmp(unique_tmp("scan-one-file"));
-    let vault = root.0.join("vault");
-    let data_dir = root.0.join("data");
-    fs::create_dir_all(&vault).unwrap();
-    fs::write(vault.join("hello.md"), b"# hello").unwrap();
-    let cfg_path = write_config(
-        &root.0,
-        &format!(
-            "vault = \"{}\"\n[storage]\ndata_dir = \"{}\"\n",
-            vault.display(),
-            data_dir.display(),
-        ),
-    );
-
-    let out = hmnd()
-        .args(["scan", "--config"])
-        .arg(&cfg_path)
-        .output()
-        .expect("run hmnd scan");
-
-    assert!(
-        out.status.success(),
-        "hmnd scan against one-file vault should exit 0: status={:?} stderr={}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-#[test]
-fn hmnd_scan_succeeds_against_empty_vault() {
-    let root = ScopedTmp(unique_tmp("scan-empty"));
-    let vault = root.0.join("vault");
-    let data_dir = root.0.join("data");
-    fs::create_dir_all(&vault).unwrap();
-    let cfg_path = write_config(
-        &root.0,
-        &format!(
-            "vault = \"{}\"\n[storage]\ndata_dir = \"{}\"\n",
-            vault.display(),
-            data_dir.display(),
-        ),
-    );
-
-    let out = hmnd()
-        .args(["scan", "--config"])
-        .arg(&cfg_path)
-        .output()
-        .expect("run hmnd scan");
-
-    assert!(
-        out.status.success(),
-        "hmnd scan against empty vault should exit 0: status={:?} stderr={}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );

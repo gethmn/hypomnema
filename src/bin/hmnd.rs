@@ -9,11 +9,9 @@ use hypomnema::api::{self, ApiState};
 use hypomnema::config::Config;
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, EmbeddingClient, embed_health_probe};
-use hypomnema::indexer::Scanner;
 use hypomnema::legacy_state_migration;
 use hypomnema::logging::{self, BinaryKind};
 use hypomnema::shutdown;
-use hypomnema::store::Store;
 use hypomnema::vault_registry::VaultRegistry;
 
 #[derive(Debug, Parser)]
@@ -31,8 +29,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Walk the vault and reconcile the index without starting servers.
-    Scan,
     /// Parse and validate the configuration file, then exit.
     ConfigValidate,
 }
@@ -66,7 +62,6 @@ async fn main() -> ExitCode {
 async fn dispatch(command: Option<Command>, config: Config) -> Result<()> {
     match command {
         None => run_daemon(config).await,
-        Some(Command::Scan) => do_scan(&config).await,
         Some(Command::ConfigValidate) => Ok(()),
     }
 }
@@ -169,57 +164,5 @@ async fn run_daemon(config: Config) -> Result<()> {
     drop(vault_manager);
 
     tracing::info!("hmnd: drain complete, exiting cleanly");
-    Ok(())
-}
-
-async fn do_scan(config: &Config) -> Result<()> {
-    let registry = VaultRegistry::open(&config.storage.data_dir.0)
-        .await
-        .context("opening vault_registry")?;
-    legacy_state_migration::run_if_needed(config, &registry)
-        .await
-        .context("running legacy-state migration")?;
-
-    let active_rows = registry
-        .list_active()
-        .await
-        .context("listing active vault rows")?;
-
-    if active_rows.is_empty() {
-        tracing::warn!("hmn scan: no active vaults — nothing to scan");
-        return Ok(());
-    }
-
-    let client =
-        EmbeddingClient::new(&config.embedding).context("constructing embedding client")?;
-    embed_health_probe(&client, &config.embedding).await;
-    let embedder: Arc<dyn Embedder> = Arc::new(client);
-
-    for row in &active_rows {
-        let store = Store::open(
-            &row.id,
-            &config.storage.data_dir.0,
-            &config.storage.index_file,
-            &config.embedding,
-        )
-        .await
-        .with_context(|| format!("opening store for {}", row.id))?;
-        let scanner = Scanner::new(&row.path, config, &store, embedder.clone())
-            .with_context(|| format!("constructing scanner for {}", row.id))?;
-        let report = scanner
-            .run()
-            .await
-            .with_context(|| format!("running scan for {}", row.id))?;
-        tracing::info!(
-            vault_id = %row.id,
-            vault_name = %row.name,
-            "hmnd: scan complete: inserted={} updated={} hash_unchanged={} deleted={} in {:.2}s",
-            report.inserted,
-            report.updated,
-            report.hash_unchanged,
-            report.deleted,
-            report.duration.as_secs_f64()
-        );
-    }
     Ok(())
 }

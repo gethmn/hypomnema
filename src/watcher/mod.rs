@@ -31,9 +31,9 @@
 //!
 //! `notify` does not follow symlinks by default. The step-2 walker does
 //! (`WalkDir::follow_links(true)`), so a file reachable only via a
-//! symlink inside the vault will be picked up by `hmnd scan` and on the
-//! daemon's startup re-scan, but live edits to it will not produce a
-//! watcher event until the next restart. Documented as a v0 trade-off
+//! symlink inside the vault will be picked up by `hmn vault rescan` and
+//! on the daemon's startup re-scan, but live edits to it will not produce
+//! a watcher event until the next restart. Documented as a v0 trade-off
 //! rather than worked around — the startup re-scan is the safety net.
 
 pub mod filter;
