@@ -74,7 +74,7 @@ This ADR amends [ADR-0012](./0012-mcp-transport-stdio-v0.md) (a one-row entry in
 - Extends [ADR-0005: Local Everything](./0005-local-everything.md) — the local-everything trust boundary is what justifies HTTP-MCP's no-auth / no-TLS / loopback-only default. The HTTP-MCP transport inherits whatever posture the listener is configured with; it does not introduce its own.
 - Related to [ADR-0011: Vault Management Lives on `hmn`](./0011-vault-management-on-hmn.md) — the round-3 vault-management MCP tools (`vault_*`) are served over HTTP-MCP via the same `HypomnemaBackend` trait that backs stdio MCP. The `[mcp] enable_write_tools` flag governs both transports identically.
 - Specification: [`docs/specs/mcp-streamable-http.md`](../specs/mcp-streamable-http.md) records the wire shape, Origin allow-list, configuration knobs, examples, and edge cases.
-- Workplan: round-4 step 12 ([`notes/roadmap/step-12-workplan.md`](../../notes/roadmap/step-12-workplan.md), archived at boundary) records the deferred-decision resolutions A–E (rmcp transport availability + axum mount; sessions; resumable SSE; CORS; `mcp.http.path`) and the `HypomnemaBackend` trait shape (Resolution G).
+- Workplan: round-4 step 12 ([`notes/roadmap/archive/step-12-workplan.md`](../../notes/roadmap/archive/step-12-workplan.md), archived at boundary) records the deferred-decision resolutions A–E (rmcp transport availability + axum mount; sessions; resumable SSE; CORS; `mcp.http.path`) and the `HypomnemaBackend` trait shape (Resolution G).
 
 ## Amendments
 
