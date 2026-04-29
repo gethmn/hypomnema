@@ -6,6 +6,23 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      outbox_stress:
+        description: "Run the temporary step-14 outbox stress jobs"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      ubuntu_outbox_runs:
+        description: "Ubuntu outbox stress loop count"
+        required: false
+        default: "10"
+      macos_outbox_runs:
+        description: "macOS outbox stress loop count"
+        required: false
+        default: "50"
 
 permissions:
   contents: read
@@ -83,3 +100,73 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: warn
           retention-days: 7
+
+  outbox-stress-ubuntu:
+    name: outbox stress (ubuntu)
+    if: github.event_name == 'workflow_dispatch' && inputs.outbox_stress == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OUTBOX_STRESS_RUNS: ${{ inputs.ubuntu_outbox_runs }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (rust-toolchain.toml drives the actual version)
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          shared-key: outbox-stress-ubuntu
+      - uses: taiki-e/install-action@a987447a36adfd8769c91cf36dd91c79b8452fe0 # nextest (named alias)
+      - name: Run outbox stress loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          pass=0
+          fail=0
+          start=$(date +%s)
+          for i in $(seq 1 "$OUTBOX_STRESS_RUNS"); do
+            if cargo nextest run --test outbox; then
+              pass=$((pass + 1))
+              printf 'run %02d: PASS\n' "$i"
+            else
+              fail=$((fail + 1))
+              printf 'run %02d: FAIL\n' "$i"
+            fi
+          done
+          end=$(date +%s)
+          elapsed=$((end - start))
+          printf 'SUMMARY pass=%d fail=%d total=%s elapsed_s=%d\n' "$pass" "$fail" "$OUTBOX_STRESS_RUNS" "$elapsed"
+          [ "$fail" -eq 0 ]
+
+  outbox-stress-macos:
+    name: outbox stress (macos)
+    if: github.event_name == 'workflow_dispatch' && inputs.outbox_stress == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      OUTBOX_STRESS_RUNS: ${{ inputs.macos_outbox_runs }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (rust-toolchain.toml drives the actual version)
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          shared-key: outbox-stress-macos
+      - uses: taiki-e/install-action@a987447a36adfd8769c91cf36dd91c79b8452fe0 # nextest (named alias)
+      - name: Run outbox stress loop
+        shell: bash
+        run: |
+          set -euo pipefail
+          pass=0
+          fail=0
+          start=$(date +%s)
+          for i in $(seq 1 "$OUTBOX_STRESS_RUNS"); do
+            if cargo nextest run --test outbox; then
+              pass=$((pass + 1))
+              printf 'run %02d: PASS\n' "$i"
+            else
+              fail=$((fail + 1))
+              printf 'run %02d: FAIL\n' "$i"
+            fi
+          done
+          end=$(date +%s)
+          elapsed=$((end - start))
+          printf 'SUMMARY pass=%d fail=%d total=%s elapsed_s=%d\n' "$pass" "$fail" "$OUTBOX_STRESS_RUNS" "$elapsed"
+          [ "$fail" -eq 0 ]
