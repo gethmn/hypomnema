@@ -1,0 +1,17 @@
+# Default profile applies to local `cargo nextest run` and `just test`.
+# It currently inherits nextest's built-in defaults; named here for forward-compat.
+[profile.default]
+
+# CI profile — invoked from `.github/workflows/ci.yml` as `cargo nextest run --profile ci`.
+# Differences from default:
+#   - immediate-final failure output: prints failures inline AND at the end (CI logs are read top-to-bottom).
+#   - JUnit XML report at target/nextest/ci/junit.xml (consumed by GitHub Actions test reporting).
+#   - 0 retries: a flake in CI is a signal we want to see, not silence (the v0 anti-flake stance).
+[profile.ci]
+failure-output = "immediate-final"
+final-status-level = "all"
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+[profile.ci.junit]
+path = "junit.xml"

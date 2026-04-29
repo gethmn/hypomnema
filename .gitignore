@@ -3,3 +3,6 @@
 result
 result-*
 .DS_Store
+# Negate global gitignore rule that ignores .config/ — nextest.toml belongs in the repo.
+!.config/
+!.config/nextest.toml
