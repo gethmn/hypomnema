@@ -243,6 +243,10 @@ If a step is hard, ship the previous one and keep using it. Step 5 (filesystem +
 - Integration tests use a real temp directory, a real SQLite file, and a stubbed embedding endpoint
 - The watcher tests run against simulated editor saves and simulated sync-tool writes to verify the content-hash gate works
 
+### CI
+
+Tests run under `cargo-nextest` locally and in CI. The GitHub Actions pipeline (`.github/workflows/ci.yml`) runs `fmt`, `clippy`, and `nextest` on every push to `main` and every PR, across Ubuntu and macOS. See [`docs/specs/ci-pipeline.md`](../specs/ci-pipeline.md) for the full pipeline specification.
+
 ---
 
 ## Pitfalls

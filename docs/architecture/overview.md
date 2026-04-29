@@ -291,6 +291,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Deployability | Two self-contained binaries plus one extension file | Rust statically-linked build ([ADR-0002](../decisions/0002-rust-over-python.md)); daemon (`hmnd`) and CLI client (`hmn`) ship together ([ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)); sqlite-vec as a `.so`/`.dylib`/`.dll` ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Agent ergonomics | An agent can compose filesystem → content → semantic searches naturally | All three as peer MCP operations ([ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) |
 | Vault isolation | Cross-vault state leakage prevented; per-vault terminate is safe | Per-vault data subdirectory (`<data_dir>/vaults/<id>/`); vault-id-keyed schema; control-plane operations serialized per-vault ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
+| CI quality gate | Every push to `main` and every PR runs format, lint, and test (Ubuntu + macOS) before merge | GitHub Actions CI pipeline; see [`docs/specs/ci-pipeline.md`](../specs/ci-pipeline.md) |
 
 ---
 
