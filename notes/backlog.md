@@ -11,16 +11,30 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 ---
 
-## Round-4 candidates
+## Round-5 candidates (pulled into roadmap-5.md)
 
-Items raised at the round-3 boundary that have no roadmap slot yet. Round-4 (or later) workplans pull from here; un-scoped is a valid state.
+Items raised at the round-3/4 boundary and pulled into round 5. See [`notes/roadmap/roadmap-5.md`](roadmap/roadmap-5.md) for the full workstream scoping.
 
-- **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred to round 4 because the round-3 workplan budget was already at scope without it.
-- **CHANGELOG.md adoption.** Round-3 ships as `v0.2.0` (round-3 shipping gate); the boundary is a natural moment to settle whether the project starts a CHANGELOG. Carried as a step-11 boundary follow-up.
-- **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is round-4+ if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
-- **Round-4 flake-hardening pass on `tests/outbox.rs::rename_emits_deleted_then_created_lines`.** Pre-existing ~17%-repro flake carried from steps 6/7/10; not encountered in step-11's 3× flake-check or full smoke matrix runs. Needs investigation against macOS / Linux event-coalescing semantics. Step-11 did not touch this surface.
-- **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as round-4+ if a use-case surfaces.
-- **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Round-4+.
+- ~~**CHANGELOG.md adoption.**~~ **Pulled into round 5** (step 15 — shipping gate).
+- ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Pulled into round 5** (step 14 — investigation + fix or characterize).
+- ~~**CI pipeline (GitHub Actions).**~~ **Pulled into round 5** (step 13 — `ci.yml` + `dependabot.yml` + spec promotion). Source proposal: `notes/proposals/ci-cd-pipeline.md`.
+
+## Round-6 candidates
+
+Items not yet scoped to a round. Un-scoped is a valid state.
+
+- **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred past rounds 4 and 5.
+- **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is round-6+ if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
+- **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as a future candidate if a use-case surfaces.
+- **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Round-6+.
+- **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope for round 5; round-6+ when the project needs binary distribution.
+- **OSSF Scorecard / CodeQL.** Security tooling for when the project has public visibility. Round-6+.
+- **Windows CI matrix.** Current CI scope is unix-only (ubuntu + macos). Add when Windows support becomes a project goal.
+- **Search-error classification: replace string-prefix routing with typed errors.** Today [`From<anyhow::Error> for ApiError`](../src/api/error.rs) and [`anyhow_is_request_validation`](../src/api/search.rs) classify errors by formatting the chain with `{err:#}` and matching `starts_with("invalid_glob")` / `"invalid_regex"` / `"invalid_prefix"`. The producers ([`search/content.rs`](../src/search/content.rs), [`search/filesystem.rs`](../src/search/filesystem.rs), [`search/mod.rs::normalize_prefix`](../src/search/mod.rs)) emit `anyhow!("invalid_regex: {e}")` etc. Any future `.context(...)` wrap upstream of these sentinels silently degrades the response from 400 to 500 with no test coverage of that case. [`SemanticSearchError::InvalidPrefix`](../src/search/semantic.rs) already half-models this and ends up re-parsing its own Display string. **Round-N research**: confirm the sentinel-prefix pattern is the only contract today, then introduce a small typed error (per-search-mode or a shared `SearchValidationError`) that the API layer pattern-matches structurally. Source: amp code review 2026-04-28 ([notes/amp-code-review.md](amp-code-review.md) preface).
+- **`path_under` / `paths_equal` swallow canonicalize failures.** [`src/control_plane/manager.rs`](../src/control_plane/manager.rs) helpers fall back to `to_path_buf()` on canonicalize error, then run `starts_with` / `==`. For `path_under`, the data-dir-under-vault check during `create` can pass spuriously when either path is inaccessible. For `paths_equal`, two un-canonicalizable paths spelled differently compare unequal, so the `VaultPathConflict` precheck could let two registry rows resolve to the same logical directory. The `canonicalize_for_create` call earlier in `create` mitigates the second case for the *new* path but not for an existing row whose stored path is now inaccessible. **Round-N research**: enumerate the call sites, decide whether "can't canonicalize" should fail closed (return `VaultPathInvalid`) or open with a logged warning. Source: amp code review 2026-04-28.
+- **Embedding-skipped files produce no consumer-level signal.** [`src/indexer/mod.rs::process_entry`](../src/indexer/mod.rs) returns `ProcessEffect::EmbeddingSkipped` on transient embedding failure; the public `ReindexOutcome` collapses that to `HashUnchanged`; [`watcher::apply_event`](../src/watcher/mod.rs) treats `HashUnchanged` as a silent no-op. Net: a modified-on-disk file that hits an embedding outage produces no outbox event and no warn log at the consumer level (the indexer-level error log is there but isn't tied to the watch-event surface). For an operator tailing the outbox, a real change just doesn't show up. **Round-N research**: confirm this is the live behavior under a stub embedder that returns `Transport`; decide between (a) propagating `EmbeddingSkipped` through `ReindexOutcome` so the watcher can log specifically, or (b) emitting an `info` line at the watcher when an `Upsert` collapses to `HashUnchanged`. Source: amp code review 2026-04-28.
+
+---
 
 ## Multi-vault — shipped in Round 3
 
@@ -46,8 +60,8 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 
 ## Operational follow-ups
 
-- **Outbox flake under `cargo nextest run --fail-fast` cancellation.** Carried from steps 6 and 7; not encountered in steps 8–11 (step 11's 3× flake-check + full smoke matrix were clean). Future flake-investigation candidate. Now duplicated under § Round-4 candidates as the `rename_emits_deleted_then_created_lines`-specific entry; consolidate when round-4 workplan picks it up.
-- **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — round 3's first build that exercises sqlite-vec will need it again.
+- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 5** (step 14). Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). Root-cause and fix/characterization happens in step 14.
+- **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — any future round that exercises sqlite-vec from a fresh dev shell will need it again.
 - **Brand-identity override revisit on rmcp major version upgrade.** ADR-0012 § Negative consequences notes this: the `#[tool_handler(name = "hypomnema")]` macro syntax is rmcp-macros-1.5.0-specific.
 
 ## Public-presence / brand work — no roadmap slot yet
