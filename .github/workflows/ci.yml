@@ -115,6 +115,16 @@ jobs:
         with:
           shared-key: outbox-stress-ubuntu
       - uses: taiki-e/install-action@a987447a36adfd8769c91cf36dd91c79b8452fe0 # nextest (named alias)
+      - name: Install sqlite-vec extension
+        shell: bash
+        run: |
+          SQLITE_VEC_VERSION="v0.1.9"
+          EXT_DIR="$HOME/.local/share/hypomnema"
+          mkdir -p "$EXT_DIR"
+          URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz"
+          curl -fsSL "$URL" -o /tmp/sqlite-vec.tar.gz
+          tar xzf /tmp/sqlite-vec.tar.gz -C "$EXT_DIR"
+          mv "$EXT_DIR/vec0.so" "$EXT_DIR/sqlite-vec.so"
       - name: Run outbox stress loop
         shell: bash
         run: |
@@ -150,6 +160,19 @@ jobs:
         with:
           shared-key: outbox-stress-macos
       - uses: taiki-e/install-action@a987447a36adfd8769c91cf36dd91c79b8452fe0 # nextest (named alias)
+      - name: Install sqlite-vec extension
+        shell: bash
+        run: |
+          SQLITE_VEC_VERSION="v0.1.9"
+          EXT_DIR="$HOME/.local/share/hypomnema"
+          mkdir -p "$EXT_DIR"
+          ARCH=$(uname -m)
+          # sqlite-vec uses aarch64, not arm64 (macOS uname convention differs)
+          [ "$ARCH" = "arm64" ] && ARCH="aarch64"
+          URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/sqlite-vec-0.1.9-loadable-macos-${ARCH}.tar.gz"
+          curl -fsSL "$URL" -o /tmp/sqlite-vec.tar.gz
+          tar xzf /tmp/sqlite-vec.tar.gz -C "$EXT_DIR"
+          mv "$EXT_DIR/vec0.dylib" "$EXT_DIR/sqlite-vec.dylib"
       - name: Run outbox stress loop
         shell: bash
         run: |
