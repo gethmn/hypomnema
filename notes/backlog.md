@@ -60,7 +60,7 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 
 ## Operational follow-ups
 
-- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 5** (step 14). Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). Root-cause and fix/characterization happens in step 14.
+- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 5** (step 14). Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). Root-cause and fix/characterization happens in step 14. **Step-13 CI update**: a *second* outbox test, `deleting_file_emits_one_deleted_line_with_prior_hash` (`tests/outbox.rs:201`), reproduced on *both* macOS CI runs (run 25086730532 + workflow_dispatch run 25086929198) — consistently, not as a rare local flake. The timing-sensitive assertion fails with "expected one deleted event, got []". Same `tests/outbox.rs` file, same event-timing family. Step 14 now has two candidate tests and a reliable reproduction environment (macOS GitHub Actions runner). `tests/outbox.rs` was unchanged in step 13 (confirmed: `git log 8cd5add..f4130fd -- tests/outbox.rs` returned empty).
 - **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — any future round that exercises sqlite-vec from a fresh dev shell will need it again.
 - **Brand-identity override revisit on rmcp major version upgrade.** ADR-0012 § Negative consequences notes this: the `#[tool_handler(name = "hypomnema")]` macro syntax is rmcp-macros-1.5.0-specific.
 

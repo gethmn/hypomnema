@@ -2,7 +2,7 @@
 
 **Version**: 1.0.0
 **Date**: 2026-04-28
-**Status**: Approved
+**Status**: Shipped
 
 ---
 
@@ -113,6 +113,29 @@ jobs:
         with:
           shared-key: test-${{ matrix.os }}
       - uses: taiki-e/install-action@a987447a36adfd8769c91cf36dd91c79b8452fe0 # nextest (named alias)
+      - name: Install sqlite-vec extension
+        shell: bash
+        run: |
+          SQLITE_VEC_VERSION="v0.1.9"
+          EXT_DIR="$HOME/.local/share/hypomnema"
+          mkdir -p "$EXT_DIR"
+          case "${{ runner.os }}" in
+            Linux)
+              URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz"
+              curl -fsSL "$URL" -o /tmp/sqlite-vec.tar.gz
+              tar xzf /tmp/sqlite-vec.tar.gz -C "$EXT_DIR"
+              mv "$EXT_DIR/vec0.so" "$EXT_DIR/sqlite-vec.so"
+              ;;
+            macOS)
+              ARCH=$(uname -m)
+              # sqlite-vec uses aarch64, not arm64 (macOS uname convention differs)
+              [ "$ARCH" = "arm64" ] && ARCH="aarch64"
+              URL="https://github.com/asg017/sqlite-vec/releases/download/${SQLITE_VEC_VERSION}/sqlite-vec-0.1.9-loadable-macos-${ARCH}.tar.gz"
+              curl -fsSL "$URL" -o /tmp/sqlite-vec.tar.gz
+              tar xzf /tmp/sqlite-vec.tar.gz -C "$EXT_DIR"
+              mv "$EXT_DIR/vec0.dylib" "$EXT_DIR/sqlite-vec.dylib"
+              ;;
+          esac
       - name: cargo nextest run
         run: cargo nextest run --profile ci
       - name: Upload JUnit XML
@@ -468,6 +491,7 @@ If any SHA has advanced between workplan-write and task-execution, take the new 
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.0.1 | 2026-04-29 | Task 13.5 iteration: added `Install sqlite-vec extension` step to the `test` job. CI runners have no pre-installed sqlite-vec dylib; the step downloads v0.1.9 loadable from GitHub releases for Linux x86_64 and macOS aarch64 (with `arm64`→`aarch64` mapping for macOS `uname -m` output) and places it at `~/.local/share/hypomnema/sqlite-vec.{so,dylib}`. Status updated to Shipped. |
 | 1.0.0 | 2026-04-28 | Promoted from `notes/proposals/ci-cd-pipeline.md` (was Draft 1.0.0 dated 2026-04-28). Round-5 step 13 workplan resolutions applied: Resolution A (SHA-pinned actions with verified commit hashes including `actions/upload-artifact`), Resolution B (`.config/nextest.toml` `[profile.ci]` with JUnit XML, immediate-final output, 0 retries), Resolution C (`rust-toolchain.toml` drives toolchain via `dtolnay/rust-toolchain` action — no `with:` overrides), Resolution D (Dependabot weekly + grouped minor/patch + `cargo` + `github-actions` ecosystems), Resolution E (CI-only scope; release automation / OSSF Scorecard / Windows CI framing stays in archived proposal). § Branch Protection promoted from sub-section to top-level section. Forward-references and cross-links updated to LDS-relative paths. |
 
 ---

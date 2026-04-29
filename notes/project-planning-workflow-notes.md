@@ -879,3 +879,53 @@ The `mcp-http-transport` skill recommended at round-3's step-7 retro boundary �
 3. *The "mcp-http-transport" skill was evaluated and declined* (see step-12 retro). Round-5 planning can drop it from the candidates list.
 
 **End of round 4.** The v0.3.0 milestone has been hit: `hmnd` now exposes its full 12-tool MCP surface (3 search + 9 vault-management) over Streamable HTTP at `/mcp` on its existing Axum router, with loopback-only Origin validation as DNS-rebinding defense. Stdio MCP and HTTP-MCP coexist against the same daemon state. An MCP-HTTP-capable agent host can issue `initialize` → `tools/list` → `tools/call` over a plain HTTP connection to a local `hmnd`. The round-4 archive lives at `notes/roadmap/archive/roadmap-4.md` (moved at this boundary alongside `step-12-workplan.md`). The workflow notes file continues; round 5 will add per-step retros and an end-of-round retro for its steps below.
+
+---
+
+### Step 13 (shipped 2026-04-29)
+
+**Structured Eval**
+
+*Batching outcomes:*
+- Solo task 13.1 (spec promotion: proposal → `docs/specs/ci-pipeline.md` v1.0.0): scope = 2 doc files (new `docs/specs/ci-pipeline.md`, archived `notes/proposals/archive/ci-cd-pipeline.md`). Assessment: appropriate solo — spec promotion is a doc-shape task.
+- Solo task 13.2 (`.config/nextest.toml` CI profile): scope = 1 file. Assessment: appropriate solo — small, self-contained config.
+- Solo task 13.3 (`.github/workflows/ci.yml`): scope = 1 file. Assessment: appropriate solo — YAML authoring with SHA lookups from workplan.
+- Solo task 13.4 (`.github/dependabot.yml`): scope = 1 file. Assessment: appropriate solo — trivial YAML.
+- Solo task 13.5 (manual smoke: feature branch + GitHub Actions run + observe-then-merge): no pre-smoke code files; 2 fix commits to `ci.yml` landed during iteration. Assessment: appropriate solo — iterating on CI YAML based on CI output is a solo-friendly feedback loop.
+- Solo task 13.6 (boundary verification + roadmap-5 status update): scope = 5 files (spec, roadmap-5.md, workflow-notes.md, backlog.md, push). Assessment: appropriate solo — doc-shape boundary ritual.
+
+*Escalations:*
+- Count: 0.
+
+*Retries (task-level):*
+- Tasks with retries: Task 13.5 required 3 CI iteration cycles (3 pushes to branch before Ubuntu green). These are sub-task iterations within task 13.5, not task-level retries.
+- 2-retry ceiling hit: not applicable (CI iteration is expected for a wiring task).
+
+*Time and overhead:*
+- Total wall-clock: ~2h (estimated; 6 tasks, 3-push CI iteration cycle in task 13.5).
+- Coordinator wake-up count: low — all tasks ran in a single session.
+- Context drift: none observed.
+
+**Notes**
+
+Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, clean shipping criteria. The only non-trivial part was the CI iteration loop in task 13.5.
+
+**CI iteration root causes (task 13.5):**
+
+1. *Push 1*: Both test jobs failed — `sqlite-vec extension binary not found`. The sqlite-vec loadable dylib is a runtime dependency of `src/store/mod.rs`; CI runners have no `~/.local/share/hypomnema/sqlite-vec.{so,dylib}` pre-installed. Fix: added `Install sqlite-vec extension` step to the test job.
+
+2. *Push 2*: macOS test job failed in 23s — `tar: Error opening archive: Unrecognized archive format`. Root cause: `uname -m` returns `arm64` on macOS ARM runners, but sqlite-vec release tarballs use `aarch64` in the filename. The download URL was wrong, so `curl` returned an error page which `tar` couldn't parse. Fix: map `arm64` → `aarch64` in the shell step, and use `curl -f -o /tmp/file && tar xzf` (separate download + extract) rather than `curl | tar` (pipe hides the HTTP error code).
+
+3. *Push 3*: Ubuntu 540/540 ✅. macOS 1 failure: `hypomnema::outbox::deleting_file_emits_one_deleted_line_with_prior_hash` — timing-sensitive outbox assertion; `tests/outbox.rs` unchanged in step 13. Pre-existing outbox flake family (same file, same class as `rename_emits_deleted_then_created_lines` carry-forward). Merged per workplan guidance (do not block step 13 on a step-14-scoped flake).
+
+**New outbox flake surface in CI**: The macOS CI environment is more timing-stressed than local development, and a *different* outbox test (`deleting_file_emits_one_deleted_line_with_prior_hash`) reproduced on *both* CI macOS runs (PR push + workflow_dispatch). This is a stronger signal than the `rename_emits_deleted_then_created_lines` flake, which was silent across rounds 1–4. Step 14 now has two flake-candidate tests and a reproduction environment (macOS CI), not just a local-only ~17%-repro. The backlog entry has been updated accordingly.
+
+**Dependabot activated immediately**: within ~15 seconds of the PR merge, Dependabot opened PRs for both `cargo` and `github-actions` ecosystems. Both ecosystems confirmed active. Dependabot's first wave included: `axum` (0.7.9 → 0.8.9), `notify` (6.1.1 → 8.2.0), `notify-debouncer-full` (0.3.2 → 0.7.0), `sha2` (0.10.9 → 0.11.0), `actions/upload-artifact` (v4.6.2 → v7.0.1). These are major version bumps — each will be its own PR per the Dependabot config (`groups:` covers minor/patch only). The `notify` and `notify-debouncer-full` bumps (major) are relevant to step 14's filesystem-watching surface; defer to post-step-14.
+
+**Spec delta vs. shipped reality**: `docs/specs/ci-pipeline.md` v1.0.0 was written before CI iteration; the embedded `ci.yml` block in the spec did not include the sqlite-vec download step. Updated to v1.0.1 at step-13 boundary with the fix committed.
+
+**`retries = 0` stance held**: the `.config/nextest.toml` CI profile's `retries = 0` was not changed despite the macOS flake. The anti-flake convention (flakes are signal, not noise to suppress) is more valuable than a green badge; the macOS failure fed directly into step-14 context.
+
+**Pattern confirmed**: "wiring tasks need a CI iteration budget." The workplan correctly anticipated this (`do not paper over; iterate on failures`). The 3-push cycle is within the expected range for a first-time CI wiring task.
+
+---
