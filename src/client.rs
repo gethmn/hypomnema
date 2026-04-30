@@ -169,10 +169,7 @@ impl DaemonClient {
             let body = String::from_utf8_lossy(&bytes);
             return Err(anyhow!("daemon returned HTTP {status}: {body}"));
         }
-        let stream = resp
-            .bytes_stream()
-            .map_err(anyhow::Error::from)
-            .boxed();
+        let stream = resp.bytes_stream().map_err(anyhow::Error::from).boxed();
         Ok(stream)
     }
 
@@ -198,10 +195,7 @@ impl DaemonClient {
             let body = String::from_utf8_lossy(&bytes);
             return Err(anyhow!("daemon returned HTTP {status}: {body}"));
         }
-        let stream = resp
-            .bytes_stream()
-            .map_err(anyhow::Error::from)
-            .boxed();
+        let stream = resp.bytes_stream().map_err(anyhow::Error::from).boxed();
         Ok(stream)
     }
 }

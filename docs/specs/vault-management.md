@@ -8,7 +8,7 @@
 
 ## Overview
 
-A Hypomnema daemon owns zero or more **vaults** — directories on disk whose contents the daemon watches, indexes, and exposes via search. Vault lifecycle operations (`create`, `list`, `status`, `pause`, `resume`, `reset`, `rename`, `rescan`, `terminate`) and live event subscription (`watch`) are exposed by `hmnd` over an HTTP control plane, the `hmn` CLI, and MCP tools — same handlers, three transports where transport framing allows.
+A Hypomnema daemon owns zero or more **vaults** — directories on disk whose contents the daemon watches, indexes, and exposes via search. Vault lifecycle operations (`create`, `list`, `status`, `pause`, `resume`, `reset`, `rename`, `rescan`, `terminate`) and live event subscription (`watch`) are exposed by `hmnd` over an HTTP control plane, the `hmn` CLI, and MCP tools — same handlers, three transports where transport framing allows. The `watch` operation is available via CLI and HTTP; MCP `vault_watch` is deferred pending rmcp long-lived streaming support.
 
 Authoritative vault state lives in `<data_dir>/vaults.sqlite`. Each vault gets a per-vault subdirectory at `<data_dir>/vaults/<vault_id>/` holding its own `index.sqlite` and `meta.toml`. Operations on the same vault are serialized; operations on different vaults run in parallel. Search queries fan out across all currently-active vaults by default and can be narrowed by name or surrogate ID.
 
@@ -16,7 +16,7 @@ This spec covers the full intended surface. Per the project's LDS rule that spec
 
 - **Step 10** ships `create`, `list`, `status`, `terminate` plus the cross-vault search refinements.
 - **Step 11** (round-3 follow-on) ships `pause`, `resume`, `reset`, `rename`, `rescan` against the same wire shapes.
-- **v0 event-stream amendment** ships `watch` as a live-only change-event subscription over CLI, HTTP, and MCP where transport framing allows.
+- **v0 event-stream amendment** ships `watch` as a live-only change-event subscription over CLI and HTTP. MCP `vault_watch` is deferred pending rmcp streaming support (see [change-events.md](./change-events.md#mcp-subscription)).
 
 **Related Documents**:
 - [ADR-0009: Multi-Vault per Daemon](../decisions/0009-multi-vault-per-daemon.md)
@@ -185,7 +185,7 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 
 #### `watch` (v0 event stream)
 
-**Request**: long-lived streaming subscription by vault selector. CLI shape is `hmn vault watch [NAME|ID] [--all]`; HTTP/MCP framing is pinned in [change-events.md](./change-events.md).
+**Request**: long-lived streaming subscription by vault selector. CLI shape is `hmn vault watch [NAME|ID] [--all]`; HTTP framing is pinned in [change-events.md](./change-events.md). MCP `vault_watch` is deferred.
 
 **Flow**: resolve the requested vault or active vault set; subscribe the client to the daemon's live in-memory change event bus; stream newline-delimited event envelopes until disconnect, daemon shutdown, vault termination, or stream error.
 
@@ -341,7 +341,7 @@ The lifecycle operations plus the live event subscription are exposed as MCP too
 | `vault_reset` | Write (gated) | Step 11 |
 | `vault_rename` | Write (gated) | Step 11 |
 | `vault_rescan` | Write (gated) | Step 11 |
-| `vault_watch` | Read-only, long-lived | v0 event stream |
+| `vault_watch` | Read-only, long-lived | **deferred** — pending rmcp streaming support |
 
 **Gating**: a single config key `[mcp] enable_write_tools: bool` (default `true`) controls whether the write tools are advertised. When `false`, only the read-only tools are listed in the MCP `tools/list` response and `tools/call` against any write tool returns a structured `write_tools_disabled` error.
 
@@ -351,7 +351,7 @@ The lifecycle operations plus the live event subscription are exposed as MCP too
 - Future write tools inherit the same gate. No config-key-explosion across rounds.
 - Operators wanting strict opt-out get a single-line config edit (`[mcp] enable_write_tools = false`).
 
-Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically. `vault_watch` is read-only and is not affected by write-tool gating, but its exact streaming framing depends on the MCP transport support described in [change-events.md](./change-events.md#mcp-subscription).
+Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically. `vault_watch` is not shipped in v0: `rmcp` 1.5.0 does not expose a server-side API for long-lived push streaming from a tool call. MCP clients can consume live change events via the daemon's HTTP watch endpoints (`GET /vaults/{id}/watch`, `GET /events/watch`). See [change-events.md](./change-events.md#mcp-subscription) for the deferred MCP streaming design note.
 
 ### Compose-Style Declarative Layer (deferred)
 
@@ -798,3 +798,4 @@ Same operations as HTTP, registered as tools. Read-only tools always advertised;
 | 1.0.0 | 2026-04-27 | Fleshed from outline; commits step-10 workplan resolutions. Status: Draft → Approved. Pinned: UUIDv7 ID format; eight cross-vault search semantics resolutions; per-vault async-mutex concurrency; MCP single-flag write-tool gating; full HTTP error catalog; full operations specification (step 10 ships 4; step 11 ships 5). Removed resolved Open Questions; preserved round-4+ items. |
 | 1.1.0 | 2026-04-28 | Step 12 workplan: small wording amendment to § MCP Tool Surface naming both stdio MCP and HTTP MCP transports as peers serving the same tool list. No behavioral change. |
 | 1.2.0 | 2026-04-30 | Added `watch` / `vault_watch` as a live-only event subscription and removed JSONL outbox semantics from the public v0 contract. |
+| 1.3.0 | 2026-04-30 | Task 16.6 rmcp verification: marked `vault_watch` as deferred in MCP tool surface table and overview; updated `watch` operation request description and overview sentence to note MCP deferral; confirmed HTTP/CLI watch is the v0 streaming surface. |

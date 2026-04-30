@@ -109,15 +109,14 @@ The response body is **newline-delimited JSON** (one JSON event envelope per lin
 
 ### MCP Subscription
 
-MCP streaming for `vault_watch` is **deferred** pending implementation verification in Task 16.6. The exact framing supported by the pinned `rmcp` version must be verified before a `vault_watch` tool is shipped.
+MCP streaming for `vault_watch` is **deferred** pending explicit architectural design for long-lived resource subscriptions in a future `rmcp` version or v1+ framing.
 
-If Task 16.6 confirms a clean long-lived MCP framing:
-- `vault_watch` will be added as a read-only tool with the same live-only semantics as the HTTP/CLI surface.
+**v0 Status**: `vault_watch` tool is **not** shipped in v0. Verified in Task 16.6: `rmcp` 1.5.0 exposes `subscribe`/`unsubscribe` resource handler stubs that default to `method_not_found`, but provides no server-side API for proactively pushing notifications from a tool call — `CallToolResult` is a single-response type, not a stream. The MCP tool surface exposes only request/response operations (`vault_status`, vault CRUD). MCP clients can consume live change events by accessing the daemon's HTTP watch endpoints (`GET /vaults/{id}/watch`, `GET /events/watch`) through their host/runtime integration until a separate MCP-streaming workplan pins the transport shape.
+
+**Future Direction** (v1+): if and when `rmcp` or MCP spec adds native long-lived streaming support (e.g., resource subscriptions, server notifications), the design for `vault_watch` would mirror the HTTP/CLI surface:
 - `target?: string` selects one vault by name or ID; omission follows the same default-vault resolution as `vault_status`.
 - `all?: bool` subscribes to all active vaults.
-- There is no `since` argument in v0.
-
-If no clean implementation exists under the current `rmcp` version, `vault_watch` remains absent from the MCP tool surface and this section is updated to document the deferral. MCP hosts can consume the HTTP endpoint through their host/runtime integration until a separate MCP-streaming workplan pins the transport shape.
+- Live-only semantics; no `since` argument, no replay.
 
 ---
 
@@ -216,10 +215,10 @@ Future event types may need to go beyond path-level file changes. Examples inclu
 
 ## Open Questions
 
-- [ ] Exact MCP framing for `vault_watch` under the pinned `rmcp` version — deferred to Task 16.6 implementation verification; if no clean shape exists, `vault_watch` is not shipped in v0 MCP.
 - [ ] Whether `hmn vault watch --all` should include vaults created after the command starts or only the active set at subscription time. v0 pins to active-at-subscription-time per the workplan default; a spec amendment can relax this.
 - [ ] Whether reset/rebuild should emit a v0 control event, or whether lifecycle operations remain visible only through the control-plane response.
 - [ ] Whether a future durable stream belongs in each per-vault `index.sqlite`, in `vaults.sqlite`, or in a separate daemon-level event store.
+- [ ] MCP streaming design for `vault_watch` tool pending explicit rmcp support for long-lived subscriptions (v1+ framing).
 
 ---
 
@@ -232,3 +231,4 @@ Future event types may need to go beyond path-level file changes. Examples inclu
 | 0.2.0 | 2026-04-27 | Multi-vault adoption: per-vault outbox path and `vault` field semantics. |
 | 0.3.0 | 2026-04-30 | Replaced JSONL outbox as public v0 contract with a live internal event bus exposed through CLI/HTTP/MCP; durable replay moved to future event-store design. |
 | 0.4.0 | 2026-04-30 | Pinned NDJSON as the HTTP/CLI v0 framing; narrowed MCP `vault_watch` to deferred pending Task 16.6 rmcp verification; closed HTTP-framing open question. |
+| 0.4.1 | 2026-04-30 | Task 16.6: updated § MCP Subscription to record that rmcp 1.5.0 was inspected and confirmed to lack server-side push streaming from tool calls; decision to defer is final for v0. |
