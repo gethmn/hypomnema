@@ -2,7 +2,7 @@
 
 **Status**: Shipped 2026-04-30
 
-**Roadmap**: [`notes/roadmap/roadmap-6.md`](./roadmap-6.md) Step 16.
+**Roadmap**: [`notes/roadmap/roadmap-6.md`](../roadmap-6.md) Step 16.
 
 **Goal**: retire the durable JSONL outbox as Hypomnema's change-event contract, replace the runtime path with a live-only in-memory event stream, remove stale config/status/test/doc surfaces, and prove the new event shape with real filesystem changes.
 
@@ -49,7 +49,7 @@ ADR-0006 remains accepted. This step amends it without reversing it:
 
 ## Relevant Inputs
 
-- Roadmap: [`notes/roadmap/roadmap-6.md`](./roadmap-6.md) § Step 16.
+- Roadmap: [`notes/roadmap/roadmap-6.md`](../roadmap-6.md) § Step 16.
 - ADR: [`docs/decisions/0006-outbox-outside-watched-directory.md`](../../docs/decisions/0006-outbox-outside-watched-directory.md).
 - ADR: [`docs/decisions/0012-mcp-transport-stdio-v0.md`](../../docs/decisions/0012-mcp-transport-stdio-v0.md).
 - ADR: [`docs/decisions/0013-mcp-transport-streamable-http.md`](../../docs/decisions/0013-mcp-transport-streamable-http.md).
@@ -440,18 +440,18 @@ Docs:
 
 ## Definition Of Done
 
-- [x] The durable JSONL outbox writer and module are removed.
-- [x] No runtime code opens, appends, tails, reports, migrates, or configures an outbox file as active state.
-- [x] `storage.outbox_file` is gone.
-- [x] `/status` and `hmn status` no longer report outbox path/size.
-- [x] The watcher/indexer path publishes real live events after content-hash-confirmed changes.
-- [x] HTTP live watch works for at least one vault selector.
-- [x] `hmn vault watch` streams NDJSON events from a running daemon.
-- [x] MCP streaming is either implemented with verified rmcp framing or explicitly deferred in active docs and tests.
-- [x] `tests/outbox.rs` no longer encodes the old durable contract.
-- [x] Active docs describe one model: live-only change events, index-as-source-of-truth recovery, durable replay deferred.
-- [x] `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`, and `git diff --check` are clean.
-- [x] Manual smoke proves a real file change produces a live event and no outbox file is created.
+- [ ] The durable JSONL outbox writer and module are removed.
+- [ ] No runtime code opens, appends, tails, reports, migrates, or configures an outbox file as active state.
+- [ ] `storage.outbox_file` is gone.
+- [ ] `/status` and `hmn status` no longer report outbox path/size.
+- [ ] The watcher/indexer path publishes real live events after content-hash-confirmed changes.
+- [ ] HTTP live watch works for at least one vault selector.
+- [ ] `hmn vault watch` streams NDJSON events from a running daemon.
+- [ ] MCP streaming is either implemented with verified rmcp framing or explicitly deferred in active docs and tests.
+- [ ] `tests/outbox.rs` no longer encodes the old durable contract.
+- [ ] Active docs describe one model: live-only change events, index-as-source-of-truth recovery, durable replay deferred.
+- [ ] `cargo fmt`, `cargo test`, `cargo clippy -- -D warnings`, and `git diff --check` are clean.
+- [ ] Manual smoke proves a real file change produces a live event and no outbox file is created.
 
 ## Build-Phase Notes For Coordinator
 
