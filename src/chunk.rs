@@ -4,6 +4,8 @@
 //! boundaries (with size-based breaks at paragraph ends as a fallback), and
 //! returns the chunk text plus metadata. Pure logic; no I/O.
 
+use std::fmt::Write as _;
+
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
@@ -30,6 +32,15 @@ pub struct Chunk {
     pub content_hash: String,
     pub start_byte: usize,
     pub end_byte: usize,
+}
+
+/// Encodes a byte slice as a lowercase hex string.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(s, "{b:02x}").expect("writing to String is infallible");
+    }
+    s
 }
 
 /// Split YAML frontmatter (delimited by `---\n` ... `\n---\n`) off the top
@@ -204,14 +215,7 @@ impl<'a> Chunker<'a> {
         }
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        let content_hash = format!(
-            "sha256:{}",
-            hasher
-                .finalize()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
+        let content_hash = format!("sha256:{}", hex_encode(&hasher.finalize()));
         self.chunks.push(Chunk {
             chunk_index: self.next_index,
             heading_path: open.heading_path,
@@ -261,10 +265,7 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(s.as_bytes());
         let bytes = hasher.finalize();
-        format!(
-            "sha256:{}",
-            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        )
+        format!("sha256:{}", hex_encode(&bytes))
     }
 
     // --- Skill § Tests to write ---
