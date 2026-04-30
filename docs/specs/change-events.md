@@ -1,20 +1,28 @@
-# Change Events (Outbox) Specification
+# Change Events Specification
 
-**Version**: 0.2.0
-**Date**: 2026-04-27
+**Version**: 0.3.0
+**Date**: 2026-04-30
 **Status**: Draft
 
 ---
 
 ## Overview
 
-Hypomnema emits a durable stream of change events so consumers can react to vault changes without polling the search API. Events are written as JSON lines to an append-only outbox file under each vault's per-vault subdirectory in the daemon's data directory. Consumers subscribe by tailing the file.
+Hypomnema emits a live stream of change notifications so consumers can react to vault changes without polling search endpoints in a tight loop. In v0 this stream is **not durable**: events are delivered to subscribers that are connected at the time the daemon observes a real change, and missed events are recovered by re-querying the current index state.
+
+The public v0 surfaces are:
+
+- `hmn vault watch NAME|ID` for humans and scripts
+- HTTP streaming from the daemon for CLI and non-MCP clients
+- MCP control-plane access for agent hosts
+
+The old JSONL outbox file is no longer the public subscription contract. A durable replayable event log remains a possible future feature, but it must be designed as an event store with stream generations, sequence numbers, retention, and explicit invalidation semantics rather than as consumers tailing daemon-owned files.
 
 **Related Documents**:
-- [ADR-0006: Outbox Lives Outside the Watched Directory](../decisions/0006-outbox-outside-watched-directory.md)
+- [ADR-0006: Daemon State Lives Outside the Watched Directory](../decisions/0006-outbox-outside-watched-directory.md)
 - [ADR-0009: Multi-Vault per Daemon](../decisions/0009-multi-vault-per-daemon.md)
-- [Vault Management § Per-Vault Layout](./vault-management.md#per-vault-layout)
-- [Architecture: Outbox Writer](../architecture/overview.md#outbox-writer)
+- [Vault Management § MCP Tool Surface](./vault-management.md#mcp-tool-surface)
+- [Architecture: Change Event Bus](../architecture/overview.md#change-event-bus)
 
 ---
 
@@ -22,154 +30,195 @@ Hypomnema emits a durable stream of change events so consumers can react to vaul
 
 ### Normal Flow
 
-1. Watcher observes a filesystem event (create / modify / delete) under a watched vault
-2. Debouncer coalesces the event storm around a single logical save
-3. Indexer computes the new content hash and compares against the stored hash
-4. *Only if the hash changed* does the indexer emit an event to the vault's outbox
-5. The outbox writer appends one JSON line and fsyncs per event (resolved in step 4 as per-event `sync_data`).
+1. Watcher observes a filesystem event under a watched vault.
+2. Debouncer coalesces editor-save and sync-tool event storms.
+3. Indexer computes the new content hash and compares it against the stored hash.
+4. Only if indexed state changes does the daemon publish a change notification.
+5. Active subscribers receive the event over their streaming transport.
 
-This content-hash gate is the primary defense against editor-save noise and sync-tool mtime churn. An agent tailing an outbox sees only real changes, not every save-triggered filesystem event.
+The content-hash gate remains the primary defense against editor-save noise and sync-tool mtime churn. A consumer watching events sees real indexed changes, not every filesystem notification.
 
-Each vault has its own watcher, indexer, and outbox writer; events from one vault never appear in another vault's outbox.
+Each event carries a vault surrogate ID. The event stream never carries `vault_name`; names are mutable and consumers can resolve a display name through the vault control plane when they need one.
 
-### Cold Start
+### Live-Only Contract
 
-The outbox records *changes detected after the watcher is running*. The initial indexing walk performed when the daemon starts (or when a vault is first created) is silent — it populates the index but does **not** emit outbox events for files it discovers.
+The v0 event stream starts at subscription time. It does not replay changes that occurred before the subscription was established, and it does not guarantee delivery across daemon restarts, client disconnects, slow consumers, channel overflow, or vault lifecycle resets.
 
-A consumer that subscribes to a freshly-created vault and tails from byte 0 will see no events until a real change occurs (file edit, create, delete observed by the watcher).
+Consumers that need a complete view use the index as source of truth:
 
-To obtain initial state, consumers should query the search / index API once at subscription time, then begin tailing the outbox for subsequent deltas. The two surfaces are complementary: the index answers "what exists now?"; the outbox answers "what changed since I last looked?".
+1. Query current state through search or vault-status APIs.
+2. Subscribe to the live event stream.
+3. Treat events as invalidation hints for affected vault paths.
+4. Re-query Hypomnema when an event arrives or when the stream reports lag/loss.
 
-### Event Envelope (minimum)
+This avoids pretending that the daemon has durable history it does not actually maintain. The index answers "what exists now"; the live stream answers "what changed while I was listening?"
+
+### Race Window
+
+A consumer that queries current state and then starts watching can miss a change in the gap between those two operations. v0 accepts this as part of the live-only contract. Consumers that need a no-gap bootstrap require the future durable/replayable stream design described below.
+
+### Event Envelope
 
 ```json
 {
+  "type": "file_changed",
   "event_type": "modified",
+  "vault": "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f",
   "path": "notes/databases/pgvector.md",
-  "content_hash": "sha256:abc123…",
-  "detected_at": "2026-04-23T14:22:08.123456Z",
-  "vault": "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
+  "content_hash": "sha256:abc123...",
+  "detected_at": "2026-04-30T14:22:08.123456Z"
 }
 ```
 
-Event types: `created`, `modified`, `deleted`. v0 behavior, confirmed in step 3: renames are observed as a `deleted` + `created` pair. Fused rename detection remains open.
+Initial v0 file event types are `created`, `modified`, and `deleted`. Renames are observed as a `deleted` + `created` pair. Fused rename detection remains a future option.
 
-### Consumer Subscription
+The top-level `type` field leaves room for stream-control events without overloading file-change semantics.
 
-Consumers tail one or more per-vault outbox files at `<data_dir>/vaults/<id>/outbox.jsonl`. On startup a consumer may:
-- Start from end-of-file (only see new changes)
-- Replay from a byte offset it persists across restarts (per outbox file — offsets are per-vault, not global)
-- Replay from a specific `detected_at` timestamp by filtering during read
+### Stream Control Events
 
-Hypomnema offers no push, no webhook, no in-process callback in v0. See the handoff's "Out of scope" for deferred fan-out work.
+The stream may emit control events:
 
-A consumer that wants change events from every vault must enumerate vaults via the control plane (`GET /vaults`) and tail each vault's outbox file. The set of active vaults can change at runtime (`vault create` / `vault terminate`); consumers that need to react to that should re-enumerate periodically or on `daemon-unreachable` recovery.
+```json
+{
+  "type": "stream_lagged",
+  "vault": "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f",
+  "missed": 42,
+  "action": "resync_required",
+  "detected_at": "2026-04-30T14:24:01.000000Z"
+}
+```
 
----
+`stream_lagged` means the subscriber missed one or more events from the live in-memory channel. The consumer must discard any assumption that it has a continuous event sequence and re-query the index for current state.
 
-## Consumer Model
+### CLI Subscription
 
-The outbox is the change-notification surface for **external consumers** — applications and AI agents that subscribe to vault changes by tailing per-vault `outbox.jsonl` files. Examples: Iris, Claude Code, custom scripts.
+`hmn vault watch NAME|ID` subscribes to one vault. `hmn vault watch --all` subscribes to all currently active vaults.
 
-The Hypomnema binaries themselves do not consume the event stream:
-- `hmnd` writes events but never tails them.
-- `hmn` displays outbox metadata (path, size) via the `/status` API but does not parse events.
+Default output is newline-delimited JSON event envelopes so scripts can pipe it safely. A future text mode may be added, but JSON is the canonical v0 shape.
 
-This separation is intentional: per [vision.md §Consumer](../product/vision.md#consumer), "Hypomnema has no awareness of its consumers." The daemon's job ends at producing a durable, ordered event log per vault; reacting to changes is the consumer's job.
+The command exits when the daemon closes the stream, the selected vault is terminated, the user interrupts the process, or the client loses connection to the daemon. On reconnect, the command starts a new live-only stream; it does not ask for replay.
 
-**Tail contract**: consumers open the file, read line-by-line, and persist the byte offset they have processed (per-vault — one offset per outbox file). On restart they reopen and seek to the persisted offset. Lines are JSON-per-line and complete-line-terminated; consumers should treat a partial trailing line (no terminating `\n`) as not-yet-committed and re-read it on next poll.
+### HTTP Subscription
 
-**Why the surrogate vault ID and not the name on the wire**: outbox files are durable; vault names are mutable (the `rename` operation updates the registry without touching the outbox). Consumers that persist offsets keyed by vault name would silently break on rename. Keying by the immutable surrogate ID — and resolving the name on demand via `GET /vaults/{id}` for display — is the durable shape. This is why the outbox event envelope includes `vault` (the ID) but **never** `vault_name`. Search responses, by contrast, do include `vault_name`: search is point-in-time and the name is fresh.
+The HTTP surface is streaming and maps directly to the CLI. The exact route shape is pinned by the implementation workplan, but the expected form is:
+
+- `GET /vaults/{name_or_id}/watch`
+- `GET /events/watch?vaults=...` for cross-vault/all-vault subscriptions if a separate aggregate route is needed
+
+The response is a streaming body of newline-delimited JSON events unless the implementation workplan chooses Server-Sent Events for browser ergonomics. Either framing must preserve the same event envelope.
+
+### MCP Subscription
+
+MCP exposes the same live stream through the control-plane surface. The intended v0 user-facing operation is `vault_watch`:
+
+- `target?: string` selects one vault by name or ID; omission follows the same default-vault resolution as `vault_status`.
+- `all?: bool` subscribes to all active vaults.
+- The stream is live-only; there is no `since` argument in v0.
+
+The implementation workplan must verify the exact MCP framing supported by the pinned `rmcp` version. If long-lived tool-call streaming is not practical for one of the shipped MCP transports, the spec should prefer an MCP resource/subscription shape rather than inventing a pseudo-durable response.
 
 ---
 
 ## Data Schema
 
+### File Change Event
+
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
+| `type` | string | yes | `"file_changed"` |
 | `event_type` | string | yes | One of `created`, `modified`, `deleted` |
+| `vault` | string | yes | Surrogate vault ID (UUIDv7) |
 | `path` | string | yes | Vault-relative path |
-| `content_hash` | string | yes when known (always for create/modify; for delete, the last known hash from the index) | `sha256:` hex of file content |
-| `detected_at` | ISO-8601 string (µs precision, UTC) | yes | When Hypomnema confirmed the change |
-| `vault` | string | yes (multi-vault) / no (single-vault) | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted from v0/step-9 single-vault outbox lines. Consumers must accept its absence in v0 lines and treat it as "the only vault." |
+| `content_hash` | string | yes when known | `sha256:` hex of file content; for deletes, the last known hash from the index |
+| `detected_at` | ISO-8601 string (microsecond precision, UTC) | yes | When Hypomnema confirmed the change |
 
-The outbox **never** carries a `vault_name` field. Names are mutable; the outbox is durable. Consumers that want a name for display should resolve `vault` against the registry at display time.
+### Stream Control Event
 
-When the daemon has no prior record for a deleted path — a rare race where the watcher reports a delete on a path that was never indexed — the outbox emits no event for it; the schema therefore never expresses delete-without-hash in practice.
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `type` | string | yes | `"stream_lagged"` initially; future control events are additive |
+| `vault` | string | no | Present when lag is known to affect one vault; omitted for daemon-wide stream loss |
+| `missed` | integer | no | Number of missed events when the channel can report it |
+| `action` | string | yes | `"resync_required"` |
+| `detected_at` | ISO-8601 string (microsecond precision, UTC) | yes | When Hypomnema detected the stream condition |
 
-Future fields (additive, optional) will be added as the daemon learns to notice more. Consumers should ignore unknown fields.
-
-### File Format
-
-- One JSON object per line (JSONL)
-- UTF-8
-- Location (multi-vault, round 3+): `<data_dir>/vaults/<vault_id>/outbox.jsonl`. Each vault has its own outbox file under its per-vault subdirectory; see [vault-management.md § Per-Vault Layout](./vault-management.md#per-vault-layout).
-- Location (v0/step-9 single-vault, pre-multi-vault startup-migration): `<data_dir>/outbox.jsonl`. Step-9's reconcile pass migrates the legacy single-file layout into the per-vault layout when multi-vault first activates.
-- Default `<data_dir>` is `~/.local/share/hypomnema/` on Linux and macOS; `%APPDATA%\hypomnema\` on Windows (see [reference/configuration.md](../reference/configuration.md) for XDG/env overrides)
-- Never rotated by Hypomnema in v0 (rotation is an open question)
-
-### Size & Growth
-
-Each event serializes to ~150–200 bytes typical (path-length dependent; SHA256 hash adds ~50 bytes when present; the new `vault` UUIDv7 field adds ~40 bytes). Rough envelope (per vault):
-
-| Events | File size |
-|--------|-----------|
-| 1,000 | ~180 KB |
-| 100,000 | ~18 MB |
-| 1,000,000 | ~180 MB |
-
-v0 / round 3 never rotates (see Open Questions). Operators on long-running vaults with high churn should plan for unbounded growth or perform manual archival per the per-vault Intentional Reset procedure below.
+Consumers must ignore unknown fields and unknown `type` values they do not understand, except that unknown control events should be treated conservatively as `resync_required` if they indicate stream continuity may be broken.
 
 ---
 
 ## Edge Cases
 
-### Large write followed by immediate delete
+### Large Write Followed By Immediate Delete
 
-Debouncer coalesces; final state wins. If a file is written then deleted within the debounce window, only a `deleted` event is emitted — there was no stable state to index.
+Debouncer coalesces; final state wins. If a file is written then deleted within the debounce window, only a delete may be emitted, and only if the daemon had a prior indexed record for the path.
 
-### Content hash collision
+### Content Hash Collision
 
-sha256 collisions are considered impossible for this purpose. No mitigation.
+SHA-256 collisions are considered impossible for this purpose. No mitigation.
 
-### Outbox file removed or truncated externally
+### Slow Subscriber
 
-Daemon recreates/opens the file on next event. Consumers that were tailing an old inode will stop seeing events — the correct recovery is consumer-side (reopen on `ENOENT` or detect inode change). This applies per-vault: removing one vault's outbox file does not affect another's.
+The daemon may use a bounded in-memory channel. If a subscriber falls behind and the channel drops events before that subscriber receives them, the subscriber receives `stream_lagged` when the runtime can detect the loss. The consumer must re-query the index.
 
-### Crash during write
+### Daemon Restart
 
-The write is small (one line). In the worst case a consumer sees a truncated JSON line and must skip it. The daemon on restart picks up from the end-of-file; no duplicate is emitted for events that made it through before the crash.
+All live subscriptions end. Consumers reconnect and perform their normal bootstrap: query current state, then watch live events.
 
-### Outbox file corrupted (partial trailing line)
+### Vault Paused
 
-Per the [Consumer Model tail contract](#consumer-model), consumers should treat a partial trailing line as not-yet-committed and re-read on next poll. A line is committed when terminated with `\n`. The daemon writes one event per `writeln!` followed by `fdatasync`, so a partial line on disk indicates an in-flight write or a crash mid-write — not corruption to escalate.
+Paused vaults do not emit live file-change events because their watcher/indexer lifecycle is stopped. Resuming a vault starts a fresh live stream from that point forward.
 
-### Vault terminated mid-tail
+### Vault Reset Or Rebuild
 
-A consumer tailing `<data_dir>/vaults/<id>/outbox.jsonl` when the operator terminates that vault sees the file disappear (the per-vault subdirectory is removed by the terminate flow per [vault-management.md § Operations § terminate](./vault-management.md#operations)). Consumer-side recovery: detect `ENOENT` on next read, drop the offset, optionally call `GET /vaults` to confirm the vault is gone, stop tailing.
+Reset/rebuild may invalidate consumer assumptions about derived state. v0 can surface this as a control event if the event bus is active when the operation happens, but consumers must still treat reset/rebuild as a reason to re-query current state. Durable replay semantics for reset require stream generations and are deferred.
 
-### Intentional reset (start over with a fresh outbox) — per-vault
+### Vault Terminated
 
-Operators may need to discard outbox history for a single vault (file grew unmanageably; consumer state for that vault is unrecoverable). The reset is **per-vault**, not daemon-wide:
+A subscriber watching a terminated vault receives stream closure or a terminal control event, depending on transport. The consumer should stop watching that vault and drop any cached state keyed to its surrogate ID unless it intentionally preserves historical display data.
 
-1. Pause or terminate the target vault's writer (round-3 ships `vault terminate`; round-4 will ship `vault pause`). Both stop the outbox writer for that vault.
-2. Delete or move `<data_dir>/vaults/<id>/outbox.jsonl`.
-3. If the vault was paused, resume it (round 4); if terminated, recreate it. The daemon recreates the file empty on next append.
-4. Reset any consumer-side persisted offsets for that vault to 0.
+---
 
-Resetting one vault's outbox does **not** affect any other vault's outbox. Operators wanting to reset every vault's outbox must repeat the procedure per vault, or stop the daemon and clear `<data_dir>/vaults/*/outbox.jsonl` directly before restart.
+## Future Durable Event Stream
 
-This is safe because the outbox is **not authoritative for vault state** — the per-vault `index.sqlite` is. Resetting an outbox loses notification history but does not affect indexed state. A consumer that needs to re-bootstrap after a reset should re-query the index (per [Cold Start](#cold-start)).
+A replayable event stream is deferred. If a real consumer needs "subscribe since X", Hypomnema should implement it as a database-backed event store, not as a public JSONL file contract.
+
+Minimum durable design requirements:
+
+- Per-vault `stream_id` or `generation`, changed whenever history is invalidated.
+- Monotonic per-vault `seq` values inside a stream generation.
+- A durable event table, likely in SQLite, with `(vault_id, stream_id, seq)` as the replay key.
+- Retention policy: size-based, time-based, manual, or "forever"; undefined retention makes `since` unsafe.
+- Explicit `410 Gone` / `stream_reset` behavior when a consumer asks for events before the retention floor or from an old generation.
+- A way to get a bootstrap watermark so a consumer can query current state and then subscribe without a race.
+- Tests for ordering, reconnect, retention boundary, reset/rebuild, rename, pause/resume, terminate, and multi-vault aggregation.
+
+Illustrative schema:
+
+```sql
+CREATE TABLE change_events (
+    vault_id TEXT NOT NULL,
+    stream_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    path TEXT,
+    content_hash TEXT,
+    detected_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (vault_id, stream_id, seq)
+);
+```
+
+Future event types may need to go beyond path-level file changes. Examples include vault lifecycle events, index rebuild boundaries, embedding-skip or embedding-recovery signals, chunk-level invalidation, and richer rename events. Those should be added only when a consumer has a concrete invalidation need; otherwise the event stream should stay an invalidation hint and the index should remain the source of truth.
 
 ---
 
 ## Open Questions
 
-- [x] Exact fsync policy: per-event vs periodic? Resolved in step 4 as per-event `sync_data`. See [step-4 workplan § Deferred decision 1](../roadmap/step-04-workplan.md#1-fsync-policy-per-event-vs-periodic).
-- [ ] Rename detection: should `renamed` be a distinct event type?
-- [ ] Outbox rotation / retention — should Hypomnema rotate after N MB or N days, or leave this to the user? In multi-vault, this question is per-vault: operators with many vaults may want global retention, not per-file rotation.
-- [ ] Should a consumer be able to ask Hypomnema for the current outbox byte offset (per vault), so it can checkpoint without inspecting the file directly?
-- [ ] Cross-vault aggregated outbox: should the daemon expose a merged stream for consumers that want every vault's events, or is per-vault tailing the right shape? Round-3 ships per-vault only; aggregation is consumer-side (or future round).
+- [ ] Exact HTTP stream framing: newline-delimited JSON vs Server-Sent Events.
+- [ ] Exact MCP framing for `vault_watch` under the pinned `rmcp` version.
+- [ ] Whether `hmn vault watch --all` should include vaults created after the command starts or only the active set at subscription time.
+- [ ] Whether reset/rebuild should emit a v0 control event, or whether lifecycle operations remain visible only through the control-plane response.
+- [ ] Whether a future durable stream belongs in each per-vault `index.sqlite`, in `vaults.sqlite`, or in a separate daemon-level event store.
 
 ---
 
@@ -177,6 +226,7 @@ This is safe because the outbox is **not authoritative for vault state** — the
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
-| 0.1.1 | 2026-04-26 | Clarify consumer model (external-only), cold-start semantics, size envelope, and recovery procedures. No behavior change. |
-| 0.2.0 | 2026-04-27 | Multi-vault adoption (round 3 / step 10): `vault` field semantics flipped from "always absent" to "populated when multi-vault active"; explicit "no `vault_name`" rule (durability over display ergonomics); per-vault outbox path `<data_dir>/vaults/<id>/outbox.jsonl`; per-vault Intentional Reset procedure; vault-terminated-mid-tail edge case. |
+| 0.1.0 | 2026-04-23 | Initial durable JSONL outbox draft, seeded from project handoff v0 scope. |
+| 0.1.1 | 2026-04-26 | Clarified consumer model, cold-start semantics, size envelope, and recovery procedures. |
+| 0.2.0 | 2026-04-27 | Multi-vault adoption: per-vault outbox path and `vault` field semantics. |
+| 0.3.0 | 2026-04-30 | Replaced JSONL outbox as public v0 contract with a live internal event bus exposed through CLI/HTTP/MCP; durable replay moved to future event-store design. |

@@ -8,7 +8,7 @@
 
 ## Context
 
-Hypomnema is a long-running local daemon that watches a directory, maintains persistent indexes (including a SQLite database with the sqlite-vec extension), serves an HTTP and an MCP endpoint, and writes to an append-only event log. The two realistic implementation languages were Python and Rust.
+Hypomnema is a long-running local daemon that watches a directory, maintains persistent indexes (including a SQLite database with the sqlite-vec extension), serves HTTP and MCP endpoints, and emits live change events. The two realistic implementation languages were Python and Rust.
 
 Python's appeal:
 - Faster to v0 — mature ecosystems for filesystem watching (`watchdog`), embedding (`sentence-transformers`, `llama-cpp-python`), MCP (`mcp` Python SDK), HTTP (`fastapi`), and SQLite

@@ -131,7 +131,7 @@ clap = { version = "4", features = ["derive"] }
 
 | Package | Purpose |
 |---------|---------|
-| **serde** / **serde_json** / **toml** | Config file + outbox JSONL + wire formats |
+| **serde** / **serde_json** / **toml** | Config file + event envelopes + wire formats |
 | **tracing** + **tracing-subscriber** | Structured logging with per-module level filters |
 | **anyhow** | Error handling. No `thiserror` until there's a public library API to stabilize errors for. |
 | **clap** (`derive`) | Argument parsing for both binaries — `hmnd`'s daemon flags and `hmn`'s client subcommands |
@@ -156,7 +156,7 @@ Every SQL call goes through `tokio::task::spawn_blocking`. No exceptions. The as
 
 ### Content-hash gating
 
-The watcher fires on any filesystem event under the watched directory. The indexer computes the file's content hash and compares against the stored hash. No change → no reindex, no outbox event. This is the primary defense against editor-save noise and sync-tool mtime churn. Captured in `.claude/skills/filesystem-watching/`.
+The watcher fires on any filesystem event under the watched directory. The indexer computes the file's content hash and compares against the stored hash. No change → no reindex, no live change event. This is the primary defense against editor-save noise and sync-tool mtime churn. Captured in `.claude/skills/filesystem-watching/`.
 
 ### Delete-and-reinsert for vec0
 
@@ -193,7 +193,7 @@ hypomnema/
 │   │   ├── http.rs      # axum routes (hmnd)
 │   │   └── mcp.rs       # rmcp server (hmnd)
 │   ├── client.rs        # typed reqwest client against the daemon (used by hmn)
-│   ├── outbox.rs        # JSONL writer (hmnd only)
+│   ├── events.rs        # live change event bus (hmnd only)
 │   └── embedding.rs     # reqwest client to the embedding service (hmnd only)
 ├── tests/               # integration tests
 └── docs/                # this documentation
@@ -215,7 +215,7 @@ Eight steps, dependency-ordered, each independently useful as a stopping point. 
 
 ### Phase 2: Events & Search
 
-4. **Outbox** — Persist real change events to JSONL in the daemon's data directory.
+4. **Live change events** — Publish real change events to connected subscribers.
 5. **Filesystem and content search over HTTP** — List/glob and grep, exposed via Axum. CLI built against these. **Useful enough to dogfood for ordinary find/grep work.**
 
 ### Phase 3: Semantic & MCP
@@ -226,7 +226,7 @@ Eight steps, dependency-ordered, each independently useful as a stopping point. 
 
 If a step is hard, ship the previous one and keep using it. Step 5 (filesystem + content over HTTP) is the natural early shipping gate — it is genuinely valuable on its own, and reaching it validates the whole indexing-and-watch skeleton.
 
-> **Multi-vault support** (per [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) is **post-v0**; it lands as **round 3** of the roadmap. The eight steps above remain single-vault. Round 3 introduces `src/vault_registry/` and `src/control_plane/`, refactors the watcher / indexer / store / outbox modules to be per-vault, and ships the vault-management spec (`docs/specs/vault-management.md`).
+> **Multi-vault support** (per [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) is **post-v0**; it lands as **round 3** of the roadmap. The eight steps above remain single-vault. Round 3 introduces `src/vault_registry/` and `src/control_plane/`, refactors the watcher / indexer / store / event-stream modules to be per-vault-aware, and ships the vault-management spec (`docs/specs/vault-management.md`).
 
 ---
 

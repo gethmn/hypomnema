@@ -13,7 +13,7 @@ See [`_adr-policy.md`](./_adr-policy.md) for the amend / supersede / extend poli
 | [0003](./0003-indexing-in-the-daemon.md) | Indexing in the Daemon, Not in the Consumer | accepted |
 | [0004](./0004-three-search-modes-as-peers.md) | Three Search Modes as Peers | accepted |
 | [0005](./0005-local-everything.md) | Local Everything — No Required Cloud Dependencies | accepted |
-| [0006](./0006-outbox-outside-watched-directory.md) | Outbox (and All Daemon State) Lives Outside the Watched Directory | accepted |
+| [0006](./0006-outbox-outside-watched-directory.md) | Daemon State Lives Outside the Watched Directory | accepted |
 | [0007](./0007-sqlite-vec-over-alternatives.md) | sqlite-vec over Lance, qdrant, and Other Vector Stores | accepted |
 | [0008](./0008-two-binary-daemon-plus-cli.md) | Two Binaries (hmnd + hmn) in One Crate | accepted |
 | [0009](./0009-multi-vault-per-daemon.md) | Multi-Vault per Daemon | proposed |

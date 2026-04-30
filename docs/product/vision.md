@@ -25,7 +25,7 @@ Building this retrieval layer separately inside every consumer — every agent, 
 
 ### The Gap
 
-There is no small, generic, local daemon that indexes a directory of Markdown and exposes three search shapes (filesystem / content / semantic) over both HTTP and MCP, emits a durable change-event stream for subscribers, and never writes back into the watched directory.
+There is no small, generic, local daemon that indexes a directory of Markdown and exposes three search shapes (filesystem / content / semantic) over both HTTP and MCP, emits live change notifications for active subscribers, and never writes back into the watched directory.
 
 ---
 
@@ -37,15 +37,15 @@ Hypomnema is a local daemon that watches a directory of Markdown files and index
 2. **Content search**: grep-shaped, which files contain this exact string
 3. **Semantic search**: vector similarity over chunked content
 
-It also emits change events to a durable local log, so consumers can subscribe to "this file changed" notifications without polling.
+It also emits live change events, so consumers can subscribe to "this file changed" notifications while they are connected and fall back to the index as the source of truth when they need to recover current state.
 
-The watched directory is treated as the user's. Hypomnema reads from it. Hypomnema does not write to it. State that Hypomnema maintains (the index, the event log, configuration, logs) lives in the daemon's own data directory, never under the watched path.
+The watched directory is treated as the user's. Hypomnema reads from it. Hypomnema does not write to it. State that Hypomnema maintains (the index, vault registry, configuration, logs) lives in the daemon's own data directory, never under the watched path.
 
 ### Guiding Principles
 
 1. **Read-only over the watched directory**: the daemon never creates, modifies, or deletes files under the watched path. This eliminates conflict resolution, atomic-write dance, ownership models, and every problem space that belongs to a CRDT-based bidirectional system.
 2. **Three search modes as peers**: filesystem, content, and semantic answer different question shapes. An MCP server offering only one of these is incomplete in a way that's immediately obvious watching an agent try to work.
-3. **Local everything**: local embedding model, local vector store, local outbox. No cloud dependencies, no required external services. Non-negotiable for office deployments where data leaving the box may be a hard restriction; operationally simpler everywhere else.
+3. **Local everything**: local embedding model, local vector store, local event delivery. No cloud dependencies, no required external services. Non-negotiable for office deployments where data leaving the box may be a hard restriction; operationally simpler everywhere else.
 
 ---
 
@@ -70,9 +70,9 @@ Hypomnema maintains three indexes over the vault:
 - **Content index**: the file text itself
 - **Semantic index**: heading-aware chunks, embedded via a local model (nomic-embed-text-v1.5 / 768 dims), stored in sqlite-vec
 
-### Outbox
+### Change Events
 
-An append-only JSONL event log in the daemon's data directory (`~/.local/share/hypomnema/` or platform equivalent) — never inside the watched vault. Consumers subscribe to change events by tailing this file. A constantly-growing file inside a Syncthing or Dropbox directory creates pathological sync behavior; keeping state out of the synced path is a principle that generalizes.
+Live file-change notifications emitted after the watcher/indexer confirms a real indexed change. In v0 these events are not durable and are not replayed; consumers use them as invalidation hints and re-query the index for current truth when they connect, reconnect, or detect stream loss. A future replayable stream requires an explicit event-store design with sequence numbers, stream generations, retention, and reset semantics.
 
 ### Consumer
 
@@ -88,7 +88,7 @@ What Hypomnema explicitly does NOT do. These are real, planned, and preserved as
 - **The ownership model** (`vault_root` / `vault_path` distinction): Not needed when there's no write path to enforce boundaries on.
 - **Format spec for bridge-managed files**: No `iris_id` / `hmn_id` frontmatter convention, no recognition of "bridge-owned" files.
 - **Conflict resolution**: No three-way merge, no last-known-synced tracking, no escalation. Read-only systems don't have conflicts.
-- **Multi-consumer event delivery beyond outbox tailing**: No webhooks, no in-process callbacks, no fan-out beyond "consumers tail the JSONL file."
+- **Durable/replayable event history**: No "subscribe since X", no public byte offsets, no durable event retention guarantee. v0 change events are live-only invalidation hints; replayable history requires a future event-store design.
 - **Multi-instance coordination**: Each daemon is independent.
 - **Obsidian-specific behavior**: Obsidian is the vault format that motivated this project, but the design assumes nothing about Obsidian. Wikilinks aren't parsed. Tags aren't indexed specially. Frontmatter isn't interpreted.
 - **Bidirectional sync** (the original full vault-bridge scope): Belongs to a CRDT-based system (Hexist, AFFiNE, Anytype, Logseq in transition). Hypomnema is the smaller generic thing that fell out of asking "what would still be useful even without the bidirectional half?" — the answer was: probably enough to live as its own project.
@@ -99,10 +99,10 @@ What Hypomnema explicitly does NOT do. These are real, planned, and preserved as
 
 v0 is done when:
 
-- [ ] A fresh install can index a vault, serve all three search types over HTTP and MCP, and emit change events to an outbox.
+- [ ] A fresh install can index a vault, serve all three search types over HTTP and MCP, and emit live change events to active subscribers.
 - [ ] The watcher correctly handles editor saves and sync-tool writes without re-indexing unchanged files.
-- [ ] A consumer (Iris or any other) can subscribe to changes by tailing the outbox and get a clean stream of real changes.
-- [ ] The daemon survives a crash without corrupting its index or outbox; restart re-reconciles cleanly.
+- [ ] A consumer (Iris or any other) can run `hmn vault watch` or subscribe over MCP/HTTP and receive live real-change notifications while connected.
+- [ ] The daemon survives a crash without corrupting its index; restart re-reconciles cleanly.
 - [ ] An agent connected via MCP can perform "do I have notes on X" → "show me the directory" → "which file mentions Y" without surprises.
 
 ---
@@ -111,7 +111,7 @@ v0 is done when:
 
 Things deliberately not decided yet, to be settled in early code:
 
-- [ ] Exact event envelope schema for the outbox. Start minimal (`{event_type, path, content_hash, detected_at}`), grow as features land.
+- [ ] Exact event envelope schema for the live event stream. Start minimal (`{type, event_type, vault, path, content_hash, detected_at}`), grow as concrete consumer invalidation needs land.
 - [ ] Configuration file format and location. TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during the skeleton step.
 - [ ] Logging verbosity defaults. Probably `info` at the daemon level, `warn` for `notify`, `error` for `tokio`.
 - [ ] Health and metrics endpoint shape. Out of scope for v0 but worth pre-allocating a `/health` route for easy expansion.
@@ -129,8 +129,8 @@ Things deliberately not decided yet, to be settled in early code:
 | **Hypomnema** | The daemon itself; also the Greek ancestor term — a notebook of accumulated external material for later rereading |
 | **hmn** | The CLI binary name. Pronunciation of the project name: *hi-POM-nih-muh* (English) / *hoo-POM-nay-mah* (Greek) |
 | **Vault** | The watched directory of Markdown files (term inherited from Obsidian; used here generically) |
-| **Consumer** | Anything that calls Hypomnema's search or subscribes to its outbox (agents via MCP, HTTP clients, CLI, scripts) |
-| **Outbox** | The append-only JSONL event log in the daemon's data directory |
+| **Consumer** | Anything that calls Hypomnema's search or subscribes to its live change stream (agents via MCP, HTTP clients, CLI, scripts) |
+| **Change stream** | Live, non-durable event notifications emitted to connected subscribers after real indexed changes |
 | **Chunk** | A heading-aware slice of a Markdown file's content, embedded and stored in the semantic index |
 | **sqlite-vec** | The SQLite extension used for vector storage; one file on disk, no separate process |
 | **Iris** | One consumer of Hypomnema, not a dependency. Hypomnema has no Iris-specific code. |

@@ -18,7 +18,7 @@ These hazards were predicted during design before any code was written. Each has
 
 ## 2. Watcher event storms during editor saves and sync operations
 
-**What goes wrong**: Editors (Obsidian, VS Code, vim) and sync tools (Syncthing, Dropbox) write files in bursts — temp file, rename, chmod, a dozen notify events for a single logical save. Naively indexing on every event means a single save triggers dozens of reindexes and outbox entries.
+**What goes wrong**: Editors (Obsidian, VS Code, vim) and sync tools (Syncthing, Dropbox) write files in bursts — temp file, rename, chmod, a dozen notify events for a single logical save. Naively indexing on every event means a single save triggers dozens of reindexes and change notifications.
 
 **Mitigation**: Use `notify-debouncer-full` to coalesce bursts. Never roll your own debouncer — the edge cases are subtle and well-handled by the crate.
 
@@ -48,9 +48,9 @@ These hazards were predicted during design before any code was written. Each has
 
 ## 5. Putting state in the watched directory
 
-**What goes wrong**: Constantly-growing files (the outbox) and frequently-mutated binaries (the SQLite index) inside a synced directory produce pathological sync behavior — conflicts, wasted bandwidth, spurious change notifications fanning out across devices, and in bad cases corruption.
+**What goes wrong**: Frequently-mutated daemon state (especially SQLite indexes, and any future durable event store) inside a synced directory produces pathological sync behavior — conflicts, wasted bandwidth, spurious change notifications fanning out across devices, and in bad cases corruption.
 
-**Mitigation**: All daemon state (index, outbox, logs, config) lives in the daemon's data directory. Nothing mutable is written under the watched path.
+**Mitigation**: All daemon state (index, registry, logs, config, and any future durable event store) lives in the daemon's data directory. Nothing mutable is written under the watched path.
 
 **Captured in**: `AGENTS.md`, and codified in [ADR-0006](../../../decisions/0006-outbox-outside-watched-directory.md)
 
@@ -88,9 +88,9 @@ These hazards were predicted during design before any code was written. Each has
 
 ## 9. Ungraceful shutdown and torn writes
 
-**What goes wrong**: The daemon runs several long-lived tasks — watcher, indexer worker, outbox writer, HTTP server, and (later) MCP server. A naive `std::process::exit` or an unhandled SIGINT tears through them mid-flight: a partial outbox append leaves an invalid JSONL line, an in-flight SQLite transaction is dropped without `commit()`, an HTTP client sees a truncated response. Consumers tailing the outbox then see garbage; a restart must reconcile avoidable damage.
+**What goes wrong**: The daemon runs several long-lived tasks — watcher, indexer worker, live event streams, HTTP server, and MCP server. A naive `std::process::exit` or an unhandled SIGINT tears through them mid-flight: an in-flight SQLite transaction is dropped without `commit()`, an HTTP client sees a truncated response, or a live subscriber never receives a terminal event. A restart must reconcile avoidable damage.
 
-**Mitigation**: Every long-running task accepts a cancellation signal (`tokio::sync::watch` or `CancellationToken`) and responds by finishing its current unit of work, then exiting. Shutdown drains in order: stop accepting new work (watcher stops emitting, HTTP server stops accepting), flush the outbox, commit any open transactions, then exit. Never call `std::process::exit` from inside task code.
+**Mitigation**: Every long-running task accepts a cancellation signal (`tokio::sync::watch` or `CancellationToken`) and responds by finishing its current unit of work, then exiting. Shutdown drains in order: stop accepting new work (watcher stops emitting, HTTP server stops accepting), notify or close live streams, commit any open transactions, then exit. Never call `std::process::exit` from inside task code.
 
 **Captured in**: `AGENTS.md` §"Async patterns" (cancellation paragraph)
 

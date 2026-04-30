@@ -102,7 +102,7 @@ truncated: false
 | `match_count` | integer | yes | Total matches in the file (may exceed `matches.len()` when `max_matches_per_file` truncates) |
 | `matches` | array | no | Per-line match details when `include_matches: true`; omitted otherwise |
 | `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
-| `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in the durable outbox (see [change-events.md](./change-events.md)). |
+| `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
 | `truncated` | boolean | yes | True if any per-vault search reported truncation OR the merged list exceeded `limit`. |
 | `partial_results` | object | no | Cross-vault diagnostic; present only when at least one vault was skipped or failed. See § Cross-Vault Partial Results. |
 

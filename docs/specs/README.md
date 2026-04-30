@@ -9,7 +9,7 @@ Layer 4 of the Layered Documentation System. Specifications detail *how* feature
 | [filesystem-search.md](./filesystem-search.md) | Path/glob queries against the filesystem index |
 | [content-search.md](./content-search.md) | Substring/regex queries against the content index |
 | [semantic-search.md](./semantic-search.md) | Vector-similarity queries against the chunk index |
-| [change-events.md](./change-events.md) | JSONL outbox format and subscription contract |
+| [change-events.md](./change-events.md) | Live change-event stream and future durable replay design notes |
 | [vault-management.md](./vault-management.md) | Vault lifecycle (create/list/status/pause/resume/reset/rename/rescan/terminate); cross-vault search semantics |
 | [_template.md](./_template.md) | Feature Spec template for new specs |
 

@@ -8,7 +8,7 @@
 
 ## Context
 
-[ADR-0012](./0012-mcp-transport-stdio-v0.md) shipped MCP-over-stdio in round 2 (the `hmn mcp` subcommand) and explicitly deferred the Unix-socket transport to a follow-on workplan, naming three transports as the v0 horizon: stdio (shipped), Unix socket (deferred), and "any future MCP transport" (open). Round 3 added nine vault-management MCP tools on top of the round-2 search tools, bringing the surface to twelve tools total served via stdio.
+[ADR-0012](./0012-mcp-transport-stdio-v0.md) shipped MCP-over-stdio in round 2 (the `hmn mcp` subcommand) and explicitly deferred the Unix-socket transport to a follow-on workplan, naming three transports as the v0 horizon: stdio (shipped), Unix socket (deferred), and "any future MCP transport" (open). Round 3 added nine vault-management MCP tools on top of the round-2 search tools, bringing the request/response surface to twelve tools total served via stdio.
 
 Round 4 adds the **third standard MCP transport**: Streamable HTTP (the post-2024-11-05 MCP-spec transport that pairs JSON-RPC over POST with optional SSE on GET). The drivers:
 
@@ -24,7 +24,7 @@ This ADR records the round-4 decision and amends [ADR-0012](./0012-mcp-transport
 
 1. **Transport mount on `hmnd`.** The MCP-over-HTTP surface is a route on `hmnd`'s existing Axum router, alongside `/health`, `/status`, `/search/*`, and the round-3 `/vaults/*` control plane. Mounted via `rmcp::transport::streamable_http_server::StreamableHttpService` (a tower service) using `Router::nest_service("/mcp", service)` on axum 0.7. The route serves JSON-RPC over POST and SSE over GET per the MCP spec. No parallel listener; no new bind address; the existing `with_graceful_shutdown` integration covers the new route by virtue of being on the same `Router`. The single new Cargo.toml change is adding `transport-streamable-http-server` to the existing `rmcp` features list. (No new top-level crates.)
 
-2. **In-process tool execution; no DaemonClient HTTP shim.** Tool handlers in `hmnd` call the search and vault-management backends directly via a new `HypomnemaBackend` trait. The trait has two implementations: `DaemonClient` (HTTP shim, used by `hmn mcp` per ADR-0012) and `InProcessBackend` (direct VaultManager + search-handler calls, used by `hmnd` for HTTP-MCP). `HypomnemaMcpServer` holds `Arc<dyn HypomnemaBackend + Send + Sync>` instead of a concrete `DaemonClient`. The trait covers all twelve current MCP tool ops (3 search + 2 vault-read + 7 vault-write) so the in-process path doesn't need a parallel call surface for vault management.
+2. **In-process tool execution; no DaemonClient HTTP shim.** Tool handlers in `hmnd` call the search and vault-management backends directly via a new `HypomnemaBackend` trait. The trait has two implementations: `DaemonClient` (HTTP shim, used by `hmn mcp` per ADR-0012) and `InProcessBackend` (direct VaultManager + search-handler calls, used by `hmnd` for HTTP-MCP). `HypomnemaMcpServer` holds `Arc<dyn HypomnemaBackend + Send + Sync>` instead of a concrete `DaemonClient`. The trait covers the twelve current request/response MCP tool ops (3 search + 2 vault-read + 7 vault-write) so the in-process path doesn't need a parallel call surface for vault management.
 
 3. **Trust posture inheritance — no new auth, no new TLS, no new bind address.** The HTTP-MCP route inherits the daemon's HTTP listener trust posture: loopback-only by default (`config.http.bind = "127.0.0.1:7777"`), no auth, no TLS — extending [ADR-0005](./0005-local-everything.md)'s local-everything boundary unchanged. Authentication, TLS, and rate limiting are concerns of the listener as a whole, not of the MCP route. If `hmnd` later gains those, MCP-over-HTTP rides on them with no spec amendment. The MCP route does not open its own client, listener, or socket.
 
@@ -32,7 +32,7 @@ This ADR records the round-4 decision and amends [ADR-0012](./0012-mcp-transport
 
 5. **v1 ships stateless; resumable SSE deferred; no CORS; `mcp.http.path` reserved.** Four open questions in the proposal resolved at the round-4 workplan:
    - **Sessions**: v1 uses rmcp's `LocalSessionManager::default()` to satisfy the `StreamableHttpService` type bound but treats each `tools/call` as independent — Hypomnema's tool surface has no session-scoped state to track between calls. Future-amendment trigger: a tool that needs cursor-in-session or multi-step transactional state.
-   - **Resumable SSE** (`Last-Event-ID`): deferred; v1 has no notifications or server-pushed messages to send for the read-only search tools or the idempotent vault-management tools.
+   - **Resumable SSE** (`Last-Event-ID`): deferred; the request/response tools have no notifications or server-pushed messages. The later `vault_watch` amendment uses live-only notifications and does not add replay or `Last-Event-ID` semantics.
    - **CORS**: v1 sets no CORS headers; the first real browser-hosted consumer's requirements decide what to allow.
    - **`mcp.http.path`**: v1 rejects any value other than `"/mcp"` with the startup error `mcp.http.path must be "/mcp" in this version of Hypomnema`. Reserved-for-forward-compat for operators who reverse-proxy multiple Hypomnema daemons.
 
@@ -78,4 +78,4 @@ This ADR amends [ADR-0012](./0012-mcp-transport-stdio-v0.md) (a one-row entry in
 
 ## Amendments
 
-<!-- None yet -->
+- **2026-04-30** — The change-events spec adds `vault_watch` as a read-only long-lived MCP operation. This does not change the HTTP-MCP transport decision; the exact streaming framing is owned by [`docs/specs/change-events.md`](../specs/change-events.md#mcp-subscription). The "twelve tools" language in this ADR refers to the request/response tool surface that existed when ADR-0013 shipped.

@@ -127,7 +127,7 @@ results:
 | `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
 | `text` | string | yes | The chunk content |
 | `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
-| `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in the durable outbox (see [change-events.md](./change-events.md)). |
+| `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
 
 **Score conversion**: `score = 1.0 - (vec0_distance / 2.0)`, clamped to `[0.0, 1.0]`. The `chunks_vec` virtual table is created with `distance_metric=cosine` (schema-baked at migration 0004; see [ADR-0007 § Amendments](../decisions/0007-sqlite-vec-over-alternatives.md#amendments)), so `vec0_distance` is `1 − cos_sim` and ranges over `[0, 2]`. Identical vectors yield `score = 1.0` (distance `0`); orthogonal vectors yield `0.5` (distance `1`, `cos_sim = 0`); opposite vectors yield `0.0` (distance `2`, `cos_sim = −1`). The clamp is a defensive guard against floating-point edge cases at the endpoints.
 

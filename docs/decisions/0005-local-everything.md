@@ -23,7 +23,7 @@ Every component Hypomnema requires to run is local. Specifically:
 
 - **Embedding model**: Local, via a sidecar process — `nomic-embed-text-v1.5` served by TEI (Text Embeddings Inference) is the reference configuration. Any OpenAI-API-shaped endpoint is configurable, so pointing at a hosted model is possible but not required.
 - **Vector store**: `sqlite-vec`, one file on disk, loaded as a SQLite extension into the daemon's existing connection pool. No separate process, no network port.
-- **Event outbox**: A JSONL file in the daemon's data directory.
+- **Change events**: Live event delivery happens inside the local daemon and over local CLI/HTTP/MCP transports. Durable replay, if added later, must use local daemon-owned storage.
 - **Logs and metrics**: Local only; no crash reporting or usage telemetry is sent anywhere.
 
 Running Hypomnema produces no outbound network traffic except to the configured embedding endpoint (which may itself be on localhost).

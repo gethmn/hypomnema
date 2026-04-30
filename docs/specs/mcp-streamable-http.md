@@ -1,18 +1,18 @@
 # MCP Streamable HTTP Transport Specification
 
-**Version**: 1.0.0
-**Date**: 2026-04-28
+**Version**: 1.1.0
+**Date**: 2026-04-30
 **Status**: Approved
 
 ---
 
 ## Overview
 
-The MCP Streamable HTTP transport exposes Hypomnema's MCP tool surface (the same `search_filesystem` / `search_content` / `search_semantic` operations served by the stdio transport today, plus the round-3 vault-management tools) over a single HTTP endpoint on `hmnd`'s existing Axum router. Agent hosts that cannot spawn subprocesses (browser-hosted hosts) or that connect to a non-co-located daemon talk to Hypomnema over this transport instead of the stdio shim served by `hmn mcp`.
+The MCP Streamable HTTP transport exposes Hypomnema's MCP tool surface (the same `search_filesystem` / `search_content` / `search_semantic` operations served by the stdio transport today, plus the vault-management tools and the live `vault_watch` subscription) over a single HTTP endpoint on `hmnd`'s existing Axum router. Agent hosts that cannot spawn subprocesses (browser-hosted hosts) or that connect to a non-co-located daemon talk to Hypomnema over this transport instead of the stdio shim served by `hmn mcp`.
 
 The transport implements MCP's "Streamable HTTP" specification (the third standard MCP transport, post-2024-11-05): one endpoint that accepts JSON-RPC requests over POST and optionally streams server-to-client messages over SSE on GET.
 
-This spec is deliberately small. The MCP HTTP transport is a control plane that offers strictly less than the existing `/search/*` HTTP API: same operations, behind an MCP framing, with no additional behavior, no additional tool surface, and no additional trust posture. Authentication, TLS, bind-address policy, and rate limiting are concerns of `hmnd`'s HTTP listener as a whole (today: loopback-only, no auth, no TLS — extending ADR-0005's local-everything trust boundary). The MCP HTTP transport inherits whatever posture the listener is configured with; it does not introduce its own.
+This spec is deliberately small. The MCP HTTP transport is a control plane behind MCP framing, with no additional trust posture. Authentication, TLS, bind-address policy, and rate limiting are concerns of `hmnd`'s HTTP listener as a whole (today: loopback-only, no auth, no TLS — extending ADR-0005's local-everything trust boundary). The MCP HTTP transport inherits whatever posture the listener is configured with; it does not introduce its own.
 
 **Related Documents**:
 - [ADR-0013: MCP transport — Streamable HTTP on `hmnd`](../decisions/0013-mcp-transport-streamable-http.md) — present scope this spec records
@@ -22,7 +22,8 @@ This spec is deliberately small. The MCP HTTP transport is a control plane that 
 - [ADR-0004: Three search modes as peers](../decisions/0004-three-search-modes-as-peers.md) — canonical tool names and the "transports are peers, not forks" claim
 - [Architecture: Search API](../architecture/overview.md#search-api) — current three-transport surface (HTTP + stdio-MCP + HTTP-MCP)
 - [filesystem-search](./filesystem-search.md), [content-search](./content-search.md), [semantic-search](./semantic-search.md) — wire shapes the new transport reuses unchanged
-- [vault-management](./vault-management.md) — pre-commits to "same handlers, three transports" for vault-management MCP tools (round 3+); HTTP-MCP is one of those three
+- [vault-management](./vault-management.md) — pre-commits to "same handlers, three transports" for vault-management MCP tools; HTTP-MCP is one of those three
+- [change-events](./change-events.md) — live `vault_watch` semantics and future durable-stream notes
 
 ---
 
@@ -35,7 +36,7 @@ This spec is deliberately small. The MCP HTTP transport is a control plane that 
 3. An MCP-capable client opens a connection to `http://<host>:<port>/mcp`.
 4. The client sends a JSON-RPC `initialize` over POST. The server responds with `serverInfo.name = "hypomnema"` (per ADR-0012 § Resolution 4) and the tool list.
 5. For each tool invocation, the client POSTs a JSON-RPC `tools/call`. The server executes the tool against the daemon's in-process search handlers and returns the result.
-6. If the server has streamed messages to deliver (progress notifications, future server-initiated requests), the client opens an SSE connection via GET to the same endpoint. The server emits SSE-framed JSON-RPC messages until either side closes.
+6. If the server has streamed messages to deliver (`vault_watch`, progress notifications, future server-initiated requests), the client opens an SSE connection via GET to the same endpoint. The server emits SSE-framed JSON-RPC messages until either side closes.
 7. When the client disconnects (or the daemon shuts down), session state is discarded.
 
 ### State Machine
@@ -63,7 +64,7 @@ serverInfo:
 
 ### Tool surface
 
-Identical to the stdio transport. Tools: `search_filesystem`, `search_content`, `search_semantic`. Request/response shapes are the `*QueryJson` / `*SearchResponse` types defined in the search specs. When `vault-management.md` ships its MCP tools (round 3+), they extend the same surface served by this transport.
+Identical to the stdio transport. Request/response tools include `search_filesystem`, `search_content`, `search_semantic`, and the vault-management request/response tools. `vault_watch` adds a read-only long-lived live-event subscription; its semantics are defined in [change-events.md](./change-events.md#mcp-subscription). Search request/response shapes are the `*QueryJson` / `*SearchResponse` types defined in the search specs.
 
 ### Endpoint configuration
 
@@ -125,9 +126,9 @@ The `structuredContent` payload is the same `FilesystemSearchResponse` JSON the 
 
 **Input**: After a successful initialize, the client opens GET `http://127.0.0.1:7777/mcp` with `Accept: text/event-stream`.
 
-**Behavior**: The server holds the connection open and emits SSE events as JSON-RPC notifications. In v1 the server has no notifications to send for the read-only search tools — the SSE stream opens, stays open, closes cleanly with no events. Future MCP features (progress notifications during long semantic searches; server-initiated tool calls) flow through this channel.
+**Behavior**: The server holds the connection open and emits SSE events as JSON-RPC notifications. Read-only search tools do not emit notifications. `vault_watch` uses the live-stream framing pinned by [change-events.md](./change-events.md#mcp-subscription). Future MCP features (progress notifications during long semantic searches; server-initiated tool calls) flow through this channel.
 
-**Result**: A successful keep-alive stream that emits no events and closes gracefully when the client or server disconnects.
+**Result**: A successful keep-alive stream that emits no events unless a long-lived operation such as `vault_watch` is active, and closes gracefully when the client or server disconnects.
 
 ---
 
@@ -238,8 +239,8 @@ This spec assumes rmcp 1.5 ships a server-side Streamable HTTP transport feature
 
 ## Open Questions
 
-- [ ] **Session management** — MCP Streamable HTTP supports `Mcp-Session-Id` for stateful sessions. v1 ships stateless per Resolution B in the round-4 step-12 workplan: `LocalSessionManager::default()` satisfies rmcp's type bound without persisting cross-call state, and Hypomnema's tool surface is single-shot request/response with no session-scoped state to track. Future-amendment trigger: a tool that needs session-scoped state (e.g., multi-step transactions, paginated searches with cursor-in-session).
-- [ ] **Resumable SSE streams** (`Last-Event-ID`) — deferred per Resolution C in the round-4 step-12 workplan. v1 has no notifications or server-pushed messages to send for the read-only search tools or the idempotent vault-management tools — each tool/call is a single request → single response over POST, and the SSE GET channel opens, stays open, and closes cleanly with no events. Future-amendment trigger: long-running tools (e.g., a streaming semantic search that emits per-result progress) or server-initiated tool calls.
+- [ ] **Session management** — MCP Streamable HTTP supports `Mcp-Session-Id` for stateful sessions. v1 ships stateless per Resolution B in the round-4 step-12 workplan: `LocalSessionManager::default()` satisfies rmcp's type bound without persisting cross-call state, and Hypomnema's request/response tool surface has no session-scoped state to track. Future-amendment trigger: a tool that needs cursor-in-session or multi-step transactional state.
+- [ ] **Resumable SSE streams** (`Last-Event-ID`) — deferred per Resolution C in the round-4 step-12 workplan. `vault_watch` is live-only and deliberately has no replay / no `since` semantics in v0, so `Last-Event-ID` remains out of scope until a durable event store exists. Future-amendment trigger: durable replay, progress notifications during long semantic searches, or server-initiated tool calls.
 - [ ] **CORS** — v1 sets no CORS headers per Resolution D in the round-4 step-12 workplan. The first real browser-hosted host consumer's requirements decide what to allow. Hand-rolled `tower-http::cors` is the natural future shape; deferred until a concrete consumer surfaces. Note: the Origin-validation middleware (DNS-rebinding defense) is a separate concern and is shipped in v1 — Origin validation rejects unauthorized cross-origin POSTs at the request-entry boundary; CORS preflight is the browser's mechanism for the client to know which cross-origin requests to issue.
 - [ ] **`mcp.http.path` configurability** — v1 rejects any value other than `"/mcp"` to keep the routing story trivial per Resolution E in the round-4 step-12 workplan. Future versions may allow path customization (e.g., for operators reverse-proxying multiple Hypomnema daemons under different prefixes). Out of scope for v1.
 
@@ -252,3 +253,4 @@ This spec assumes rmcp 1.5 ships a server-side Streamable HTTP transport feature
 | 0.1.0 | 2026-04-27 | Initial draft. |
 | 0.1.1 | 2026-04-28 | Round-4 pre-round prep: resolved Open Question 1 (rmcp 1.5 ships `transport-streamable-http-server`; `StreamableHttpService` mounts on an axum `Router` via `nest_service`; no custom scaffolding needed). |
 | 1.0.0 | 2026-04-28 | Promoted from `notes/proposals/mcp-streamable-http.md` (was 0.1.1). Round-4 step 12 workplan resolutions: Open Question 1 → resolved at pre-round prep (rmcp ships transport feature; mount via `nest_service` on axum 0.7 with hand-rolled-handler fallback); Open Question 2 → v1 stateless; Open Question 3 → defer; Open Question 4 → v1 sets no CORS headers; Open Question 5 → v1 rejects `mcp.http.path != "/mcp"` with startup error. |
+| 1.1.0 | 2026-04-30 | Amended for live `vault_watch`: MCP HTTP remains stateless and non-resumable, but can carry live server-to-client event notifications for active watch subscribers. |

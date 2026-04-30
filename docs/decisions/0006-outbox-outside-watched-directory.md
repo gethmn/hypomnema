@@ -1,4 +1,4 @@
-# ADR-0006: Outbox (and All Daemon State) Lives Outside the Watched Directory
+# ADR-0006: Daemon State Lives Outside the Watched Directory
 
 **Status**: accepted
 **Date**: 2026-04-23
@@ -8,7 +8,7 @@
 
 ## Context
 
-Hypomnema emits change events to an append-only JSONL log so that consumers can subscribe without polling. The natural question is where that log lives on disk.
+Early Hypomnema design included an append-only JSONL outbox so consumers could subscribe without polling. The natural question was where that log lived on disk.
 
 Two broad options:
 1. **Inside the watched directory** — e.g., `<vault>/.hypomnema/outbox.jsonl`. Keeps everything about a given vault "together." Matches the `.git/`, `.obsidian/` pattern.
@@ -16,11 +16,11 @@ Two broad options:
 
 The same question applies to the SQLite index file, the daemon logs, and the configuration — all of them are mutable state maintained by the daemon, not user content.
 
-A vault of Markdown notes is the kind of directory users very commonly sync via Syncthing, Dropbox, iCloud Drive, or Obsidian Sync. A constantly-growing file (the outbox) or a frequently-mutated binary (the SQLite index) inside a synced directory produces pathological behavior: sync conflicts, wasted bandwidth, spurious change notifications fanning out to other devices, and in the worst cases corruption when two devices write the same bytes concurrently.
+A vault of Markdown notes is the kind of directory users very commonly sync via Syncthing, Dropbox, iCloud Drive, or Obsidian Sync. A constantly-growing file or a frequently-mutated binary (the SQLite index) inside a synced directory produces pathological behavior: sync conflicts, wasted bandwidth, spurious change notifications fanning out to other devices, and in the worst cases corruption when two devices write the same bytes concurrently.
 
 ## Decision
 
-All state Hypomnema maintains — the SQLite index (`index.sqlite`), the outbox (`outbox.jsonl`), the daemon logs, and the configuration file — lives in the daemon's own data directory (`~/.local/share/hypomnema/` on Linux and macOS, `%APPDATA%\hypomnema\` on Windows), or in XDG-standard config/log directories. **Nothing mutable is written under the watched directory.**
+All state Hypomnema maintains — the SQLite index (`index.sqlite`), vault registry (`vaults.sqlite`), daemon logs, and configuration file — lives in the daemon's own data directory (`~/.local/share/hypomnema/` on Linux and macOS, `%APPDATA%\hypomnema\` on Windows), or in XDG-standard config/log directories. **Nothing mutable is written under the watched directory.**
 
 macOS deliberately uses XDG paths rather than `~/Library/Application Support/` — keeping one layout across Unix avoids branching in daemon code and in docs.
 
@@ -55,4 +55,6 @@ The daemon reads from the watched directory; it never writes there.
 
 - **2026-04-23** — Tightened the data-directory rule: macOS uses the same XDG-style path as Linux (`~/.local/share/hypomnema/`) rather than `~/Library/Application Support/hypomnema/`. The original decision was silent between the two on macOS; this amendment picks the Unix-uniform layout so daemon code and docs do not branch per-OS. No behavioral change for Linux or Windows; no reversal of the "state lives outside the watched vault" rule.
 
-- **2026-04-26** — Multi-vault adopted in [ADR-0009](./0009-multi-vault-per-daemon.md) and the predicted multi-vault data-dir layout is now formalized. The Consequences section's anticipatory note ("Multiple vault directories could share a daemon data-dir scheme without collision") is realized as: `<data_dir>/vaults/<vault_id>/{index.sqlite, outbox.jsonl, meta.toml}` per vault, with a top-level `<data_dir>/vaults.sqlite` registry. The "state lives outside the watched vault" rule is unchanged and now applies per-vault.
+- **2026-04-26** — Multi-vault adopted in [ADR-0009](./0009-multi-vault-per-daemon.md) and the predicted multi-vault data-dir layout is now formalized. The Consequences section's anticipatory note ("Multiple vault directories could share a daemon data-dir scheme without collision") is realized as: `<data_dir>/vaults/<vault_id>/{index.sqlite, meta.toml}` per vault, with a top-level `<data_dir>/vaults.sqlite` registry. The "state lives outside the watched vault" rule is unchanged and now applies per-vault.
+
+- **2026-04-30** — The JSONL outbox was removed as the public v0 change-event contract. v0 change events are live-only and exposed through CLI/HTTP/MCP streaming. This ADR remains the daemon-state placement rule: if a future durable event store lands, it must live outside watched vaults.

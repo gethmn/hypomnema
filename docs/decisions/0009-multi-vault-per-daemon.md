@@ -19,7 +19,7 @@ later:
   registry/router that fans across daemons
 
 The v0 forward-compat work in step 5 (the per-result `vault?: string`
-field on every search response and outbox event) was added precisely so
+field on every search response and change event) was added precisely so
 adoption of B or C later would be additive rather than a versioned
 migration.
 
@@ -33,7 +33,7 @@ instance per vault" patterns (A and C) became the deciding factor:
 - Provisioning a new machine becomes scripted-startup-of-N-daemons
 
 These costs land on the *user* and *consumer* side, while the cost of
-B (schema mutation across config / CLI / specs / outbox) lands once on
+B (schema mutation across config / CLI / specs / event stream) lands once on
 the *daemon* side and is paid for by the v0 forward-compat work.
 
 A separate, larger framing emerged alongside this — that vault
@@ -56,8 +56,9 @@ Wire-shape implications:
   consumers continue to ignore the field.
 - Search responses additionally carry per-result optional
   `vault_name?: string` — point-in-time-accurate display ergonomics.
-  Outbox events carry `vault` (id) only and **do not** carry
-  `vault_name` — outbox is durable, names can rot.
+  Change events carry `vault` (id) only and **do not** carry
+  `vault_name` — names are mutable; consumers resolve display names
+  through the registry when needed.
 - `/health` and `/status` are not per-vault; `/status` returns a
   `vaults: [{...}]` array.
 
@@ -74,7 +75,7 @@ workplan time. The wire-shape decisions made here (per-result `vault`,
 forward-compat with any reasonable resolution of those semantics.
 
 Storage layout: `<data_dir>/vaults/<vault_id>/` holds each vault's
-`index.sqlite`, `outbox.jsonl`, and `meta.toml`; a top-level
+`index.sqlite` and `meta.toml`; a top-level
 `<data_dir>/vaults.sqlite` is the authoritative vault registry. Per-
 vault state isolates vault lifecycle from peers (terminate = stop
 watcher/indexer + remove the per-vault subdirectory).

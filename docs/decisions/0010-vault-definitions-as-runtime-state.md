@@ -17,7 +17,7 @@ control-plane API mutates a daemon-owned registry; `hmnd` reconciles on
 startup)?
 
 The original cost framing in vision priced multi-vault as "schema
-mutation across config, CLI, specs, outbox." The user's framing
+mutation across config, CLI, specs, event stream." The user's framing
 distinguishes the two:
 
 > "Which port does `hmnd` listen on? Configuration. Which directories
@@ -81,7 +81,6 @@ Storage layout under the daemon data directory:
   vaults/
     <vault_id>/
       index.sqlite            -- files, chunks, chunks_vec for this vault
-      outbox.jsonl            -- per-vault append-only event log
       meta.toml               -- human-readable copy of registry row
   hmnd.pid
   logs/

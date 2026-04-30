@@ -48,7 +48,7 @@ No workspace split. No feature flags. No transport abstraction. Both binaries li
 
 ### Neutral
 
-- This is a source-layout decision, not a runtime-architecture one. Nothing about the watcher, indexer, outbox, or search pipelines changes. The v0 step order in [`implementation/tech-stack.md`](../implementation/tech-stack.md) still holds; each step just has a daemon-side implementation (owned by `hmnd`) and, where applicable, a thin CLI-side wrapper (owned by `hmn`).
+- This is a source-layout decision, not a runtime-architecture one. Nothing about the watcher, indexer, event stream, or search pipelines changes. The v0 step order in [`implementation/tech-stack.md`](../implementation/tech-stack.md) still holds; each step just has a daemon-side implementation (owned by `hmnd`) and, where applicable, a thin CLI-side wrapper (owned by `hmn`).
 - Not a workspace split. A workspace would formalize the daemon/client boundary by splitting into separate crates — explicitly excluded in the tech stack as "not until a second consumer demands reuse of the library." Two binaries in one crate is a strictly lighter-weight structure than a workspace and earns none of a workspace's ceremony.
 
 ---

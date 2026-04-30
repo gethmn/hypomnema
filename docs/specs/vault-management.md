@@ -1,21 +1,22 @@
 # Vault Management Specification
 
-**Version**: 1.1.0
-**Date**: 2026-04-28
+**Version**: 1.2.0
+**Date**: 2026-04-30
 **Status**: Approved
 
 ---
 
 ## Overview
 
-A Hypomnema daemon owns zero or more **vaults** — directories on disk whose contents the daemon watches, indexes, and exposes via search. Vault lifecycle operations (`create`, `list`, `status`, `pause`, `resume`, `reset`, `rename`, `rescan`, `terminate`) are exposed by `hmnd` over an HTTP control plane, the `hmn` CLI, and MCP tools — same handlers, three transports.
+A Hypomnema daemon owns zero or more **vaults** — directories on disk whose contents the daemon watches, indexes, and exposes via search. Vault lifecycle operations (`create`, `list`, `status`, `pause`, `resume`, `reset`, `rename`, `rescan`, `terminate`) and live event subscription (`watch`) are exposed by `hmnd` over an HTTP control plane, the `hmn` CLI, and MCP tools — same handlers, three transports where transport framing allows.
 
-Authoritative vault state lives in `<data_dir>/vaults.sqlite`. Each vault gets a per-vault subdirectory at `<data_dir>/vaults/<vault_id>/` holding its own `index.sqlite`, `outbox.jsonl`, and `meta.toml`. Operations on the same vault are serialized; operations on different vaults run in parallel. Search queries fan out across all currently-active vaults by default and can be narrowed by name or surrogate ID.
+Authoritative vault state lives in `<data_dir>/vaults.sqlite`. Each vault gets a per-vault subdirectory at `<data_dir>/vaults/<vault_id>/` holding its own `index.sqlite` and `meta.toml`. Operations on the same vault are serialized; operations on different vaults run in parallel. Search queries fan out across all currently-active vaults by default and can be narrowed by name or surrogate ID.
 
 This spec covers the full intended surface. Per the project's LDS rule that specs cover the full intended surface, every operation is fully specified here even when implementation phases across multiple workplans:
 
 - **Step 10** ships `create`, `list`, `status`, `terminate` plus the cross-vault search refinements.
 - **Step 11** (round-3 follow-on) ships `pause`, `resume`, `reset`, `rename`, `rescan` against the same wire shapes.
+- **v0 event-stream amendment** ships `watch` as a live-only change-event subscription over CLI, HTTP, and MCP where transport framing allows.
 
 **Related Documents**:
 - [ADR-0009: Multi-Vault per Daemon](../decisions/0009-multi-vault-per-daemon.md)
@@ -51,7 +52,7 @@ nonexistent ─────► active ◄─────────────
 
 | State | Description | Transitions |
 |---|---|---|
-| `active` | Watcher + indexer running; vault answers searches and emits outbox events. | → `paused` (on `pause`); → `errored` (on runtime error); → `terminated` (on `terminate`). |
+| `active` | Watcher + indexer running; vault answers searches and emits live change events. | → `paused` (on `pause`); → `errored` (on runtime error); → `terminated` (on `terminate`). |
 | `paused` | Watcher + indexer stopped; index preserved; vault is silently skipped from default search scope. | → `active` (on `resume`); → `terminated` (on `terminate`). |
 | `errored` | Runtime error rendered the vault unsable (path inaccessible, schema mismatch, etc.); `last_error` populated. | → `active` (on successful `reset`); → `errored` (on `reset` that fails again); → `terminated` (on `terminate`). |
 | `terminated` | Registry row removed; per-vault subdirectory removed; vault path's own files untouched. | Terminal. The same `name` and `path` may be reused for a fresh `create` (with a new surrogate ID). |
@@ -84,12 +85,13 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 |---|---|---|
 | `create` | Step 10 | Validate path; canonicalize; reject if path is already registered or if `data_dir` is under it; mint UUIDv7; create per-vault subdirectory; insert registry row; start watcher + indexer. |
 | `list` | Step 10 | Read registry; return all vaults with status, file count, last-indexed timestamp, last error. |
-| `status` (id\|name) | Step 10 | Single-vault detail; same fields as `list` plus per-vault outbox path and on-disk byte size. |
+| `status` (id\|name) | Step 10 | Single-vault detail; same fields as `list` plus per-vault storage/status metadata. |
 | `pause` | Step 11 | Stop the vault's watcher + indexer; transition `active → paused`; index untouched. Idempotent on already-paused. |
 | `resume` | Step 11 | Restart watcher + indexer; transition `paused → active` or `errored → active` if the underlying error is resolved (`reset` is the explicit-recovery path; `resume` from `errored` is a convenience). Clears `last_error` on success. |
-| `reset` | Step 11 | Force-clear `last_error`; restart watcher + indexer. With `--rebuild`, also drop and rebuild the per-vault `chunks` + `chunks_vec` tables (keeps `files`; preserves outbox). |
-| `rename` | Step 11 | Registry UPDATE: `id ↔ new name`. Per-vault data unchanged; surrogate ID unchanged. Outbox events continue to carry the surrogate ID, not the name. |
-| `rescan` | Step 11 | Force full reconciliation against the vault's directory contents; outbox events emitted as if from a cold start (per-file `created` for every existing file). |
+| `reset` | Step 11 | Force-clear `last_error`; restart watcher + indexer. With `--rebuild`, also drop and rebuild the per-vault `chunks` + `chunks_vec` tables (keeps `files`). |
+| `rename` | Step 11 | Registry UPDATE: `id ↔ new name`. Per-vault data unchanged; surrogate ID unchanged. Live change events continue to carry the surrogate ID, not the name. |
+| `rescan` | Step 11 | Force full reconciliation against the vault's directory contents; live change events emitted for files whose content hash changes. |
+| `watch` | v0 event stream | Subscribe to live change events for one vault or all active vaults; no replay / no `since` in v0. |
 | `terminate` | Step 10 | Stop watcher + indexer; remove registry row; remove the per-vault subdirectory at `<data_dir>/vaults/<id>/`; **never** touch the vault path's own files. |
 
 #### `create`
@@ -133,13 +135,13 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 **Validation**:
 - If `name_or_id` doesn't resolve, return `404 vault_not_found` with a closest-name hint computed via Levenshtein on the registry's name list (omit hint if no candidate is within distance 3).
 
-**Response** (`200 OK`): single `VaultRow` plus per-vault `outbox_path` and `outbox_size_bytes` (so operators can monitor outbox growth via `hmn vault status`).
+**Response** (`200 OK`): single `VaultRow` plus per-vault storage/status metadata.
 
 #### `pause` (step 11)
 
 **Request**: `POST /vaults/{name_or_id}/pause`, no body.
 
-**Flow**: take the per-vault `op_lock` (see § Concurrency); transition status `active → paused`; signal watcher + indexer to drain (max 30s); leave the per-vault `index.sqlite` and `outbox.jsonl` in place.
+**Flow**: take the per-vault `op_lock` (see § Concurrency); transition status `active → paused`; signal watcher + indexer to drain (max 30s); leave the per-vault `index.sqlite` in place.
 
 **Response** (`200 OK`): updated `VaultRow` with `status: "paused"`.
 
@@ -157,7 +159,7 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 
 **Request**: `POST /vaults/{name_or_id}/reset`, optional body `{rebuild?: boolean}` (default `false`).
 
-**Flow**: take the per-vault `op_lock`; clear `last_error`; restart watcher + indexer. If `rebuild: true`, additionally drop and rebuild the `chunks` + `chunks_vec` tables in the per-vault `index.sqlite` (preserves `files` rows and the outbox; re-embeds at startup).
+**Flow**: take the per-vault `op_lock`; clear `last_error`; restart watcher + indexer. If `rebuild: true`, additionally drop and rebuild the `chunks` + `chunks_vec` tables in the per-vault `index.sqlite` (preserves `files` rows; re-embeds at startup).
 
 **Response** (`200 OK`): updated `VaultRow`.
 
@@ -169,7 +171,7 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 - `new_name` matches `[A-Za-z0-9_-]{1,}`.
 - `new_name` is not already in use → `409 vault_name_conflict`.
 
-**Flow**: take the per-vault `op_lock`; `UPDATE vaults SET name = ?` on the matching row; rewrite the per-vault `meta.toml`. The surrogate ID is unchanged; outbox events continue to carry the same `vault` ID; consumers tailing by ID see no disruption.
+**Flow**: take the per-vault `op_lock`; `UPDATE vaults SET name = ?` on the matching row; rewrite the per-vault `meta.toml`. The surrogate ID is unchanged; live change events continue to carry the same `vault` ID.
 
 **Response** (`200 OK`): updated `VaultRow` with the new `name`.
 
@@ -177,9 +179,19 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 
 **Request**: `POST /vaults/{name_or_id}/rescan`, no body.
 
-**Flow**: take the per-vault `op_lock`; force a full directory walk; emit outbox events for every file as if from a cold-start re-bootstrap (consumers may see a burst of `created` / `modified` events even for files whose hashes haven't changed, depending on cold-start emission policy).
+**Flow**: take the per-vault `op_lock`; force a full directory walk; publish live change events only for files whose content hash differs from the stored value. A fully indexed, unchanged vault may emit few or zero events. Consumers that need current state must query the index.
 
 **Response** (`200 OK`): updated `VaultRow` plus a `rescan_initiated_at` timestamp; the rescan itself is asynchronous.
+
+#### `watch` (v0 event stream)
+
+**Request**: long-lived streaming subscription by vault selector. CLI shape is `hmn vault watch [NAME|ID] [--all]`; HTTP/MCP framing is pinned in [change-events.md](./change-events.md).
+
+**Flow**: resolve the requested vault or active vault set; subscribe the client to the daemon's live in-memory change event bus; stream newline-delimited event envelopes until disconnect, daemon shutdown, vault termination, or stream error.
+
+**Response**: live stream of change-event envelopes. No replay and no `since` argument in v0.
+
+**Errors**: `404 vault_not_found` when a requested selector does not resolve.
 
 #### `terminate`
 
@@ -316,7 +328,7 @@ This shape implements ADR-0010's invariants ("operations on the same vault are s
 
 ### MCP Tool Surface
 
-The full nine operations are exposed as MCP tools, naming-mirroring the HTTP control plane:
+The lifecycle operations plus the live event subscription are exposed as MCP tools, naming-mirroring the HTTP control plane:
 
 | Tool | Trust posture | Ships in |
 |---|---|---|
@@ -329,6 +341,7 @@ The full nine operations are exposed as MCP tools, naming-mirroring the HTTP con
 | `vault_reset` | Write (gated) | Step 11 |
 | `vault_rename` | Write (gated) | Step 11 |
 | `vault_rescan` | Write (gated) | Step 11 |
+| `vault_watch` | Read-only, long-lived | v0 event stream |
 
 **Gating**: a single config key `[mcp] enable_write_tools: bool` (default `true`) controls whether the write tools are advertised. When `false`, only the read-only tools are listed in the MCP `tools/list` response and `tools/call` against any write tool returns a structured `write_tools_disabled` error.
 
@@ -338,7 +351,7 @@ The full nine operations are exposed as MCP tools, naming-mirroring the HTTP con
 - Future write tools inherit the same gate. No config-key-explosion across rounds.
 - Operators wanting strict opt-out get a single-line config edit (`[mcp] enable_write_tools = false`).
 
-Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically.
+Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically. `vault_watch` is read-only and is not affected by write-tool gating, but its exact streaming framing depends on the MCP transport support described in [change-events.md](./change-events.md#mcp-subscription).
 
 ### Compose-Style Declarative Layer (deferred)
 
@@ -386,7 +399,6 @@ CREATE TABLE IF NOT EXISTS meta (
 ```
 <data_dir>/vaults/<vault_id>/
   index.sqlite      # files, chunks, chunks_vec for this vault
-  outbox.jsonl      # per-vault append-only event log
   meta.toml         # human-readable copy of the registry row
 ```
 
@@ -463,8 +475,7 @@ vaults:
 Response `200 OK`:
 ```yaml
 <VaultRow>
-outbox_path: "<data_dir>/vaults/<id>/outbox.jsonl"
-outbox_size_bytes: 18432
+storage_path: "<data_dir>/vaults/<id>/"
 ```
 
 Errors: `404 vault_not_found` (with `closest_name_hint?` in message).
@@ -552,7 +563,7 @@ The search and event specs cross-reference this spec for cross-vault behavior:
 - [filesystem-search.md](./filesystem-search.md) — per-result `vault` (id) + `vault_name` (name); request-side `vaults?: string[]`; response-envelope `partial_results?`.
 - [content-search.md](./content-search.md) — same shape.
 - [semantic-search.md](./semantic-search.md) — same shape; ordering is score-desc with same-embedding-model assumption.
-- [change-events.md](./change-events.md) — per-event `vault` (id) only; **no** `vault_name` (outbox is durable; names rot).
+- [change-events.md](./change-events.md) — live-only events; per-event `vault` (id) only; **no** `vault_name`.
 
 ---
 
@@ -598,12 +609,12 @@ $ hmn search content "pgvector" --vaults personal,work
 # → results from named subset only; unknown names show in partial_results.failed
 ```
 
-### Rename then continue tailing outbox
+### Rename then continue watching events
 
 ```sh
 $ hmn vault rename personal --new-name=my-notes
 # → registry row's name updated; surrogate ID unchanged
-# → consumer tailing <data_dir>/vaults/<id>/outbox.jsonl sees no disruption
+# → consumer watching by surrogate ID sees no disruption
 ```
 
 ### Terminate then recreate with same name
@@ -689,9 +700,9 @@ Silently skipped; appears in `partial_results.skipped` with `status: "errored"` 
 
 Race: a search request iterates active vaults, takes Arc clones, and a `terminate` runs concurrently. The Arc clone keeps the runner alive for the duration of the search; the search returns successfully. The next search after `terminate` no longer sees that vault.
 
-### Outbox file name conflict
+### Live event stream lag
 
-Each vault's outbox lives at `<data_dir>/vaults/<id>/outbox.jsonl`; the `id` is unique by construction (UUIDv7), so outbox-file-name collision is impossible.
+A slow `watch` subscriber may miss events if the in-memory channel overflows. The stream reports lag when the runtime can detect it; the consumer must re-query the index for current state. There is no replay in v0.
 
 ### Vault count: 0
 
@@ -730,9 +741,9 @@ The error envelope shape `{"error": {"code": "<code>", "message": "<human text>"
 
 Per-vault instances. Lifecycle is driven by control-plane mutations: `create` constructs and starts; `pause` / `terminate` signal shutdown via `WatcherShutdownHandle`; `resume` / `reset` reconstruct. The watcher and indexer never communicate across vaults.
 
-### With Outbox
+### With Change Events
 
-Per-vault outbox file at `<data_dir>/vaults/<id>/outbox.jsonl`. Each outbox event carries the surrogate `vault` ID (never `vault_name`). See [change-events.md](./change-events.md).
+Per-vault and all-vault live subscriptions use the daemon's in-memory event bus. Each event carries the surrogate `vault` ID (never `vault_name`). See [change-events.md](./change-events.md).
 
 ### With Search API
 
@@ -774,7 +785,7 @@ Same operations as HTTP, registered as tools. Read-only tools always advertised;
 - [ ] Compose-style declarative layer (`<data_dir>/hmnd-compose.toml`) — file format, merging rules, additive-reconciler semantics. Round-3 step 11 decides whether to ship.
 - [ ] Multi-model-embedding-per-vault — relaxes the same-embedding-model assumption that semantic-search's cross-vault score-desc ordering relies on. Requires either score normalization or per-vault top-K with re-ranking.
 - [ ] Cross-platform rename safety for the legacy-state migration (step-9 boundary follow-up).
-- [ ] Cross-vault aggregated outbox stream — should the daemon expose a merged event stream for consumers that want every vault's events, or is per-vault tailing the right shape forever? Round-3 ships per-vault only.
+- [ ] Cross-vault live event stream semantics — should `watch --all` include vaults created after subscription time or only the active set at subscription start?
 - [ ] Auto-import of orphan per-vault subdirectories on registry restore: detect a subdir whose `meta.toml` has no registry row and re-register from the meta file. Round-4+; round-3 reconcile removes orphan subdirs.
 
 ---
@@ -786,3 +797,4 @@ Same operations as HTTP, registered as tools. Read-only tools always advertised;
 | 0.1.0 | 2026-04-26 | Initial outline, seeded from ADR-0009 / ADR-0010 / ADR-0011. Cross-vault search semantics deliberately under-specified; round-3 workplan resolves. |
 | 1.0.0 | 2026-04-27 | Fleshed from outline; commits step-10 workplan resolutions. Status: Draft → Approved. Pinned: UUIDv7 ID format; eight cross-vault search semantics resolutions; per-vault async-mutex concurrency; MCP single-flag write-tool gating; full HTTP error catalog; full operations specification (step 10 ships 4; step 11 ships 5). Removed resolved Open Questions; preserved round-4+ items. |
 | 1.1.0 | 2026-04-28 | Step 12 workplan: small wording amendment to § MCP Tool Surface naming both stdio MCP and HTTP MCP transports as peers serving the same tool list. No behavioral change. |
+| 1.2.0 | 2026-04-30 | Added `watch` / `vault_watch` as a live-only event subscription and removed JSONL outbox semantics from the public v0 contract. |
