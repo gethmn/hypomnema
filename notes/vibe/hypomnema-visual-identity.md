@@ -9,7 +9,7 @@
 > - Vector finalization: Recraft (style-reference free tier) or hand-redrawn from approved raster
 > - Production rule: AI output is direction-finding, not final art. Bauhaus-grade modernist construction is generally outside what current generators nail; the final mark is hand-finished in vector.
 >
-> **Last Updated:** 2026-04-26
+> **Last Updated:** 2026-04-30
 
 ---
 
@@ -67,6 +67,7 @@ The Latin reading is not arbitrary — `hmn` is the project's CLI binary name. T
 - **Leftmost stem extends both above x-height and below baseline.**
   - Above x-height: reads as the ascender of Latin `h`.
   - Below baseline: reads as the descender of Greek `μ`.
+- **Descender-biased.** The descender should feel more visually consequential than the ascender. This preserves the Greek `μ` reading; over-emphasizing the ascender collapses the mark toward a merely Latin `hm` monogram.
 - **Maximum overlap.** Letters share stems and arches; the glyph is one form, not three letters tracked together.
   - `h` = left tall stem + arch 1
   - `m` = the entire 3-stem-2-arch silhouette
@@ -74,6 +75,10 @@ The Latin reading is not arbitrary — `hmn` is the project's CLI binary name. T
   - `μ` = the entire form, with the descender foregrounded
 - **No internal articulation.** Single solid shape. No bevels, no double-strokes, no thin internal outlines. Counter-spaces (white knockouts) do all the letterform work.
 - **Monoline weight.** Stems and arches share a uniform stroke weight. Modernist geometric construction — think Avenir or Futura, not Helvetica's slight modulation.
+- **Optical centering.** The glyph is slightly left-biased inside the square field to compensate for the visual mass of the two arches extending rightward.
+
+**Locked primary mark:**
+The primary production mark is the filled square version: slate-blue field with white knockout glyph. The final glyph is a manually reconstructed vector built from deterministic geometry, not an auto-trace and not a generative vector interpretation. Use this as the source of truth for avatars, favicons, README badges, and default brand presentation.
 
 **System variant — edge-extending stems:**
 Documented variant in which the leftmost stem's ascender and descender extend fully to the container's top and bottom edges (rather than terminating short with negative space above/below). Carries the same dual-reading; trades airy proportion for structural authority. Use when the mark needs to feel anchored (large display use, app icons), reserve the standard form for default use.
@@ -104,12 +109,14 @@ slate blue, cool gray, almost-blue, monochrome-friendly, flat color, no gradient
 
 ### Treatment Modes
 
-The symbol has two treatment modes. **Filled is primary; outlined is secondary.**
+The symbol has four practical treatment modes. **Primary filled is the locked default.**
 
 | Mode | When to Use | Spec |
 |------|-------------|------|
-| **Filled (knockout)** | Default. Avatars, favicons, hero, anywhere the mark sits alone. | Slate-blue field, white knockout glyph. Counter-spaces carry the letterform. |
-| **Outlined** | Secondary. Small inline contexts, low-contrast surfaces, line-only contexts (e.g., monochrome print). | Thin slate-gray stroke for both container and glyph. Monoline weight. |
+| **Primary filled** | Default. GitHub org/repo avatar, favicon, README badge, hero, anywhere the mark sits alone. | Slate-blue square field, white knockout glyph. Medium-heavy monoline geometry. |
+| **Primary inverse** | Light surfaces, diagrams, places where a white tile is required. | White square field, slate-blue glyph. Same glyph and proportions as primary filled. |
+| **Quiet/docs filled** | Documentation interiors, footers, low-emphasis callouts. | Slate-blue square field, white knockout glyph with slightly more field/breathing room. |
+| **Quiet/docs inverse** | Rare alternate when a quieter light tile is needed. | White square field, slate-blue glyph with the quiet/docs spacing. |
 
 **Why filled is primary:** Round 2/3 testing showed counter-spaces (white knockouts) articulate the dual-reading better than outlined-stroke construction. Outlined mode tends to attenuate the glyph's discipline.
 
@@ -123,7 +130,7 @@ The mark must work in **square**, **circle**, and **squircle** containers, all w
 | **Circle** | Profile contexts that round automatically (some social platforms). | Symbol must remain centered when the container is masked to a circle. |
 | **Squircle** | iOS/macOS app-icon contexts, modern UI. | Apple-style superellipse rounding. |
 
-**Scale discipline (16×16 favicon as the test):** At 16×16 the standard form may lose the descender/ascender extension. The fallback (Path B, ascender only) is permitted at favicon scale. Below 16×16 is not a target; the mark is not designed to be legible at sub-favicon sizes.
+**Scale discipline (16×16 favicon as the test):** Use the primary filled mark first. At 16×16 the standard form may lose the descender/ascender nuance; this is acceptable if the silhouette still reads. If favicon testing fails, create a dedicated tiny-size export from the same glyph with slightly heavier stroke or slightly reduced padding. The Path B ascender-only fallback remains permitted only if the dual-reading glyph fails legibility outright. Below 16×16 is not a target; the mark is not designed to be legible at sub-favicon sizes.
 
 ### The Wordmark
 

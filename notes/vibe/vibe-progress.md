@@ -1,9 +1,9 @@
 # Vibe Progress: Hypomnema
 
 ## Meta
-- **Current Phase:** 3 → 4 (Codification drafted; ready for Use)
+- **Current Phase:** 4 (Use; primary mark locked)
 - **Artifact:** [`hypomnema-visual-identity.md`](./hypomnema-visual-identity.md) — v1.0
-- **Last Updated:** 2026-04-26
+- **Last Updated:** 2026-04-30
 - **Target Image Generators:**
   - Raster exploration: Gemini (Nano Banana 2), FLUX.2 Pro, FLUX.2 Flex (via OpenRouter)
   - Vector finalization: Recraft (limited free tier) or hand-redrawn from raster
@@ -243,7 +243,21 @@ Decided exploration order, highest-ambition first:
 - **Status:** v1.0 drafted 2026-04-26.
 - **Artifact:** [`hypomnema-visual-identity.md`](./hypomnema-visual-identity.md)
 - **Sections:** Brand Essence (4 adjectives + emotional intent + visual metaphors), Visual Language (symbol spec + edge-extending variant + Path B fallback + colors + treatment modes + containers + wordmark + lockup + anti-patterns), Prompt Engineering Guide (working/dropped keywords, output modifiers, format specs, vector finalization, generator-specific notes, negatives), Iteration Protocol (refinement vocabulary, quality checkpoints, common failure modes from Rounds 1–4), Example Prompt Library (5 working prompts: filled symbol, outlined symbol, lockup, edge-extending variant, favicon fallback) + Quick Reference Card.
-- **Next:** Phase 4 (Use) — produce the actual marks. Hand-finish the vector from a Path D raster reference; deploy as GitHub avatar, favicon, README banner.
+- **Outcome:** Phase 4 mark production completed enough to lock the primary identity direction.
+
+---
+
+## Phase 4: Use
+- **Status:** Primary filled mark locked 2026-04-30.
+- **Final primary mark:** slate-blue square field with white knockout glyph.
+- **Glyph construction:** manually reconstructed vector, not Recraft-generated. The locked form is the 2-arch / 3-stem dual-reading `hmn` / `μ` glyph with the leftmost stem extending above x-height and below baseline. The descender remains visually more consequential than the ascender.
+- **Optical lock:** the glyph is slightly left-biased in the square to compensate for rightward arch mass. Stroke weight is medium-heavy: strong enough for avatar/favicon use, but still modernist and restrained.
+- **Usage system:**
+  - **Default / avatar / README badge / favicon:** primary filled mark.
+  - **Inverse / light surfaces / diagrams:** primary inverse mark.
+  - **Docs interior / footers / low-emphasis callouts:** quiet filled mark with slightly more field.
+  - **Rare alternate:** quiet inverse mark when layout requires a light tile.
+- **Tiny-size note:** use the primary filled mark first. If 16px favicon testing loses too much silhouette, create a dedicated tiny-size export from the same glyph with slightly heavier stroke or slightly reduced padding; do not switch concepts.
 
 ---
 
