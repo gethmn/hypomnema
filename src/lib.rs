@@ -10,6 +10,7 @@ pub mod client;
 pub mod config;
 pub mod control_plane;
 pub mod embedding;
+pub mod events;
 pub mod indexer;
 pub mod legacy_state_migration;
 pub mod logging;
