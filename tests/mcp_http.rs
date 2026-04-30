@@ -130,6 +130,7 @@ async fn spawn_seeded_daemon_with_embedder(
     ));
     let api_state = ApiState {
         vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let mut app = api::router(api_state);
 
@@ -236,6 +237,7 @@ async fn spawn_live_daemon() -> LiveHttpMcpDaemon {
 
     let api_state = ApiState {
         vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
         Arc::new(InProcessBackend::new(manager.clone()));

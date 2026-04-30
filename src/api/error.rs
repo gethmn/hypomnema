@@ -76,6 +76,14 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn vault_not_active(message: impl Into<String>) -> Self {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            code: "vault_not_active",
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn vault_op_conflict(message: impl Into<String>) -> Self {
         ApiError {
             status: StatusCode::CONFLICT,

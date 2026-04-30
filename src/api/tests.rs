@@ -65,7 +65,8 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     };
     let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));
     let state = ApiState {
-        vault_manager: manager,
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     Harness {
         _dir: dir,
@@ -600,8 +601,10 @@ async fn vault_harness() -> VaultHarness {
     let manager = VaultManager::open(registry, config, embedder, 768, rx)
         .await
         .unwrap();
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     VaultHarness {
         _root: root,
@@ -939,7 +942,8 @@ async fn multi_vault_harness_with(
         DIM as u32,
     ));
     let state = ApiState {
-        vault_manager: manager,
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     MultiVaultHarness {
         _root: root,
@@ -1491,8 +1495,10 @@ async fn errored_vault_harness(
     let manager = VaultManager::open(registry, config, embedder, 768, rx)
         .await
         .unwrap();
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     (
         VaultHarness {
@@ -1746,4 +1752,310 @@ async fn post_vaults_unknown_op_path_returns_404() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+// ===== Step 16 · Task 16.4: HTTP watch endpoint tests =====
+//
+// Tests for GET /vaults/{name_or_id}/watch (single-vault NDJSON stream) and
+// GET /events/watch (all-active-vaults NDJSON stream).
+
+use crate::events::{EventType, StreamEvent};
+use futures_util::StreamExt;
+
+/// Minimal harness for watch endpoint tests: a VaultManager::for_tests with
+/// one active vault, the event bus exposed for publishing, and the vault id.
+struct WatchHarness {
+    _dir: tempfile::TempDir,
+    _vault: tempfile::TempDir,
+    state: ApiState,
+    vault_id: VaultId,
+    vault_name: String,
+}
+
+async fn watch_harness() -> WatchHarness {
+    let dir = tempfile::TempDir::new().unwrap();
+    let vault = tempfile::TempDir::new().unwrap();
+    let vault_id = VaultId::new();
+    let store = crate::store::Store::open(
+        &vault_id,
+        dir.path(),
+        "index.sqlite",
+        &crate::config::EmbeddingConfig::default(),
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(store);
+    let entry = VaultEntry {
+        id: vault_id.clone(),
+        name: "watched".to_string(),
+        vault_path: vault.path().to_path_buf(),
+        store,
+        status: VaultStatus::Active,
+    };
+    let manager = Arc::new(VaultManager::for_tests(
+        vec![entry],
+        Arc::new(StubEmbedder::new(768)),
+        768,
+    ));
+    let state = ApiState {
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
+    };
+    WatchHarness {
+        _dir: dir,
+        _vault: vault,
+        state,
+        vault_id,
+        vault_name: "watched".to_string(),
+    }
+}
+
+/// Read the first complete NDJSON line from a streaming response body, parse
+/// it as a JSON `Value`, and return it. Panics if the stream ends without a
+/// line or if the line is invalid JSON.
+async fn first_ndjson_line(body: axum::body::Body) -> serde_json::Value {
+    let mut stream = body.into_data_stream();
+    let mut buf = String::new();
+    loop {
+        let chunk = stream
+            .next()
+            .await
+            .expect("stream ended before a complete NDJSON line")
+            .expect("stream error");
+        buf.push_str(std::str::from_utf8(&chunk).expect("chunk is valid utf8"));
+        if buf.contains('\n') {
+            break;
+        }
+    }
+    let line = buf.lines().next().expect("at least one line");
+    serde_json::from_str(line).unwrap_or_else(|e| panic!("invalid JSON: {e}: {line}"))
+}
+
+#[tokio::test]
+async fn watch_vault_unknown_returns_404() {
+    let h = watch_harness().await;
+    let app = router(h.state);
+    let req = Request::builder()
+        .method("GET")
+        .uri("/vaults/nonexistent/watch")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let (_, body) = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "vault_not_found");
+}
+
+#[tokio::test]
+async fn watch_vault_streams_file_changed_event() {
+    let h = watch_harness().await;
+    let app = router(h.state.clone());
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/vaults/{}/watch", h.vault_name))
+        .body(Body::empty())
+        .unwrap();
+
+    // oneshot completes once the handler returns the streaming response.
+    // At that point the broadcast receiver is subscribed. We then publish
+    // the event and read the first NDJSON line.
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/x-ndjson"),
+    );
+
+    // Publish one file_changed event targeting our vault.
+    h.state.event_bus.publish(StreamEvent::file_changed(
+        h.vault_id.clone(),
+        EventType::Created,
+        "notes/a.md".to_string(),
+        None,
+    ));
+
+    // Read and parse the first NDJSON line.
+    let event = first_ndjson_line(resp.into_body()).await;
+    assert_eq!(event["type"], "file_changed");
+    assert_eq!(event["event_type"], "created");
+    assert_eq!(event["vault"], h.vault_id.to_string());
+    assert_eq!(event["path"], "notes/a.md");
+    assert!(event["detected_at"].is_string(), "detected_at present");
+}
+
+#[tokio::test]
+async fn watch_vault_filters_out_events_for_other_vaults() {
+    let h = watch_harness().await;
+    let app = router(h.state.clone());
+
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/vaults/{}/watch", h.vault_name))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let other_vault = VaultId::new();
+    let watched_vault = h.vault_id.clone();
+
+    // First event: different vault → should be filtered.
+    h.state.event_bus.publish(StreamEvent::file_changed(
+        other_vault,
+        EventType::Modified,
+        "notes/b.md".to_string(),
+        None,
+    ));
+    // Second event: our vault → should pass through.
+    h.state.event_bus.publish(StreamEvent::file_changed(
+        watched_vault.clone(),
+        EventType::Deleted,
+        "notes/a.md".to_string(),
+        None,
+    ));
+
+    // The first NDJSON line we receive should be from our vault, not the other.
+    let event = first_ndjson_line(resp.into_body()).await;
+    assert_eq!(event["type"], "file_changed");
+    assert_eq!(event["vault"], watched_vault.to_string());
+    assert_eq!(event["path"], "notes/a.md");
+}
+
+#[tokio::test]
+async fn watch_all_streams_events_from_all_active_vaults() {
+    // Two-vault harness via for_tests_full.
+    let root = tempfile::TempDir::new().unwrap();
+    let mut pools: Vec<SqlitePool> = Vec::new();
+    let mut ids: Vec<VaultId> = Vec::new();
+    let mut entries: Vec<VaultEntry> = Vec::new();
+    let mut _vault_dirs: Vec<tempfile::TempDir> = Vec::new();
+    for name in &["alpha", "bravo"] {
+        let vault_dir = tempfile::TempDir::new().unwrap();
+        let vault_id = VaultId::new();
+        let store = crate::store::Store::open(
+            &vault_id,
+            root.path(),
+            "index.sqlite",
+            &crate::config::EmbeddingConfig::default(),
+        )
+        .await
+        .unwrap();
+        let pool = store.pool();
+        let store = Arc::new(store);
+        entries.push(VaultEntry {
+            id: vault_id.clone(),
+            name: (*name).to_string(),
+            vault_path: vault_dir.path().to_path_buf(),
+            store,
+            status: VaultStatus::Active,
+        });
+        pools.push(pool);
+        ids.push(vault_id);
+        _vault_dirs.push(vault_dir);
+    }
+    let manager = Arc::new(VaultManager::for_tests_full(
+        entries,
+        vec![],
+        Arc::new(StubEmbedder::new(768)),
+        768,
+    ));
+    let state = ApiState {
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
+    };
+
+    let app = router(state.clone());
+    let req = Request::builder()
+        .method("GET")
+        .uri("/events/watch")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/x-ndjson"),
+    );
+
+    // Publish events from both vaults.
+    state.event_bus.publish(StreamEvent::file_changed(
+        ids[0].clone(),
+        EventType::Created,
+        "notes/from_alpha.md".to_string(),
+        None,
+    ));
+
+    // First event should be from alpha.
+    let event = first_ndjson_line(resp.into_body()).await;
+    assert_eq!(event["type"], "file_changed");
+    assert_eq!(event["vault"], ids[0].to_string());
+}
+
+#[tokio::test]
+async fn watch_all_filters_out_inactive_vault_events() {
+    // Active vault + one "extra" vault ID not in the pinned set.
+    let root = tempfile::TempDir::new().unwrap();
+    let vault_dir = tempfile::TempDir::new().unwrap();
+    let vault_id = VaultId::new();
+    let store = crate::store::Store::open(
+        &vault_id,
+        root.path(),
+        "index.sqlite",
+        &crate::config::EmbeddingConfig::default(),
+    )
+    .await
+    .unwrap();
+    let store = Arc::new(store);
+    let entry = VaultEntry {
+        id: vault_id.clone(),
+        name: "active".to_string(),
+        vault_path: vault_dir.path().to_path_buf(),
+        store,
+        status: VaultStatus::Active,
+    };
+    let manager = Arc::new(VaultManager::for_tests(
+        vec![entry],
+        Arc::new(StubEmbedder::new(768)),
+        768,
+    ));
+    let state = ApiState {
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
+    };
+
+    let app = router(state.clone());
+    let req = Request::builder()
+        .method("GET")
+        .uri("/events/watch")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ghost_vault = VaultId::new();
+
+    // First publish to an ID not in the active set (should be filtered).
+    state.event_bus.publish(StreamEvent::file_changed(
+        ghost_vault,
+        EventType::Modified,
+        "ghost.md".to_string(),
+        None,
+    ));
+    // Then publish to the active vault.
+    state.event_bus.publish(StreamEvent::file_changed(
+        vault_id.clone(),
+        EventType::Created,
+        "active.md".to_string(),
+        None,
+    ));
+
+    let event = first_ndjson_line(resp.into_body()).await;
+    assert_eq!(event["type"], "file_changed");
+    assert_eq!(event["vault"], vault_id.to_string());
+    assert_eq!(event["path"], "active.md");
 }

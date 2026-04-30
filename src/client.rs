@@ -243,7 +243,8 @@ mod tests {
         };
         let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));
         let state = ApiState {
-            vault_manager: manager,
+            vault_manager: manager.clone(),
+            event_bus: manager.event_bus(),
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

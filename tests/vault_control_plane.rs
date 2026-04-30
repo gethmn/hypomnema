@@ -85,8 +85,10 @@ async fn spawn_live_daemon() -> LiveControlPlaneDaemon {
     )
     .await
     .expect("open VaultManager");
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 
@@ -228,8 +230,10 @@ async fn spawn_multi_vault_daemon_with(
         .collect();
 
     let manager = VaultManager::for_tests_full(entries, inactive_rows, embedder, DIM as u32);
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 
@@ -1083,8 +1087,10 @@ async fn spawn_live_daemon_with_errored_row(
     )
     .await
     .expect("open VaultManager");
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 

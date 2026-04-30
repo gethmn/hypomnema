@@ -5,6 +5,7 @@ pub(crate) mod search;
 mod status;
 pub mod types;
 pub(crate) mod vaults;
+pub(crate) mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use axum::routing::{get, post};
 pub use types::*;
 
 use crate::control_plane::VaultManager;
+use crate::events::EventBus;
 use crate::store::Store;
 use crate::vault_registry::{VaultId, VaultStatus};
 
@@ -42,6 +44,7 @@ impl VaultEntry {
 #[derive(Clone)]
 pub struct ApiState {
     pub vault_manager: Arc<VaultManager>,
+    pub event_bus: Arc<EventBus>,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -61,6 +64,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/vaults/:name_or_id/reset", post(vaults::reset))
         .route("/vaults/:name_or_id/rename", post(vaults::rename))
         .route("/vaults/:name_or_id/rescan", post(vaults::rescan))
+        .route("/vaults/:name_or_id/watch", get(watch::watch_vault))
+        .route("/events/watch", get(watch::watch_all))
         .with_state(state)
 }
 

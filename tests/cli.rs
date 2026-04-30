@@ -108,12 +108,14 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         store: Arc::new(store),
         status: VaultStatus::Active,
     };
+    let manager = Arc::new(VaultManager::for_tests(
+        vec![entry],
+        embedder,
+        fx.config.embedding.dimension,
+    ));
     let state = ApiState {
-        vault_manager: Arc::new(VaultManager::for_tests(
-            vec![entry],
-            embedder,
-            fx.config.embedding.dimension,
-        )),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 
@@ -342,8 +344,10 @@ async fn spawn_vault_cli_daemon() -> VaultCliDaemon {
     let manager = VaultManager::open(registry, config, embedder, 768, shutdown_rx.clone())
         .await
         .expect("open VaultManager");
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 
@@ -661,8 +665,10 @@ async fn spawn_vault_cli_daemon_with_errored_row(
     let manager = VaultManager::open(registry, config, embedder, 768, shutdown_rx.clone())
         .await
         .expect("open VaultManager");
+    let manager = Arc::new(manager);
     let state = ApiState {
-        vault_manager: Arc::new(manager),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 

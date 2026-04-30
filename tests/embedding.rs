@@ -308,12 +308,14 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
         store: Arc::new(store),
         status: VaultStatus::Active,
     };
+    let manager = Arc::new(VaultManager::for_tests(
+        vec![entry],
+        embedder,
+        fx.config.embedding.dimension,
+    ));
     let state = ApiState {
-        vault_manager: Arc::new(VaultManager::for_tests(
-            vec![entry],
-            embedder,
-            fx.config.embedding.dimension,
-        )),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 

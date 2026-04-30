@@ -180,12 +180,14 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         store: Arc::new(store),
         status: VaultStatus::Active,
     };
+    let manager = Arc::new(VaultManager::for_tests(
+        vec![entry],
+        embedder,
+        fx.config.embedding.dimension,
+    ));
     let state = ApiState {
-        vault_manager: Arc::new(VaultManager::for_tests(
-            vec![entry],
-            embedder,
-            fx.config.embedding.dimension,
-        )),
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
     };
     let app = api::router(state);
 

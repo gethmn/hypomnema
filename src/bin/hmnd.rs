@@ -130,6 +130,7 @@ async fn run_daemon(config: Config) -> Result<()> {
 
     let api_state = ApiState {
         vault_manager: vault_manager.clone(),
+        event_bus: vault_manager.event_bus(),
     };
     let mut app = api::router(api_state);
 
