@@ -22,7 +22,14 @@ pub fn hash_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!(
+        "sha256:{}",
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    ))
 }
 
 pub fn read_and_hash(path: &Path) -> Result<(String, String)> {
@@ -30,7 +37,14 @@ pub fn read_and_hash(path: &Path) -> Result<(String, String)> {
         fs::read(path).with_context(|| format!("reading file for indexing: {}", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    let hash = format!("sha256:{:x}", hasher.finalize());
+    let hash = format!(
+        "sha256:{}",
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
     let body = String::from_utf8_lossy(&bytes).into_owned();
     Ok((body, hash))
 }
@@ -74,7 +88,11 @@ mod tests {
 
         let mut hasher = Sha256::new();
         hasher.update(&payload);
-        let expected = format!("sha256:{:x}", hasher.finalize());
+        let bytes = hasher.finalize();
+        let expected = format!(
+            "sha256:{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         assert_eq!(hash, expected);
     }
 

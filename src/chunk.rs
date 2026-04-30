@@ -204,7 +204,14 @@ impl<'a> Chunker<'a> {
         }
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
-        let content_hash = format!("sha256:{:x}", hasher.finalize());
+        let content_hash = format!(
+            "sha256:{}",
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
         self.chunks.push(Chunk {
             chunk_index: self.next_index,
             heading_path: open.heading_path,
@@ -253,7 +260,11 @@ mod tests {
     fn expected_hash(s: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(s.as_bytes());
-        format!("sha256:{:x}", hasher.finalize())
+        let bytes = hasher.finalize();
+        format!(
+            "sha256:{}",
+            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        )
     }
 
     // --- Skill § Tests to write ---
