@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use futures_util::StreamExt;
 
 use hypomnema::cli::{Cli, Command, SearchMode, VaultOp};
 use hypomnema::client::{
@@ -329,6 +330,9 @@ async fn cmd_vault(
                 render_rescan(&resp);
             }
         }
+        VaultOp::Watch { target, all } => {
+            return cmd_vault_watch(config, override_url, target, all).await;
+        }
     }
     Ok(())
 }
@@ -347,6 +351,48 @@ fn resolve_target(config: &Config, target: Option<&str>) -> Result<String> {
             }
         }
     }
+}
+
+/// Stream live change events from one vault or all active vaults.
+/// Each received NDJSON line is written unchanged to stdout.
+/// Diagnostics and errors go to stderr.
+async fn cmd_vault_watch(
+    config: &Config,
+    override_url: Option<&str>,
+    target: Option<String>,
+    all: bool,
+) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)?;
+    let mut stream = if all {
+        client.watch_all().await?
+    } else {
+        let name_or_id = resolve_target(config, target.as_deref())?;
+        client.watch_vault(&name_or_id).await?
+    };
+
+    // Buffer for incomplete lines that span chunk boundaries.
+    let mut buf = Vec::<u8>::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("reading watch stream")?;
+        buf.extend_from_slice(&chunk);
+        // Flush all complete lines (terminated by '\n') to stdout.
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line = buf.drain(..=nl).collect::<Vec<u8>>();
+            std::io::stdout()
+                .write_all(&line)
+                .context("writing to stdout")?;
+        }
+    }
+
+    // Flush any residual bytes not terminated by a newline.
+    if !buf.is_empty() {
+        std::io::stdout()
+            .write_all(&buf)
+            .context("writing to stdout")?;
+    }
+
+    Ok(())
 }
 
 /// Read a yes/no answer from `stdin`, prompting on `prompt_writer`. Returns
@@ -385,7 +431,9 @@ fn confirm_rescan<R: BufRead, W: Write>(
     confirm_yn(
         reader,
         prompt_writer,
-        &format!("Rescan vault '{target}'? This will re-emit outbox events. (y/N) "),
+        &format!(
+            "Rescan vault '{target}'? This will re-index all files and emit live change events. (y/N) "
+        ),
     )
 }
 
@@ -574,31 +622,26 @@ fn render_status_text(resp: &StatusResponse) {
     println!("vault:         {}", resp.vault);
     println!("indexed files: {}", resp.indexed_file_count);
     println!("last indexed:  {last}");
-    println!(
-        "outbox:        {} ({})",
-        resp.outbox.path,
-        human_bytes(resp.outbox.size_bytes)
-    );
-}
-
-fn human_bytes(n: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut size = n as f64;
-    let mut unit = 0;
-    while size >= 1024.0 && unit < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{n} B")
-    } else {
-        format!("{size:.1} {}", UNITS[unit])
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn human_bytes(n: u64) -> String {
+        const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+        let mut size = n as f64;
+        let mut unit = 0;
+        while size >= 1024.0 && unit < UNITS.len() - 1 {
+            size /= 1024.0;
+            unit += 1;
+        }
+        if unit == 0 {
+            format!("{n} B")
+        } else {
+            format!("{size:.1} {}", UNITS[unit])
+        }
+    }
 
     #[test]
     fn human_bytes_picks_right_unit() {
@@ -743,8 +786,9 @@ mod tests {
         let answered = confirm_rescan("personal", &b"n\n"[..], &mut sink).unwrap();
         assert!(!answered);
         assert!(
-            String::from_utf8_lossy(&sink)
-                .contains("Rescan vault 'personal'? This will re-emit outbox events. (y/N) "),
+            String::from_utf8_lossy(&sink).contains(
+                "Rescan vault 'personal'? This will re-index all files and emit live change events. (y/N) "
+            ),
         );
     }
 

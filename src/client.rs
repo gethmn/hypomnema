@@ -1,6 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use bytes::Bytes;
+use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, TryStreamExt};
 use serde::de::DeserializeOwned;
 
 pub use crate::api::types::{
@@ -16,6 +19,8 @@ use crate::config::Config;
 pub struct DaemonClient {
     base_url: String,
     http: reqwest::Client,
+    /// No-timeout client used for long-lived streaming requests (watch).
+    http_stream: reqwest::Client,
 }
 
 impl DaemonClient {
@@ -28,7 +33,14 @@ impl DaemonClient {
             .timeout(Duration::from_secs(30))
             .build()
             .context("building reqwest client")?;
-        Ok(Self { base_url, http })
+        let http_stream = reqwest::Client::builder()
+            .build()
+            .context("building reqwest streaming client")?;
+        Ok(Self {
+            base_url,
+            http,
+            http_stream,
+        })
     }
 
     pub fn base_url(&self) -> &str {
@@ -132,6 +144,65 @@ impl DaemonClient {
         let url = vault_op_url(&self.base_url, name_or_id, "rescan")?;
         let resp = self.http.post(url).send().await?;
         decode_response(resp).await
+    }
+
+    /// Open a streaming NDJSON connection to `GET /vaults/{name_or_id}/watch`.
+    /// Returns a byte stream; each `Bytes` chunk contains one or more complete
+    /// NDJSON lines (each terminated with `\n`).
+    pub async fn watch_vault(&self, name_or_id: &str) -> Result<BoxStream<'static, Result<Bytes>>> {
+        let url = vault_op_url(&self.base_url, name_or_id, "watch")?;
+        let resp = self
+            .http_stream
+            .get(url)
+            .send()
+            .await
+            .context("connecting to watch stream")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let bytes = resp
+                .bytes()
+                .await
+                .context("reading watch error response body")?;
+            if let Ok(env) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
+                return Err(anyhow!("{}: {}", env.error.code, env.error.message));
+            }
+            let body = String::from_utf8_lossy(&bytes);
+            return Err(anyhow!("daemon returned HTTP {status}: {body}"));
+        }
+        let stream = resp
+            .bytes_stream()
+            .map_err(anyhow::Error::from)
+            .boxed();
+        Ok(stream)
+    }
+
+    /// Open a streaming NDJSON connection to `GET /events/watch` (all active
+    /// vaults at subscription time).
+    pub async fn watch_all(&self) -> Result<BoxStream<'static, Result<Bytes>>> {
+        let url = format!("{}/events/watch", self.base_url);
+        let resp = self
+            .http_stream
+            .get(&url)
+            .send()
+            .await
+            .context("connecting to watch-all stream")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let bytes = resp
+                .bytes()
+                .await
+                .context("reading watch-all error response body")?;
+            if let Ok(env) = serde_json::from_slice::<ErrorEnvelope>(&bytes) {
+                return Err(anyhow!("{}: {}", env.error.code, env.error.message));
+            }
+            let body = String::from_utf8_lossy(&bytes);
+            return Err(anyhow!("daemon returned HTTP {status}: {body}"));
+        }
+        let stream = resp
+            .bytes_stream()
+            .map_err(anyhow::Error::from)
+            .boxed();
+        Ok(stream)
     }
 }
 

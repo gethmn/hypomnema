@@ -29,7 +29,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "stream"] }
 rmcp = { version = "1.5", features = ["server", "transport-io", "transport-streamable-http-server", "macros", "schemars"] }
 rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
 serde = { version = "1.0.228", features = ["derive"] }

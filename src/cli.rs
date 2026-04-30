@@ -100,13 +100,22 @@ pub enum VaultOp {
         #[arg(long, value_name = "NEW_NAME")]
         new_name: String,
     },
-    /// Rescan a vault: force the watcher's debouncer to walk every file and re-emit outbox events.
+    /// Rescan a vault: force the watcher's debouncer to walk every file and re-index.
     Rescan {
         /// Vault name or surrogate id.
         target: String,
         /// Skip the destructive-op confirmation prompt.
         #[arg(long)]
         yes: bool,
+    },
+    /// Stream live change events from one vault (or all active vaults with --all).
+    Watch {
+        /// Vault name or surrogate id. Defaults to config's default_vault_name.
+        /// Ignored when --all is set.
+        target: Option<String>,
+        /// Watch all active vaults instead of a single vault.
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -557,6 +566,66 @@ mod tests {
                 assert!(yes);
             }
             _ => panic!("expected Vault/Rescan"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_watch_with_explicit_target() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "watch", "personal"])
+            .expect("vault watch with target parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Watch { target, all },
+            } => {
+                assert_eq!(target.as_deref(), Some("personal"));
+                assert!(!all);
+            }
+            _ => panic!("expected Vault/Watch"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_watch_without_target_defaults_to_none() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "watch"]).expect("vault watch bare parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Watch { target, all },
+            } => {
+                assert!(target.is_none());
+                assert!(!all);
+            }
+            _ => panic!("expected Vault/Watch"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_watch_all_flag() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "watch", "--all"])
+            .expect("vault watch --all parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Watch { target, all },
+            } => {
+                assert!(target.is_none());
+                assert!(all);
+            }
+            _ => panic!("expected Vault/Watch"),
+        }
+    }
+
+    #[test]
+    fn parses_vault_watch_all_flag_with_ignored_target() {
+        let cli = Cli::try_parse_from(["hmn", "vault", "watch", "personal", "--all"])
+            .expect("vault watch target --all parses");
+        match cli.command {
+            Command::Vault {
+                op: VaultOp::Watch { target, all },
+            } => {
+                // target is provided but --all overrides it at runtime
+                assert_eq!(target.as_deref(), Some("personal"));
+                assert!(all);
+            }
+            _ => panic!("expected Vault/Watch"),
         }
     }
 }

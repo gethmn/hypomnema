@@ -104,7 +104,11 @@ fn build_test_state(
     embedder: Arc<dyn Embedder>,
     embedding_dimension: u32,
 ) -> ApiState {
-    let manager = Arc::new(VaultManager::for_tests(entries, embedder, embedding_dimension));
+    let manager = Arc::new(VaultManager::for_tests(
+        entries,
+        embedder,
+        embedding_dimension,
+    ));
     ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),

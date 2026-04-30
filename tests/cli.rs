@@ -1,8 +1,9 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Duration;
 
 use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::config::Config;
@@ -977,8 +978,154 @@ async fn hmn_vault_rescan_without_yes_prompts_and_aborts_on_no() {
         "stdout should announce abort; got stdout={stdout:?} stderr={stderr:?}",
     );
     assert!(
-        stderr.contains("Rescan vault 'rscno'? This will re-emit outbox events. (y/N) "),
+        stderr.contains(
+            "Rescan vault 'rscno'? This will re-index all files and emit live change events. (y/N) "
+        ),
         "prompt should appear on stderr; got {stderr:?}",
+    );
+
+    daemon.shutdown().await;
+}
+
+// ===== hmn vault watch smoke test (Task 16.5) =====
+
+async fn spawn_watch_daemon() -> VaultCliDaemon {
+    let root = tempfile::tempdir().expect("create root tempdir");
+    let data_dir = root.path().join("data");
+    fs::create_dir_all(&data_dir).expect("create data_dir");
+    let cfg_path = root.path().join("config.toml");
+    fs::write(
+        &cfg_path,
+        format!(
+            "default_vault_name = \"default\"\n[storage]\ndata_dir = \"{}\"\n[watcher]\ndebounce_ms = 50\n",
+            data_dir.display(),
+        ),
+    )
+    .expect("write config.toml");
+    let config = Config::load(Some(&cfg_path)).expect("load config");
+    let config = Arc::new(config);
+    let registry = Arc::new(
+        VaultRegistry::open(&data_dir)
+            .await
+            .expect("open VaultRegistry"),
+    );
+    let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let manager = VaultManager::open(registry, config, embedder, 768, shutdown_rx.clone())
+        .await
+        .expect("open VaultManager");
+    let manager = Arc::new(manager);
+    let state = ApiState {
+        vault_manager: manager.clone(),
+        event_bus: manager.event_bus(),
+    };
+    let app = api::router(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind 127.0.0.1:0");
+    let addr = listener.local_addr().expect("local_addr");
+    let mut server_shutdown_rx = shutdown_rx;
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = server_shutdown_rx.wait_for(|v| *v).await;
+            })
+            .await;
+    });
+
+    VaultCliDaemon {
+        base_url: format!("http://{addr}"),
+        cfg_path,
+        root,
+        shutdown: shutdown_tx,
+        handle: Some(handle),
+    }
+}
+
+#[tokio::test]
+async fn hmn_vault_watch_emits_file_changed_event() {
+    let daemon = spawn_watch_daemon().await;
+    let vault_dir = fresh_vault_dir(daemon.root.path(), "watched");
+
+    // Create the vault so the daemon spawns a runner with a real watcher.
+    let create = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "vault",
+            "create",
+            "--name",
+            "watched",
+            vault_dir.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(
+        create.status.success(),
+        "create stderr={}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    // Allow the runner's watcher to start and register the watch on the vault
+    // directory before we begin streaming.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Start `hmn vault watch watched` as a subprocess with piped stdout.
+    let cfg_path = daemon.cfg_path.clone();
+    let base_url = daemon.base_url.clone();
+    let mut child = tokio::task::spawn_blocking(move || {
+        Command::new(env!("CARGO_BIN_EXE_hmn"))
+            .arg("--config")
+            .arg(&cfg_path)
+            .arg("--daemon-url")
+            .arg(&base_url)
+            .args(["vault", "watch", "watched"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn hmn vault watch")
+    })
+    .await
+    .expect("spawn_blocking join");
+
+    // Give the watch HTTP connection a moment to establish before writing.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Write a file to trigger a watcher event.
+    fs::write(vault_dir.join("trigger.md"), b"# trigger\n").expect("write trigger.md");
+
+    // Read one JSON line from the watch subprocess stdout within a 10s budget.
+    // We do this in spawn_blocking because stdout is sync; the overall timeout
+    // is enforced at the tokio level so the test doesn't hang indefinitely.
+    let stdout_handle = child.stdout.take().expect("watch stdout");
+    let first_line = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            let mut reader = BufReader::new(stdout_handle);
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("read line from watch");
+            line
+        }),
+    )
+    .await
+    .expect("read first watch event within 10s")
+    .expect("spawn_blocking join");
+
+    // Kill the watch subprocess now that we have the line we need, then wait
+    // to reap the process so no zombie is left behind.
+    let _ = child.kill();
+    let _ = tokio::task::spawn_blocking(move || child.wait())
+        .await
+        .expect("spawn_blocking join for child wait");
+
+    let parsed: Value = serde_json::from_str(&first_line)
+        .unwrap_or_else(|e| panic!("watch stdout is not valid JSON: {e}; raw={first_line:?}"));
+    assert_eq!(
+        parsed["type"].as_str(),
+        Some("file_changed"),
+        "expected type=file_changed; got {parsed}"
     );
 
     daemon.shutdown().await;
