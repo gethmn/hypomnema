@@ -241,7 +241,7 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 path = "junit.xml"
 ```
 
-**Why retries = 0**: the project's anti-flake convention (3× consecutive flake-check clean before shipping) has been maintained without retry magic across rounds 1–4. CI inheriting that stance keeps the same signal-to-noise. If the outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) reproduces in CI, that's step-14 input — masking it with retries would defeat the purpose.
+**Why retries = 0**: the project's anti-flake convention (3× consecutive flake-check clean before shipping) has been maintained without retry magic across rounds 1–4. CI inheriting that stance keeps the same signal-to-noise. The pre-existing outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) is removed in step 16 along with the durable JSONL outbox; masking it with retries would have defeated the purpose.
 
 ---
 
@@ -474,7 +474,7 @@ If any SHA has advanced between workplan-write and task-execution, take the new 
 
 **Current Unknown**: How often does the existing test suite produce false negatives in the CI environment vs local development?
 
-**Resolution Approach**: Monitor for 2–3 weeks after implementation. If the flaky-test rate exceeds 5%, investigate specific failure patterns. The pre-existing outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) has been silent across rounds 1–4; if it reproduces in CI, that feeds directly into step 14 (the dedicated outbox-flake investigation step).
+**Resolution Approach**: Monitor for 2–3 weeks after implementation. If the flaky-test rate exceeds 5%, investigate specific failure patterns. The pre-existing outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) has been removed in step 16 along with the durable JSONL outbox.
 
 ### Performance vs Coverage Trade-off
 

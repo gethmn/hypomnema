@@ -1,6 +1,6 @@
 # Change Events Specification
 
-**Version**: 0.3.0
+**Version**: 0.4.0
 **Date**: 2026-04-30
 **Status**: Draft
 
@@ -100,22 +100,24 @@ The command exits when the daemon closes the stream, the selected vault is termi
 
 ### HTTP Subscription
 
-The HTTP surface is streaming and maps directly to the CLI. The exact route shape is pinned by the implementation workplan, but the expected form is:
+The HTTP surface is streaming and maps directly to the CLI. Route shape:
 
-- `GET /vaults/{name_or_id}/watch`
-- `GET /events/watch?vaults=...` for cross-vault/all-vault subscriptions if a separate aggregate route is needed
+- `GET /vaults/{name_or_id}/watch` for a single vault.
+- `GET /events/watch` for all-active-vault subscriptions.
 
-The response is a streaming body of newline-delimited JSON events unless the implementation workplan chooses Server-Sent Events for browser ergonomics. Either framing must preserve the same event envelope.
+The response body is **newline-delimited JSON** (one JSON event envelope per line). Server-Sent Events are not the v0 framing; NDJSON is the canonical choice because it is simpler for CLI piping and does not add browser-specific semantics.
 
 ### MCP Subscription
 
-MCP exposes the same live stream through the control-plane surface. The intended v0 user-facing operation is `vault_watch`:
+MCP streaming for `vault_watch` is **deferred** pending implementation verification in Task 16.6. The exact framing supported by the pinned `rmcp` version must be verified before a `vault_watch` tool is shipped.
 
+If Task 16.6 confirms a clean long-lived MCP framing:
+- `vault_watch` will be added as a read-only tool with the same live-only semantics as the HTTP/CLI surface.
 - `target?: string` selects one vault by name or ID; omission follows the same default-vault resolution as `vault_status`.
 - `all?: bool` subscribes to all active vaults.
-- The stream is live-only; there is no `since` argument in v0.
+- There is no `since` argument in v0.
 
-The implementation workplan must verify the exact MCP framing supported by the pinned `rmcp` version. If long-lived tool-call streaming is not practical for one of the shipped MCP transports, the spec should prefer an MCP resource/subscription shape rather than inventing a pseudo-durable response.
+If no clean implementation exists under the current `rmcp` version, `vault_watch` remains absent from the MCP tool surface and this section is updated to document the deferral. MCP hosts can consume the HTTP endpoint through their host/runtime integration until a separate MCP-streaming workplan pins the transport shape.
 
 ---
 
@@ -214,9 +216,8 @@ Future event types may need to go beyond path-level file changes. Examples inclu
 
 ## Open Questions
 
-- [ ] Exact HTTP stream framing: newline-delimited JSON vs Server-Sent Events.
-- [ ] Exact MCP framing for `vault_watch` under the pinned `rmcp` version.
-- [ ] Whether `hmn vault watch --all` should include vaults created after the command starts or only the active set at subscription time.
+- [ ] Exact MCP framing for `vault_watch` under the pinned `rmcp` version — deferred to Task 16.6 implementation verification; if no clean shape exists, `vault_watch` is not shipped in v0 MCP.
+- [ ] Whether `hmn vault watch --all` should include vaults created after the command starts or only the active set at subscription time. v0 pins to active-at-subscription-time per the workplan default; a spec amendment can relax this.
 - [ ] Whether reset/rebuild should emit a v0 control event, or whether lifecycle operations remain visible only through the control-plane response.
 - [ ] Whether a future durable stream belongs in each per-vault `index.sqlite`, in `vaults.sqlite`, or in a separate daemon-level event store.
 
@@ -230,3 +231,4 @@ Future event types may need to go beyond path-level file changes. Examples inclu
 | 0.1.1 | 2026-04-26 | Clarified consumer model, cold-start semantics, size envelope, and recovery procedures. |
 | 0.2.0 | 2026-04-27 | Multi-vault adoption: per-vault outbox path and `vault` field semantics. |
 | 0.3.0 | 2026-04-30 | Replaced JSONL outbox as public v0 contract with a live internal event bus exposed through CLI/HTTP/MCP; durable replay moved to future event-store design. |
+| 0.4.0 | 2026-04-30 | Pinned NDJSON as the HTTP/CLI v0 framing; narrowed MCP `vault_watch` to deferred pending Task 16.6 rmcp verification; closed HTTP-framing open question. |

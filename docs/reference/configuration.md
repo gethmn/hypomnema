@@ -1,7 +1,7 @@
 # Hypomnema Configuration Reference
 
-**Version**: 0.3.0
-**Generated**: 2026-04-28
+**Version**: 0.4.0
+**Generated**: 2026-04-30
 
 ---
 
@@ -78,8 +78,6 @@ ignore_patterns = [
 # Storage locations (defaults shown)
 [storage]
 data_dir = "~/.local/share/hypomnema"      # index + registry + logs
-index_file = "index.sqlite"                 # relative to data_dir
-outbox_file = "outbox.jsonl"                # legacy; no longer a public v0 event contract
 
 # Logging
 [logging]
@@ -128,7 +126,7 @@ vaults.sqlite. Remove the [vault] block from your config when convenient
 When triggered, the daemon:
 
 - Inserts one row into `vaults.sqlite` with name set to `default_vault_name`, the legacy `[vault].path` (canonicalized), status `active` if the path is accessible (or `errored` with a recorded `last_error` if not), and a fresh UUIDv7 ID.
-- Atomically renames the legacy index files — `index.sqlite`, `index.sqlite-wal` (if present), and `index.sqlite-shm` (if present) — from `<data_dir>/` into `<data_dir>/vaults/<vault_id>/`. A legacy `outbox.jsonl`, if present, may be moved for upgrade compatibility, but JSONL tailing is no longer the public v0 event contract.
+- Atomically renames the legacy index files — `index.sqlite`, `index.sqlite-wal` (if present), and `index.sqlite-shm` (if present) — from `<data_dir>/` into `<data_dir>/vaults/<vault_id>/`. Any legacy `outbox.jsonl` is left in place and ignored; the JSONL outbox has been removed as the v0 event contract.
 - Writes `<data_dir>/vaults/<vault_id>/meta.toml` (a human-readable mirror of the registry row, per ADR-0010).
 - Starts the watcher and indexer for the migrated vault (when status is `active`).
 
@@ -158,7 +156,7 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 |--------|------|----------|---------|-------------|
 | `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | Forward-compat knob for the stdio-vs-socket MCP transport family. `transport = "stdio"` is served by the `hmn mcp` subcommand on the CLI binary. Streamable HTTP MCP is configured separately under `[mcp.http]` and lives on `hmnd` at `/mcp`. Setting `transport = "socket"` parses and validates but is **not bound** in v0; `hmnd` emits a `WARN`-level log at startup and continues running. The deferred socket transport will live in `hmnd` when it ships. See [step-08 workplan § Resolution D](../roadmap/step-08-workplan.md#d-connection-lifecycle-stdio-process-per-connection-vs-socket-long-lived) for the deferral rationale and binary-placement reasoning, and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) for the formal record. |
 | `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path. **Parsed and validated in v0 but not bound** — see `transport` above. When the socket transport ships, the file will be created with mode `0600` (owner-only) per the deferred forward-compat decision in [step-08 workplan § Resolution E](../roadmap/step-08-workplan.md#e-authentication-on-the-socket-transport). |
-| `enable_write_tools` | bool | no | `true` | Single-flag gate for **all seven** vault write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`). When `true` (the default), the MCP surface advertises the three search tools, the read-only vault tools (`vault_list`, `vault_status`, `vault_watch`), and the seven write tools. When `false`, the read-only tools remain advertised and `tools/call` against any write tool returns a structured `write_tools_disabled` error envelope (the tool stays in the `tools/list` response — gating happens at call time, per [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface)). The seven write tools share a single trust posture; per-tool gating is round-4+ if a use-case surfaces. `vault_watch` is read-only and is not gated by this flag. |
+| `enable_write_tools` | bool | no | `true` | Single-flag gate for **all seven** vault write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`). When `true` (the default), the MCP surface advertises the three search tools, the read-only vault tools (`vault_list`, `vault_status`), and the seven write tools. When `false`, the read-only tools remain advertised and `tools/call` against any write tool returns a structured `write_tools_disabled` error envelope (the tool stays in the `tools/list` response — gating happens at call time, per [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface)). The seven write tools share a single trust posture; per-tool gating is round-4+ if a use-case surfaces. A `vault_watch` read-only streaming tool is deferred pending rmcp streaming verification; when it ships it will not be gated by this flag. |
 
 > **MCP via the CLI**: the stdio MCP entry point is `hmn mcp` — see [`cli.md` § `hmn mcp`](./cli.md#mcp) and [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) for the binary-placement reasoning. Agent hosts (Claude Code, Iris) can configure `hmn` as the MCP command; `hmn mcp` translates MCP tool calls into HTTP requests against the running `hmnd`.
 

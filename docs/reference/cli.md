@@ -1,7 +1,7 @@
 # CLI Reference: `hmnd` and `hmn`
 
-**Version**: 0.3.0
-**Generated**: 2026-04-28
+**Version**: 0.4.0
+**Generated**: 2026-04-30
 
 ---
 
@@ -257,7 +257,7 @@ hmn vault rename personal --new-name notes
 # Rescan (force a full walk; emits live modified events for files whose content_hash drifted)
 hmn vault rescan notes --yes
 
-# Watch live changes as JSONL event envelopes
+# Watch live changes as NDJSON event envelopes
 hmn vault watch notes
 
 # Terminate with explicit confirmation
@@ -301,7 +301,7 @@ Serve the MCP surface over stdio. Intended for MCP-capable agent hosts (Claude C
 - Process exits when stdin is closed by the parent.
 - The MCP server identifies itself as `serverInfo.name = "hypomnema"`, `serverInfo.version = <crate version>` (brand-identity override per [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)).
 
-Step 11 advertises twelve request/response tools — the three search modes (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) plus the nine vault control-plane operations. The live change stream adds `vault_watch` as a read-only long-lived control-plane operation:
+Step 11 advertises twelve request/response tools — the three search modes (per [ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) plus the nine vault control-plane operations. The live change stream adds `vault_watch` as a read-only long-lived control-plane operation pending rmcp streaming verification (Task 16.6); if no clean MCP framing is found, `vault_watch` remains absent from the MCP tool surface and this table will be updated accordingly:
 
 | Tool | Maps to | Trust posture | Spec |
 |---|---|---|---|
@@ -317,11 +317,11 @@ Step 11 advertises twelve request/response tools — the three search modes (per
 | `vault_rename` | `POST /vaults/{id_or_name}/rename` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
 | `vault_rescan` | `POST /vaults/{id_or_name}/rescan` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
 | `vault_terminate` | `DELETE /vaults/{id_or_name}` | Write (gated) | [vault-management.md](../specs/vault-management.md) |
-| `vault_watch` | live event stream | Read | [change-events.md](../specs/change-events.md) |
+| `vault_watch` | live event stream (deferred — pending Task 16.6 rmcp verification) | Read | [change-events.md](../specs/change-events.md) |
 
 Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` / `VaultRow` / `VaultListResponse` / `RescanResponseJson` / `TerminateVaultResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `vault_not_found`, `vault_path_conflict`, `vault_name_conflict`, `vault_path_invalid`, `vault_errored`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
 
-`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`). The five lifecycle tools (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) each take a required `target` field; `vault_reset` accepts an optional `rebuild` boolean (default `false`); `vault_rename` requires `new_name`. `vault_watch` accepts `target?: string` or `all?: bool` and streams live events only; it has no `since` argument in v0. Idempotency guarantees match the HTTP layer (pause-on-paused / resume-on-active return the existing row).
+`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`). The five lifecycle tools (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) each take a required `target` field; `vault_reset` accepts an optional `rebuild` boolean (default `false`); `vault_rename` requires `new_name`. Idempotency guarantees match the HTTP layer (pause-on-paused / resume-on-active return the existing row). `vault_watch` is deferred pending Task 16.6 rmcp streaming verification; if it ships, it will accept `target?: string` or `all?: bool` and stream live events only with no `since` argument in v0.
 
 **Write-tool gating**. The seven write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`) are advertised by default and may be disabled via `[mcp] enable_write_tools = false` in the daemon's config (see [configuration.md § `[mcp]`](./configuration.md#mcp)). When the gate is closed, `tools/call` against any of the seven returns a structured `write_tools_disabled` error envelope naming the gated tool and the config knob to flip; the read tools remain available. The gate is single-flag at the daemon level — per-tool gating is round-4+ if a use-case surfaces. See [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface).
 

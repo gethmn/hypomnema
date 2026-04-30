@@ -91,7 +91,7 @@ When documents conflict, higher-authority documents win:
 
 ### Hypomnema-Specific Terms
 
-See the [Vision glossary](./product/vision.md#glossary) for Hypomnema's domain terminology (vault, outbox, chunk, consumer, etc.).
+See the [Vision glossary](./product/vision.md#glossary) for Hypomnema's domain terminology (vault, chunk, consumer, event bus, etc.).
 
 ---
 
