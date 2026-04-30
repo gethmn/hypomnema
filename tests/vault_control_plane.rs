@@ -199,14 +199,12 @@ async fn spawn_multi_vault_daemon_with(
         )
         .await
         .expect("open store");
-        let outbox_path = root.path().join(format!("outbox-{name}.jsonl"));
         let store = Arc::new(store);
         let pool = store.pool();
         let entry = VaultEntry {
             id: vault_id.clone(),
             name: (*name).to_string(),
             vault_path: vault_dir.path().to_path_buf(),
-            outbox_path,
             store,
             status: VaultStatus::Active,
         };
@@ -1115,54 +1113,6 @@ async fn spawn_live_daemon_with_errored_row(
     )
 }
 
-async fn count_chunks_in_outbox(daemon: &LiveControlPlaneDaemon, vault_id: &str) -> usize {
-    let outbox_path = daemon
-        .data_dir
-        .join("vaults")
-        .join(vault_id)
-        .join("outbox.jsonl");
-    if !outbox_path.exists() {
-        return 0;
-    }
-    let bytes = fs::read(&outbox_path).expect("read outbox");
-    bytes.iter().filter(|&&b| b == b'\n').count()
-}
-
-async fn read_outbox_bytes(daemon: &LiveControlPlaneDaemon, vault_id: &str) -> Vec<u8> {
-    let outbox_path = daemon
-        .data_dir
-        .join("vaults")
-        .join(vault_id)
-        .join("outbox.jsonl");
-    if !outbox_path.exists() {
-        return Vec::new();
-    }
-    fs::read(&outbox_path).expect("read outbox")
-}
-
-/// Poll the outbox until the line count grows by at least `expected` over
-/// `baseline`, or return false on timeout. Used by the rescan-emit test to
-/// wait for the async consumer to finish processing the rescan walk.
-async fn wait_outbox_grew_by(
-    daemon: &LiveControlPlaneDaemon,
-    vault_id: &str,
-    baseline: usize,
-    expected: usize,
-    timeout: Duration,
-) -> bool {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let now = count_chunks_in_outbox(daemon, vault_id).await;
-        if now.saturating_sub(baseline) >= expected {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 async fn count_chunks_for_vault(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> i64 {
     // Drive the SQL through the public HTTP semantic-search endpoint? No —
     // we want a direct chunk count. Re-open the per-vault store read-only
@@ -1353,8 +1303,6 @@ async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
         chunks_before > 0,
         "initial scan should populate chunks; got {chunks_before}"
     );
-    let outbox_bytes_before =
-        read_outbox_bytes(&daemon, &resolve_vault_id(&daemon, "rebuild-target").await).await;
 
     // Reset with rebuild=true — drains the lifecycle, runs the rebuild SQL,
     // and re-spawns with skip_initial_scan=true so content_hash stays empty.
@@ -1401,14 +1349,6 @@ async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
     assert_eq!(
         empty_hash_count, 2,
         "rebuild should wipe content_hash on every file"
-    );
-
-    // Outbox file is byte-level unchanged across the rebuild — the reset
-    // path doesn't truncate or rewrite it; future events append.
-    let outbox_bytes_after = read_outbox_bytes(&daemon, &vault_id).await;
-    assert_eq!(
-        outbox_bytes_before, outbox_bytes_after,
-        "outbox bytes should be unchanged across reset --rebuild"
     );
 
     daemon.shutdown().await;
@@ -1488,13 +1428,14 @@ async fn http_rename_updates_search_response_vault_name() {
 // ===== Test 22 — rescan emits outbox events for existing files (post-rebuild) =====
 
 #[tokio::test]
-async fn http_rescan_emits_outbox_events_for_existing_files() {
+async fn http_rescan_re_indexes_all_files_after_rebuild() {
     // The rescan-emission path documented in the spec + Task 11.2 forward
     // note: rescan walks the vault and Upserts each file; on stable mtime
-    // the indexer's stat-gate short-circuits so a rescan of an up-to-date
+    // the indexer's hash-gate short-circuits so a rescan of an up-to-date
     // vault is silent. Pair it with `reset --rebuild` (which clears
-    // content_hash) to force per-file emission, exactly the operator
-    // workflow Smoke 5 + Smoke 7 verify.
+    // content_hash) to force per-file re-indexing, exactly the operator
+    // workflow Smoke 5 + Smoke 7 verify. Verified via index state (non-empty
+    // content_hash) rather than outbox which no longer exists.
     let daemon = spawn_live_daemon().await;
     let path = daemon.fresh_vault_dir("v");
     fs::write(path.join("one.md"), b"# One\n\nFirst.\n").expect("write");
@@ -1511,7 +1452,7 @@ async fn http_rescan_emits_outbox_events_for_existing_files() {
 
     let vault_id = resolve_vault_id(&daemon, "rescanned").await;
 
-    // reset --rebuild to clear content_hash; baseline outbox count post-reset.
+    // reset --rebuild to clear content_hash.
     let _ = http_client()
         .post(format!("{}/vaults/rescanned/reset", daemon.base_url))
         .json(&json!({ "rebuild": true }))
@@ -1520,9 +1461,31 @@ async fn http_rescan_emits_outbox_events_for_existing_files() {
         .expect("reset")
         .error_for_status()
         .expect("reset 2xx");
-    let outbox_baseline = count_chunks_in_outbox(&daemon, &vault_id).await;
 
-    // rescan; expect 2 modified events to land asynchronously.
+    // Verify content_hash is empty after rebuild.
+    let index_path = daemon
+        .data_dir
+        .join("vaults")
+        .join(&vault_id)
+        .join("index.sqlite");
+    let index_path_for_baseline = index_path.clone();
+    let empty_after_rebuild = task::spawn_blocking(move || -> i64 {
+        let conn = rusqlite::Connection::open(&index_path_for_baseline).expect("open index.sqlite");
+        conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE content_hash = ''",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count empty hash")
+    })
+    .await
+    .expect("join");
+    assert_eq!(
+        empty_after_rebuild, 2,
+        "rebuild must wipe content_hash on all files before rescan"
+    );
+
+    // rescan; expect all files to be re-indexed (content_hash repopulated).
     let resp: Value = http_client()
         .post(format!("{}/vaults/rescanned/rescan", daemon.base_url))
         .send()
@@ -1538,19 +1501,32 @@ async fn http_rescan_emits_outbox_events_for_existing_files() {
         "rescan response carries initiated timestamp: {resp}"
     );
 
-    let grew = wait_outbox_grew_by(
-        &daemon,
-        &vault_id,
-        outbox_baseline,
-        2,
-        Duration::from_secs(15),
-    )
-    .await;
-    assert!(
-        grew,
-        "rescan should emit at least 2 outbox events post-rebuild; baseline={outbox_baseline}, current={}",
-        count_chunks_in_outbox(&daemon, &vault_id).await
-    );
+    // Poll until content_hash is non-empty on all files (rescan is async).
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let index_path_poll = index_path.clone();
+        let empty = task::spawn_blocking(move || -> i64 {
+            let conn =
+                rusqlite::Connection::open(&index_path_poll).expect("open index.sqlite for poll");
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE content_hash = ''",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count empty hash in poll")
+        })
+        .await
+        .expect("join poll");
+        if empty == 0 {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "rescan did not re-index all files within 15s; files with empty content_hash: {empty}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     daemon.shutdown().await;
 }

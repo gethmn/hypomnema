@@ -28,7 +28,6 @@ struct Harness {
     state: ApiState,
     pool: SqlitePool,
     vault_path: std::path::PathBuf,
-    outbox_path: std::path::PathBuf,
     vault_id: VaultId,
     vault_name: String,
 }
@@ -55,14 +54,12 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     )
     .await
     .unwrap();
-    let outbox_path = dir.path().join("outbox.jsonl");
     let store = Arc::new(store);
     let pool = store.pool();
     let entry = VaultEntry {
         id: vault_id.clone(),
         name: "test".to_string(),
         vault_path: vault.path().to_path_buf(),
-        outbox_path: outbox_path.clone(),
         store,
         status: VaultStatus::Active,
     };
@@ -74,7 +71,6 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
         _dir: dir,
         vault_path: vault.path().to_path_buf(),
         _vault: vault,
-        outbox_path,
         pool,
         vault_id,
         vault_name: "test".to_string(),
@@ -151,7 +147,7 @@ async fn status_reports_zero_files_when_index_empty() {
     assert_eq!(body["indexed_file_count"], 0);
     assert!(body["last_indexed_at"].is_null());
     assert_eq!(body["vault"], h.vault_path.display().to_string());
-    assert_eq!(body["outbox"]["path"], h.outbox_path.display().to_string());
+    assert_eq!(body["outbox"]["path"], "");
     assert_eq!(body["outbox"]["size_bytes"], 0);
 }
 
@@ -166,7 +162,6 @@ async fn status_reports_count_and_last_indexed_after_seeding() {
         ],
     )
     .await;
-    std::fs::write(&h.outbox_path, b"line1\n").unwrap();
     let app = router(h.state.clone());
     let req = Request::builder()
         .method("GET")
@@ -178,7 +173,8 @@ async fn status_reports_count_and_last_indexed_after_seeding() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["indexed_file_count"], 2);
     assert_eq!(body["last_indexed_at"], "2026-04-22T14:31:08.123456Z");
-    assert_eq!(body["outbox"]["size_bytes"], 6);
+    assert_eq!(body["outbox"]["path"], "");
+    assert_eq!(body["outbox"]["size_bytes"], 0);
 }
 
 #[tokio::test]
@@ -910,14 +906,12 @@ async fn multi_vault_harness_with(
         )
         .await
         .unwrap();
-        let outbox_path = root.path().join(format!("outbox-{name}.jsonl"));
         let store = Arc::new(store);
         let pool = store.pool();
         let entry = VaultEntry {
             id: vault_id.clone(),
             name: (*name).to_string(),
             vault_path: vault_dir.path().to_path_buf(),
-            outbox_path,
             store,
             status: VaultStatus::Active,
         };

@@ -212,7 +212,6 @@ mod tests {
             id: VaultId::new(),
             name: "test".to_string(),
             vault_path: vault.path().to_path_buf(),
-            outbox_path: dir.path().join("outbox.jsonl"),
             store: Arc::new(store),
             status: VaultStatus::Active,
         };

@@ -9,8 +9,8 @@ use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
+use hypomnema::vault_registry::VaultId;
 use hypomnema::vault_registry::VaultStatus;
-use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -68,7 +68,6 @@ fn write_file(fx: &Fixture, rel: &str, body: &[u8]) {
 
 struct LiveDaemon {
     base_url: String,
-    outbox_path: PathBuf,
     shutdown: watch::Sender<bool>,
     handle: Option<JoinHandle<()>>,
     _fx: Fixture,
@@ -97,13 +96,10 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         Scanner::new(&fx.vault, &fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let outbox_path =
-        vault_data_dir(&fx.data_dir, &fx.vault_id).join(&fx.config.storage.outbox_file);
     let entry = VaultEntry {
         id: fx.vault_id.clone(),
         name: "test".to_string(),
         vault_path: fx.vault.clone(),
-        outbox_path: outbox_path.clone(),
         store: Arc::new(store),
         status: VaultStatus::Active,
     };
@@ -131,7 +127,6 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
 
     LiveDaemon {
         base_url: format!("http://{addr}"),
-        outbox_path,
         shutdown: tx,
         handle: Some(handle),
         _fx: fx,
@@ -184,7 +179,6 @@ async fn status_reports_vault_count_last_indexed_outbox() {
     let expected_vault = fx.vault.display().to_string();
     seed_default_vault(&fx);
     let daemon = spawn_live_daemon(fx).await;
-    let expected_outbox = daemon.outbox_path.display().to_string();
 
     let resp = http()
         .get(format!("{}/status", daemon.base_url))
@@ -201,7 +195,7 @@ async fn status_reports_vault_count_last_indexed_outbox() {
         .expect("last_indexed_at should be a string after a scan");
     chrono::DateTime::parse_from_rfc3339(last)
         .unwrap_or_else(|e| panic!("last_indexed_at must be RFC3339, got {last}: {e}"));
-    assert_eq!(body["outbox"]["path"], expected_outbox);
+    assert_eq!(body["outbox"]["path"], "");
     assert_eq!(body["outbox"]["size_bytes"], 0);
 
     daemon.shutdown().await;

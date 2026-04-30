@@ -5,18 +5,18 @@ use std::time::{Duration, Instant};
 
 use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
+use hypomnema::events::EventBus;
 use hypomnema::indexer::Scanner;
-use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
-use hypomnema::watcher::{self, Watcher};
+use hypomnema::watcher::{self, WatchEvent};
 use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
-const SETTLE: Duration = Duration::from_millis(2 * DEBOUNCE_MS);
+const SETTLE: Duration = Duration::from_millis(500);
 
 struct Fixture {
     _root: TempDir,
@@ -73,16 +73,17 @@ fn fixture_with_debounce(debounce_ms: u64) -> Fixture {
 }
 
 struct Live {
-    watcher: Watcher,
+    tx: mpsc::Sender<WatchEvent>,
     shutdown_tx: watch::Sender<bool>,
+    _rescan_tx: watch::Sender<u64>,
     consumer: JoinHandle<()>,
+    _event_bus: Arc<EventBus>,
 }
 
 impl Live {
     async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.consumer.await;
-        drop(self.watcher);
     }
 }
 
@@ -99,41 +100,46 @@ async fn start(fx: &Fixture) -> Live {
     let scanner = Scanner::new(&fx.vault, &fx.config, &store, embedder).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let ignores = fx
-        .config
-        .watcher
-        .compiled_ignores()
-        .expect("compile ignores");
-    let (watcher, rx) = watcher::spawn_watcher(
-        &fx.vault_id,
-        &fx.vault,
-        ignores,
-        Duration::from_millis(fx.debounce_ms),
-        256,
-    )
-    .expect("spawn watcher");
+    let (tx, rx) = mpsc::channel(256);
 
-    let outbox = Outbox::open(
-        fx.vault_id.clone(),
-        vault_data_dir(&fx.data_dir, &fx.vault_id).join("outbox.jsonl"),
-    )
-    .await
-    .expect("open outbox");
+    let event_bus = Arc::new(EventBus::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+    let (rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner,
-        outbox,
+        fx.vault_id.clone(),
+        event_bus.clone(),
         shutdown_rx,
         rescan_rx,
     ));
+    tokio::time::sleep(Duration::from_millis(fx.debounce_ms)).await;
+    assert!(
+        !consumer.is_finished(),
+        "watcher consumer exited during startup"
+    );
 
     Live {
-        watcher,
+        tx,
         shutdown_tx,
+        _rescan_tx: rescan_tx,
         consumer,
+        _event_bus: event_bus,
     }
+}
+
+async fn send_upsert(live: &Live, rel: &str) {
+    live.tx
+        .send(WatchEvent::Upsert(rel.to_string()))
+        .await
+        .expect("send upsert watch event");
+}
+
+async fn send_remove(live: &Live, rel: &str) {
+    live.tx
+        .send(WatchEvent::Remove(rel.to_string()))
+        .await
+        .expect("send remove watch event");
 }
 
 fn open_index(index_dir: &Path) -> Connection {
@@ -170,6 +176,7 @@ async fn edit_updates_content_hash() {
     let initial_hash = hash_for(&fx.index_dir(), "note.md").expect("initial row");
 
     fs::write(fx.vault.join("note.md"), b"# v1 changed bytes\n").unwrap();
+    send_upsert(&live, "note.md").await;
     tokio::time::sleep(SETTLE).await;
 
     let new_hash = hash_for(&fx.index_dir(), "note.md").expect("row after edit");
@@ -232,6 +239,7 @@ async fn deleting_md_removes_row() {
     );
 
     fs::remove_file(fx.vault.join("a.md")).unwrap();
+    send_remove(&live, "a.md").await;
     tokio::time::sleep(SETTLE).await;
 
     assert_eq!(paths_in_index(&fx.index_dir()), vec!["b.md".to_string()]);
@@ -256,6 +264,7 @@ async fn set_modified_without_byte_change_leaves_hash() {
     f.set_modified(SystemTime::now() + Duration::from_secs(60))
         .unwrap();
     drop(f);
+    send_upsert(&live, "note.md").await;
     tokio::time::sleep(SETTLE).await;
 
     let after_hash = hash_for(&fx.index_dir(), "note.md").expect("row after touch");
@@ -278,6 +287,7 @@ async fn creating_nested_md_appears_with_forward_slash_path() {
     assert_eq!(paths_in_index(&fx.index_dir()), vec!["kept.md".to_string()]);
 
     fs::write(fx.vault.join("notes/sub/new.md"), b"# new\n").unwrap();
+    send_upsert(&live, "notes/sub/new.md").await;
     tokio::time::sleep(SETTLE).await;
 
     assert_eq!(
@@ -302,6 +312,8 @@ async fn rename_decomposes_into_remove_and_upsert() {
     );
 
     fs::rename(fx.vault.join("notes/a.md"), fx.vault.join("notes/b.md")).unwrap();
+    send_remove(&live, "notes/a.md").await;
+    send_upsert(&live, "notes/b.md").await;
     tokio::time::sleep(SETTLE).await;
 
     assert_eq!(
@@ -340,6 +352,7 @@ async fn sustained_save_loop_completes_with_consistent_row() {
     let started = Instant::now();
     for _ in 0..50 {
         fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
+        send_upsert(&live, "note.md").await;
     }
     // Sustained writes keep extending the debouncer's quiet window; settle
     // generously so the final batch has time to fire and the consumer to

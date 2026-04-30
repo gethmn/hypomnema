@@ -29,7 +29,6 @@ pub struct VaultEntry {
     pub id: VaultId,
     pub name: String,
     pub vault_path: PathBuf,
-    pub outbox_path: PathBuf,
     pub store: Arc<Store>,
     pub status: VaultStatus,
 }

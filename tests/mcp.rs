@@ -27,8 +27,8 @@ use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::config::{Config, EmbeddingConfig};
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
+use hypomnema::events::EventBus;
 use hypomnema::indexer::Scanner;
-use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::VaultStatus;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
@@ -116,6 +116,7 @@ struct LiveDaemon {
     consumer: Option<JoinHandle<()>>,
     server: Option<JoinHandle<()>>,
     shutdown_tx: watch::Sender<bool>,
+    _rescan_tx: watch::Sender<u64>,
     _fx: Fixture,
 }
 
@@ -160,17 +161,14 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     )
     .expect("spawn watcher");
 
-    let outbox_path =
-        vault_data_dir(&fx.data_dir, &fx.vault_id).join(&fx.config.storage.outbox_file);
-    let outbox = Outbox::open(fx.vault_id.clone(), outbox_path.clone())
-        .await
-        .expect("open outbox");
+    let event_bus = Arc::new(EventBus::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+    let (rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner,
-        outbox,
+        fx.vault_id.clone(),
+        event_bus,
         shutdown_rx.clone(),
         rescan_rx,
     ));
@@ -179,7 +177,6 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         id: fx.vault_id.clone(),
         name: "test".to_string(),
         vault_path: fx.vault.clone(),
-        outbox_path,
         store: Arc::new(store),
         status: VaultStatus::Active,
     };
@@ -211,6 +208,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         consumer: Some(consumer),
         server: Some(server),
         shutdown_tx,
+        _rescan_tx: rescan_tx,
         _fx: fx,
     }
 }

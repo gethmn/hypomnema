@@ -108,14 +108,12 @@ async fn spawn_seeded_daemon_with_embedder(
         )
         .await
         .expect("open store");
-        let outbox_path = root.path().join(format!("outbox-{name}.jsonl"));
         let store = Arc::new(store);
         let pool = store.pool();
         entries.push(VaultEntry {
             id: vault_id,
             name: (*name).to_string(),
             vault_path: vault_dir.path().to_path_buf(),
-            outbox_path,
             store,
             status: VaultStatus::Active,
         });

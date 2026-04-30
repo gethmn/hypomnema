@@ -12,9 +12,9 @@ use tracing::{info, warn};
 use crate::api::VaultEntry;
 use crate::config::Config;
 use crate::embedding::Embedder;
+use crate::events::EventBus;
 use crate::indexer::Scanner;
 use crate::legacy_state_migration;
-use crate::outbox::Outbox;
 use crate::store::Store;
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
 use crate::watcher;
@@ -166,6 +166,7 @@ pub struct VaultManager {
 struct ManagerInner {
     runners: RwLock<HashMap<VaultId, Arc<VaultRunner>>>,
     embedder: Arc<dyn Embedder>,
+    event_bus: Arc<EventBus>,
     embedding_dimension: u32,
     /// Production spawn context. `None` for `for_tests`-constructed managers,
     /// in which case `create`/`terminate` return `Internal`.
@@ -195,6 +196,7 @@ impl VaultManager {
         shutdown_rx: watch::Receiver<bool>,
     ) -> Result<Self> {
         let data_dir = config.storage.data_dir.0.clone();
+        let event_bus = Arc::new(EventBus::new());
 
         let active_rows = reconcile_active_rows(&registry, &data_dir).await?;
 
@@ -210,10 +212,15 @@ impl VaultManager {
 
         let mut runners: HashMap<VaultId, Arc<VaultRunner>> = HashMap::new();
         for row in &active_rows {
-            let runner =
-                spawn_runner_for_row(row, config.as_ref(), embedder.clone(), shutdown_rx.clone())
-                    .await
-                    .with_context(|| format!("spawning runner for vault {}", row.id))?;
+            let runner = spawn_runner_for_row(
+                row,
+                config.as_ref(),
+                embedder.clone(),
+                event_bus.clone(),
+                shutdown_rx.clone(),
+            )
+            .await
+            .with_context(|| format!("spawning runner for vault {}", row.id))?;
             runners.insert(row.id.clone(), Arc::new(runner));
         }
 
@@ -226,6 +233,7 @@ impl VaultManager {
             inner: Arc::new(ManagerInner {
                 runners: RwLock::new(runners),
                 embedder,
+                event_bus,
                 embedding_dimension,
                 spawn: Some(SpawnCtx {
                     registry,
@@ -271,6 +279,7 @@ impl VaultManager {
             inner: Arc::new(ManagerInner {
                 runners: RwLock::new(runners),
                 embedder,
+                event_bus: Arc::new(EventBus::new()),
                 embedding_dimension,
                 spawn: None,
                 test_inactive_rows: inactive_rows,
@@ -280,6 +289,10 @@ impl VaultManager {
 
     pub fn embedder(&self) -> Arc<dyn Embedder> {
         self.inner.embedder.clone()
+    }
+
+    pub fn event_bus(&self) -> Arc<EventBus> {
+        self.inner.event_bus.clone()
     }
 
     pub fn embedding_dimension(&self) -> u32 {
@@ -522,6 +535,7 @@ impl VaultManager {
             &row,
             spawn.config.as_ref(),
             self.inner.embedder.clone(),
+            self.inner.event_bus.clone(),
             spawn.shutdown_rx.clone(),
         )
         .await
@@ -671,6 +685,7 @@ impl VaultManager {
                 &row,
                 spawn.config.as_ref(),
                 self.inner.embedder.clone(),
+                self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 false,
             )
@@ -727,6 +742,7 @@ impl VaultManager {
                 &updated,
                 spawn.config.as_ref(),
                 self.inner.embedder.clone(),
+                self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
             )
             .await
@@ -914,6 +930,7 @@ impl VaultManager {
                 &updated,
                 spawn.config.as_ref(),
                 self.inner.embedder.clone(),
+                self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 rebuild,
             )
@@ -984,6 +1001,7 @@ impl VaultManager {
                 &updated,
                 spawn.config.as_ref(),
                 self.inner.embedder.clone(),
+                self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 rebuild,
             )
@@ -1192,10 +1210,11 @@ async fn spawn_runner_for_row(
     row: &VaultRow,
     config: &Config,
     embedder: Arc<dyn Embedder>,
+    event_bus: Arc<EventBus>,
     parent_shutdown_rx: watch::Receiver<bool>,
 ) -> Result<VaultRunner> {
     let (entry, lifecycle) =
-        spawn_runner_parts(row, config, embedder, parent_shutdown_rx, false).await?;
+        spawn_runner_parts(row, config, embedder, event_bus, parent_shutdown_rx, false).await?;
     Ok(VaultRunner::new(entry, lifecycle))
 }
 
@@ -1216,6 +1235,7 @@ async fn spawn_runner_parts(
     row: &VaultRow,
     config: &Config,
     embedder: Arc<dyn Embedder>,
+    event_bus: Arc<EventBus>,
     parent_shutdown_rx: watch::Receiver<bool>,
     skip_initial_scan: bool,
 ) -> Result<(VaultEntry, RunnerLifecycle)> {
@@ -1247,12 +1267,6 @@ async fn spawn_runner_parts(
             report.duration.as_secs_f64()
         );
     }
-
-    let outbox_path =
-        vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
-    let outbox = Outbox::open(row.id.clone(), outbox_path.clone())
-        .await
-        .with_context(|| format!("opening outbox for {}", row.id))?;
 
     let ignores = config
         .watcher
@@ -1289,7 +1303,8 @@ async fn spawn_runner_parts(
     let consumer_handle = tokio::spawn(watcher::run_consumer(
         rx,
         scanner_for_consumer,
-        outbox,
+        row.id.clone(),
+        event_bus,
         per_vault_rx,
         rescan_rx,
     ));
@@ -1298,7 +1313,6 @@ async fn spawn_runner_parts(
         id: row.id.clone(),
         name: row.name.clone(),
         vault_path: row.path.clone(),
-        outbox_path,
         store,
         status: row.status,
     };

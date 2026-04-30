@@ -865,35 +865,6 @@ async fn read_file_content_hashes(store: &Store) -> Vec<String> {
     .unwrap()
 }
 
-fn outbox_lines(path: &Path) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
-    }
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|s| s.to_string())
-        .collect()
-}
-
-async fn wait_for_outbox_count(path: &Path, expected: usize, timeout: std::time::Duration) {
-    let deadline = std::time::Instant::now() + timeout;
-    loop {
-        let count = outbox_lines(path).len();
-        if count >= expected {
-            return;
-        }
-        if std::time::Instant::now() >= deadline {
-            panic!(
-                "outbox at {} did not reach expected count {expected} (got {count}) within {timeout:?}",
-                path.display()
-            );
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-}
-
 #[tokio::test]
 async fn reset_without_rebuild_clears_last_error_and_restarts_runner() {
     let (root, config, registry, embedder, _tx, rx) = setup().await;
@@ -988,39 +959,6 @@ async fn reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
 }
 
 #[tokio::test]
-async fn reset_with_rebuild_preserves_outbox() {
-    let (root, config, registry, embedder, _tx, rx) = setup().await;
-    let manager = open_manager(config.clone(), registry, embedder, rx).await;
-
-    let path = fresh_vault_dir(root.path(), "v");
-    std::fs::write(path.join("a.md"), b"# Alpha\n\nBody one.\n").unwrap();
-    let row = manager
-        .create(CreateVaultRequest {
-            name: Some("alpha".to_string()),
-            path,
-        })
-        .await
-        .unwrap();
-
-    let outbox_path =
-        vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
-    let known_event_bytes = b"{\"vault\":\"sentinel\",\"path\":\"x.md\"}\n";
-    std::fs::write(&outbox_path, known_event_bytes).unwrap();
-    let before_bytes = std::fs::read(&outbox_path).unwrap();
-
-    manager
-        .reset("alpha", true)
-        .await
-        .expect("reset --rebuild succeeds");
-
-    let after_bytes = std::fs::read(&outbox_path).unwrap();
-    assert_eq!(
-        before_bytes, after_bytes,
-        "outbox.jsonl bytes must be unchanged across reset --rebuild"
-    );
-}
-
-#[tokio::test]
 async fn reset_returns_vault_not_found_for_unknown() {
     let (_root, config, registry, embedder, _tx, rx) = setup().await;
     let manager = open_manager(config, registry, embedder, rx).await;
@@ -1069,9 +1007,11 @@ async fn rescan_returns_rescan_initiated_at_timestamp() {
 }
 
 #[tokio::test]
-async fn rescan_re_emits_outbox_events_for_all_files_after_rebuild() {
+async fn rescan_re_emits_live_events_for_all_files_after_rebuild() {
+    use crate::events::{EventType, StreamEvent};
+
     let (root, config, registry, embedder, _tx, rx) = setup().await;
-    let manager = open_manager(config.clone(), registry, embedder, rx).await;
+    let manager = open_manager(config, registry, embedder, rx).await;
 
     let path = fresh_vault_dir(root.path(), "v");
     let files: &[(&str, &[u8])] = &[
@@ -1082,50 +1022,62 @@ async fn rescan_re_emits_outbox_events_for_all_files_after_rebuild() {
     for (name, content) in files {
         std::fs::write(path.join(name), content).unwrap();
     }
-    let row = manager
+    manager
         .create(CreateVaultRequest {
             name: Some("alpha".to_string()),
             path,
         })
         .await
         .unwrap();
-    let outbox_path =
-        vault_data_dir(&config.storage.data_dir.0, &row.id).join(&config.storage.outbox_file);
 
-    // Initial scan populates the index but does not emit outbox events.
-    assert!(outbox_lines(&outbox_path).is_empty());
+    // Subscribe to the live event bus before triggering rescan.
+    let mut rx_events = manager.event_bus().subscribe();
 
     manager
         .reset("alpha", true)
         .await
         .expect("reset --rebuild succeeds");
+
+    // reset --rebuild does not emit live events (it drains the consumer).
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let early: Vec<_> = std::iter::from_fn(|| rx_events.try_recv().ok()).collect();
     assert!(
-        outbox_lines(&outbox_path).is_empty(),
-        "reset --rebuild must not write to outbox"
+        early.is_empty(),
+        "reset --rebuild must not publish live events, got {early:?}"
     );
 
     manager.rescan("alpha").await.expect("rescan accepted");
-    wait_for_outbox_count(
-        &outbox_path,
-        files.len(),
-        std::time::Duration::from_secs(10),
-    )
-    .await;
 
-    let lines = outbox_lines(&outbox_path);
-    assert_eq!(lines.len(), files.len());
-    let mut paths: Vec<String> = Vec::new();
-    for line in &lines {
-        let v: serde_json::Value = serde_json::from_str(line).expect("outbox line is valid JSON");
-        let event_type = v.get("event_type").and_then(|s| s.as_str()).unwrap_or("");
-        assert!(
-            event_type == "modified" || event_type == "created",
-            "expected modified|created event, got {event_type:?} (line: {line})"
-        );
-        paths.push(v.get("path").and_then(|s| s.as_str()).unwrap().to_string());
+    // Collect exactly `files.len()` events with a generous timeout.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut events: Vec<crate::events::FileChangedEvent> = Vec::new();
+    while events.len() < files.len() {
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "rescan did not publish {} live events within 10s (got {})",
+                files.len(),
+                events.len()
+            );
+        }
+        match tokio::time::timeout(std::time::Duration::from_millis(200), rx_events.recv()).await {
+            Ok(Ok(StreamEvent::FileChanged(ev))) => events.push(ev),
+            Ok(Ok(other)) => panic!("unexpected event: {other:?}"),
+            Ok(Err(e)) => panic!("event receive error: {e:?}"),
+            Err(_) => {} // timeout — loop again
+        }
     }
+
+    assert_eq!(events.len(), files.len());
+    for ev in &events {
+        assert!(
+            ev.event_type == EventType::Modified || ev.event_type == EventType::Created,
+            "expected modified|created event type, got {:?}",
+            ev.event_type
+        );
+    }
+    let mut paths: Vec<&str> = events.iter().map(|e| e.path.as_str()).collect();
     paths.sort();
-    let mut expected: Vec<String> = files.iter().map(|(n, _)| (*n).to_string()).collect();
+    let mut expected: Vec<&str> = files.iter().map(|(n, _)| *n).collect();
     expected.sort();
     assert_eq!(paths, expected);
 }

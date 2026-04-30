@@ -28,16 +28,16 @@ use hypomnema::config::{
 };
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
+use hypomnema::events::{EventBus, StreamEvent};
 use hypomnema::indexer::Scanner;
 use hypomnema::legacy_state_migration;
-use hypomnema::outbox::Outbox;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
 use hypomnema::watcher::{self, Watcher};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
@@ -80,10 +80,6 @@ async fn open_store(vault_id: &VaultId, config: &Config) -> Store {
     .expect("open store")
 }
 
-fn outbox_path_for(config: &Config, vault_id: &VaultId) -> PathBuf {
-    vault_data_dir(&config.storage.data_dir.0, vault_id).join(&config.storage.outbox_file)
-}
-
 async fn build_vault_entry(
     row: &VaultRow,
     config: &Config,
@@ -98,7 +94,6 @@ async fn build_vault_entry(
         id: row.id.clone(),
         name: row.name.clone(),
         vault_path: row.path.clone(),
-        outbox_path: outbox_path_for(config, &row.id),
         store: Arc::new(store),
         status: row.status,
     }
@@ -164,11 +159,16 @@ fn http_client() -> reqwest::Client {
 struct WatcherRuntime {
     _watcher: Watcher,
     shutdown_tx: watch::Sender<bool>,
+    _rescan_tx: watch::Sender<u64>,
     consumer: JoinHandle<()>,
-    outbox_path: PathBuf,
+    event_bus: Arc<EventBus>,
 }
 
 impl WatcherRuntime {
+    fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
+        self.event_bus.subscribe()
+    }
+
     async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.consumer.await;
@@ -196,19 +196,16 @@ async fn spawn_watcher_runtime(
     )
     .expect("spawn watcher");
 
-    let outbox_path = outbox_path_for(config, &row.id);
-    let outbox = Outbox::open(row.id.clone(), outbox_path.clone())
-        .await
-        .expect("open outbox");
-
     let scanner_for_consumer =
         Scanner::new(&row.path, config, &store, embedder).expect("construct scanner (consumer)");
+    let event_bus = Arc::new(EventBus::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+    let (rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner_for_consumer,
-        outbox,
+        row.id.clone(),
+        event_bus.clone(),
         shutdown_rx,
         rescan_rx,
     ));
@@ -216,38 +213,22 @@ async fn spawn_watcher_runtime(
     WatcherRuntime {
         _watcher: watcher_handle,
         shutdown_tx,
+        _rescan_tx: rescan_tx,
         consumer,
-        outbox_path,
+        event_bus,
     }
 }
 
-fn count_outbox_lines(path: &PathBuf) -> usize {
-    if !path.exists() {
-        return 0;
+fn drain_events(rx: &mut broadcast::Receiver<StreamEvent>) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(ev) => events.push(ev),
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(e) => panic!("event receive failed: {e:?}"),
+        }
     }
-    fs::read_to_string(path)
-        .expect("read outbox file")
-        .lines()
-        .filter(|l| !l.is_empty())
-        .count()
-}
-
-fn read_outbox_vault_ids(path: &PathBuf) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
-    }
-    fs::read_to_string(path)
-        .expect("read outbox file")
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let v: Value = serde_json::from_str(line).expect("parse outbox JSON line");
-            v["vault"]
-                .as_str()
-                .expect("outbox event must have vault field")
-                .to_string()
-        })
-        .collect()
+    events
 }
 
 async fn insert_active_vault(registry: &VaultRegistry, name: &str, path: PathBuf) -> VaultRow {
@@ -288,33 +269,36 @@ async fn two_vaults_index_in_isolation() {
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
     let rt_a = spawn_watcher_runtime(&row_a, &config, embedder.clone()).await;
     let rt_b = spawn_watcher_runtime(&row_b, &config, embedder.clone()).await;
+    let mut rx_a = rt_a.subscribe();
+    let mut rx_b = rt_b.subscribe();
 
-    // Initial scans must not have written outbox lines (scan does not emit;
-    // only the watcher's consumer does).
-    assert_eq!(count_outbox_lines(&rt_a.outbox_path), 0);
-    assert_eq!(count_outbox_lines(&rt_b.outbox_path), 0);
+    // Initial scans must not publish live watcher events.
+    assert!(drain_events(&mut rx_a).is_empty());
+    assert!(drain_events(&mut rx_b).is_empty());
 
     // Modify a file only in vault A.
     fs::write(vault_a.join("a.md"), b"# a-modified-bytes\n").unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    let a_lines = count_outbox_lines(&rt_a.outbox_path);
-    let b_lines = count_outbox_lines(&rt_b.outbox_path);
+    let events_a = drain_events(&mut rx_a);
+    let events_b = drain_events(&mut rx_b);
     assert!(
-        a_lines >= 1,
-        "vault A's outbox should record at least one event; got {a_lines}"
+        !events_a.is_empty(),
+        "vault A's bus should publish at least one event"
     );
     assert_eq!(
-        b_lines, 0,
-        "vault B's outbox must not emit any events when only vault A changed"
+        events_b.len(),
+        0,
+        "vault B's bus must not publish events when only vault A changed"
     );
 
-    // Every event in A's outbox carries A's vault id.
-    let vault_ids_in_a = read_outbox_vault_ids(&rt_a.outbox_path);
-    let expected_a_id = row_a.id.to_string();
+    // Every event in A's stream carries A's vault id.
     assert!(
-        vault_ids_in_a.iter().all(|id| id == &expected_a_id),
-        "all vault A outbox lines must carry vault A's id ({expected_a_id}); got {vault_ids_in_a:?}"
+        events_a.iter().all(|ev| match ev {
+            StreamEvent::FileChanged(ev) => ev.vault == row_a.id,
+            StreamEvent::StreamLagged(_) => false,
+        }),
+        "all vault A live events must carry vault A's id; got {events_a:?}"
     );
 
     rt_a.shutdown().await;

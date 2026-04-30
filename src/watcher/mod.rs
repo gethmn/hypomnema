@@ -22,10 +22,9 @@
 //! Each [`Watcher`] is bound to one vault: `spawn_watcher(vault_id, ...)`
 //! registers one `notify` watcher on one vault root. A daemon running N
 //! vaults runs N independent watchers + N independent debouncers — there
-//! is no shared event stream, so no cross-vault event coalescing in the
-//! debounce window. The vault identity threads through to each emitted
-//! [`crate::outbox::ChangeEvent`] via the per-vault [`crate::outbox::Outbox`]
-//! that [`run_consumer`] writes to.
+//! is no cross-vault event coalescing in the debounce window. The vault
+//! identity threads through to each emitted [`crate::events::StreamEvent`]
+//! published to the daemon-level [`crate::events::EventBus`].
 //!
 //! ## Known v0 limitation: symlinks
 //!
@@ -53,8 +52,8 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
+use crate::events::{EventBus, EventType, StreamEvent};
 use crate::indexer::{ReindexOutcome, RemoveOutcome, Scanner};
-use crate::outbox::{ChangeEvent, EventType, Outbox};
 use crate::vault_registry::VaultId;
 use translate::{TranslateCtx, translate};
 
@@ -174,14 +173,15 @@ pub fn spawn_watcher(
 pub async fn run_consumer(
     mut rx: mpsc::Receiver<WatchEvent>,
     scanner: Scanner,
-    outbox: Outbox,
+    vault_id: VaultId,
+    events: Arc<EventBus>,
     mut shutdown_rx: watch::Receiver<bool>,
     mut rescan_rx: watch::Receiver<u64>,
 ) {
     // Honour the initial value too — if shutdown already fired before we
     // started polling, drain and exit without waiting for another change.
     if *shutdown_rx.borrow() {
-        drain_remaining(&mut rx, &scanner, &outbox).await;
+        drain_remaining(&mut rx, &scanner, &vault_id, &events).await;
         return;
     }
     loop {
@@ -191,7 +191,7 @@ pub async fn run_consumer(
                 // Either a new value or the sender was dropped; in both
                 // cases the right move is to drain and exit.
                 if res.is_err() || *shutdown_rx.borrow() {
-                    drain_remaining(&mut rx, &scanner, &outbox).await;
+                    drain_remaining(&mut rx, &scanner, &vault_id, &events).await;
                     break;
                 }
             }
@@ -200,14 +200,14 @@ pub async fn run_consumer(
                 // (manager teardown without a graceful shutdown), fall back
                 // to the shutdown path so we drain and exit.
                 if res.is_err() {
-                    drain_remaining(&mut rx, &scanner, &outbox).await;
+                    drain_remaining(&mut rx, &scanner, &vault_id, &events).await;
                     break;
                 }
-                run_rescan(&scanner, &outbox).await;
+                run_rescan(&scanner, &vault_id, &events).await;
             }
             event = rx.recv() => {
                 match event {
-                    Some(ev) => apply_event(ev, &scanner, &outbox).await,
+                    Some(ev) => apply_event(ev, &scanner, &vault_id, &events).await,
                     None => break,
                 }
             }
@@ -226,12 +226,12 @@ pub async fn run_consumer(
 /// policy). Operators wanting cold-start emission for every file should
 /// pair `rescan` with `reset --rebuild`, which clears `content_hash` and
 /// forces re-emit.
-async fn run_rescan(scanner: &Scanner, outbox: &Outbox) {
+async fn run_rescan(scanner: &Scanner, vault_id: &VaultId, events: &EventBus) {
     let rels = match scanner.vault_paths().await {
         Ok(rels) => rels,
         Err(e) => {
             tracing::warn!(
-                vault_id = %outbox.vault_id(),
+                vault_id = %vault_id,
                 error = ?e,
                 "rescan: walk failed"
             );
@@ -239,40 +239,53 @@ async fn run_rescan(scanner: &Scanner, outbox: &Outbox) {
         }
     };
     tracing::info!(
-        vault_id = %outbox.vault_id(),
+        vault_id = %vault_id,
         file_count = rels.len(),
         "rescan: starting"
     );
     for rel in rels {
-        apply_event(WatchEvent::Upsert(rel), scanner, outbox).await;
+        apply_event(WatchEvent::Upsert(rel), scanner, vault_id, events).await;
     }
-    tracing::info!(vault_id = %outbox.vault_id(), "rescan: complete");
+    tracing::info!(vault_id = %vault_id, "rescan: complete");
 }
 
-async fn drain_remaining(rx: &mut mpsc::Receiver<WatchEvent>, scanner: &Scanner, outbox: &Outbox) {
+async fn drain_remaining(
+    rx: &mut mpsc::Receiver<WatchEvent>,
+    scanner: &Scanner,
+    vault_id: &VaultId,
+    events: &EventBus,
+) {
     let deadline = Instant::now() + DRAIN_TIMEOUT;
     while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
         match timeout(remaining, rx.recv()).await {
-            Ok(Some(ev)) => apply_event(ev, scanner, outbox).await,
+            Ok(Some(ev)) => apply_event(ev, scanner, vault_id, events).await,
             Ok(None) | Err(_) => break,
         }
     }
 }
 
-// Order matters: the index update happens first, the outbox append second.
-// A failed outbox append logs `warn` and the consumer continues — the index
-// is already updated; the outbox simply has a missing line for that one
-// event. We do not roll back the index on outbox failure (see
-// docs/specs/change-events.md § Edge Cases).
-async fn apply_event(ev: WatchEvent, scanner: &Scanner, outbox: &Outbox) {
-    let vault_id = outbox.vault_id();
+// Order matters: the index update happens first, then the live event is
+// published. Hash-unchanged and not-present outcomes stay silent.
+async fn apply_event(ev: WatchEvent, scanner: &Scanner, vault_id: &VaultId, events: &EventBus) {
     match ev {
         WatchEvent::Upsert(rel) => match scanner.reindex_path(&rel).await {
             Ok(ReindexOutcome::Inserted { content_hash }) => {
-                emit(outbox, EventType::Created, rel, Some(content_hash)).await;
+                emit(
+                    events,
+                    vault_id,
+                    EventType::Created,
+                    rel,
+                    Some(content_hash),
+                );
             }
             Ok(ReindexOutcome::Updated { content_hash }) => {
-                emit(outbox, EventType::Modified, rel, Some(content_hash)).await;
+                emit(
+                    events,
+                    vault_id,
+                    EventType::Modified,
+                    rel,
+                    Some(content_hash),
+                );
             }
             Ok(ReindexOutcome::HashUnchanged) => {}
             Ok(ReindexOutcome::MissingFromDisk) => {
@@ -283,7 +296,13 @@ async fn apply_event(ev: WatchEvent, scanner: &Scanner, outbox: &Outbox) {
                 );
                 match scanner.remove_path(&rel).await {
                     Ok(RemoveOutcome::Removed { previous_hash }) => {
-                        emit(outbox, EventType::Deleted, rel, Some(previous_hash)).await;
+                        emit(
+                            events,
+                            vault_id,
+                            EventType::Deleted,
+                            rel,
+                            Some(previous_hash),
+                        );
                     }
                     Ok(RemoveOutcome::NotPresent) => {}
                     Err(e) => tracing::warn!(
@@ -300,7 +319,13 @@ async fn apply_event(ev: WatchEvent, scanner: &Scanner, outbox: &Outbox) {
         },
         WatchEvent::Remove(rel) => match scanner.remove_path(&rel).await {
             Ok(RemoveOutcome::Removed { previous_hash }) => {
-                emit(outbox, EventType::Deleted, rel, Some(previous_hash)).await;
+                emit(
+                    events,
+                    vault_id,
+                    EventType::Deleted,
+                    rel,
+                    Some(previous_hash),
+                );
             }
             Ok(RemoveOutcome::NotPresent) => {}
             Err(e) => {
@@ -310,16 +335,19 @@ async fn apply_event(ev: WatchEvent, scanner: &Scanner, outbox: &Outbox) {
     }
 }
 
-async fn emit(outbox: &Outbox, event_type: EventType, rel: String, hash: Option<String>) {
-    let ev = ChangeEvent::now(outbox.vault_id().clone(), event_type, rel.clone(), hash);
-    if let Err(e) = outbox.append(ev).await {
-        tracing::warn!(
-            vault_id = %outbox.vault_id(),
-            rel,
-            error = ?e,
-            "watcher: outbox append failed"
-        );
-    }
+fn emit(
+    events: &EventBus,
+    vault_id: &VaultId,
+    event_type: EventType,
+    rel: String,
+    hash: Option<String>,
+) {
+    events.publish(StreamEvent::file_changed(
+        vault_id.clone(),
+        event_type,
+        rel,
+        hash,
+    ));
 }
 
 #[cfg(test)]
@@ -327,12 +355,12 @@ mod tests {
     use super::*;
     use crate::config::{Config, ConfigPath};
     use crate::embedding::{Embedder, StubEmbedder};
+    use crate::events::{FileChangedEvent, StreamEvent};
     use crate::indexer::Scanner;
     use crate::store::Store;
-    use crate::vault_registry::vault_data_dir;
     use globset::GlobSetBuilder;
-    use std::path::PathBuf;
     use tempfile::tempdir;
+    use tokio::sync::broadcast;
     use tokio::sync::watch;
     use tokio::task::JoinHandle;
 
@@ -350,8 +378,9 @@ mod tests {
     struct LiveVault {
         watcher: Watcher,
         shutdown_tx: watch::Sender<bool>,
+        _rescan_tx: watch::Sender<u64>,
         consumer: JoinHandle<()>,
-        outbox_path: PathBuf,
+        event_bus: Arc<EventBus>,
     }
 
     impl LiveVault {
@@ -359,6 +388,10 @@ mod tests {
             let _ = self.shutdown_tx.send(true);
             let _ = self.consumer.await;
             drop(self.watcher);
+        }
+
+        fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
+            self.event_bus.subscribe()
         }
     }
 
@@ -387,42 +420,44 @@ mod tests {
         )
         .expect("spawn watcher");
 
-        let outbox_path = vault_data_dir(data_dir, &vault_id).join("outbox.jsonl");
-        let outbox = Outbox::open(vault_id.clone(), outbox_path.clone())
-            .await
-            .expect("open outbox");
+        let event_bus = Arc::new(EventBus::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (_rescan_tx, rescan_rx) = watch::channel(0u64);
-        let consumer = tokio::spawn(run_consumer(rx, scanner, outbox, shutdown_rx, rescan_rx));
+        let (rescan_tx, rescan_rx) = watch::channel(0u64);
+        let consumer = tokio::spawn(run_consumer(
+            rx,
+            scanner,
+            vault_id,
+            event_bus.clone(),
+            shutdown_rx,
+            rescan_rx,
+        ));
+        tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
 
         LiveVault {
             watcher,
             shutdown_tx,
+            _rescan_tx: rescan_tx,
             consumer,
-            outbox_path,
+            event_bus,
         }
     }
 
-    fn read_events(path: &Path) -> Vec<ChangeEvent> {
-        if !path.exists() {
-            return Vec::new();
+    async fn recv_file_changed(
+        rx: &mut broadcast::Receiver<StreamEvent>,
+    ) -> Option<FileChangedEvent> {
+        match tokio::time::timeout(SETTLE, rx.recv()).await {
+            Ok(Ok(StreamEvent::FileChanged(ev))) => Some(ev),
+            Ok(Ok(other)) => panic!("unexpected stream event: {other:?}"),
+            Ok(Err(e)) => panic!("event receive failed: {e:?}"),
+            Err(_) => None,
         }
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(|l| serde_json::from_str(l).expect("parse outbox line"))
-            .collect()
     }
 
     #[tokio::test]
-    async fn two_watchers_emit_to_separate_outboxes() {
-        // Per-vault isolation: two watchers + two outbox writers under the
-        // same data_dir, each bound to a distinct vault_id, must produce
-        // disjoint event streams. A change in vault A's tree only ever
-        // shows up in vault A's outbox; vault B's outbox stays empty (or
-        // carries only its own events). This is the multi-vault watcher
-        // foundation tasks 9.5/9.7 build on.
+    async fn two_watchers_publish_distinct_vault_events() {
+        // Per-vault isolation: two watchers bound to distinct vault IDs must
+        // publish events that identify the changed vault and stay silent for
+        // changes in the other vault's tree.
         let root = tempdir().unwrap();
         let vault_a = root.path().join("vault-a");
         let vault_b = root.path().join("vault-b");
@@ -436,55 +471,34 @@ mod tests {
 
         let live_a = start_vault(&vault_a, &data_dir, vault_id_a.clone()).await;
         let live_b = start_vault(&vault_b, &data_dir, vault_id_b.clone()).await;
-
-        // Sanity: paths are under per-vault subdirs.
-        assert_eq!(
-            live_a.outbox_path,
-            vault_data_dir(&data_dir, &vault_id_a).join("outbox.jsonl")
-        );
-        assert_eq!(
-            live_b.outbox_path,
-            vault_data_dir(&data_dir, &vault_id_b).join("outbox.jsonl")
-        );
-        assert_ne!(live_a.outbox_path, live_b.outbox_path);
+        let mut rx_a = live_a.subscribe();
+        let mut rx_b = live_b.subscribe();
 
         // Write a file under vault A only.
         fs::write(vault_a.join("a-only.md"), b"# only in a\n").unwrap();
-        tokio::time::sleep(SETTLE).await;
+        let event_a = recv_file_changed(&mut rx_a)
+            .await
+            .expect("vault A should publish create event");
 
-        let events_a = read_events(&live_a.outbox_path);
-        let events_b = read_events(&live_b.outbox_path);
-
-        assert_eq!(
-            events_a.len(),
-            1,
-            "vault A's outbox must carry the create event, got {events_a:?}"
-        );
-        assert_eq!(events_a[0].path, "a-only.md");
-        assert_eq!(events_a[0].event_type, EventType::Created);
-        assert_eq!(
-            events_a[0].vault, vault_id_a,
-            "event line must carry vault A's id"
-        );
+        assert_eq!(event_a.path, "a-only.md");
+        assert_eq!(event_a.event_type, EventType::Created);
+        assert_eq!(event_a.vault, vault_id_a);
         assert!(
-            events_b.is_empty(),
-            "vault B's outbox must stay empty; got {events_b:?}"
+            recv_file_changed(&mut rx_b).await.is_none(),
+            "vault B must stay silent for vault A changes"
         );
 
-        // Now write under vault B and confirm A's outbox does not grow.
+        // Now write under vault B and confirm A's subscription does not grow.
         fs::write(vault_b.join("b-only.md"), b"# only in b\n").unwrap();
-        tokio::time::sleep(SETTLE).await;
-
-        let events_a = read_events(&live_a.outbox_path);
-        let events_b = read_events(&live_b.outbox_path);
-        assert_eq!(
-            events_a.len(),
-            1,
-            "vault A's outbox must not pick up vault B's edit, got {events_a:?}"
+        let event_b = recv_file_changed(&mut rx_b)
+            .await
+            .expect("vault B should publish create event");
+        assert!(
+            recv_file_changed(&mut rx_a).await.is_none(),
+            "vault A must stay silent for vault B changes"
         );
-        assert_eq!(events_b.len(), 1, "vault B's outbox must carry one event");
-        assert_eq!(events_b[0].path, "b-only.md");
-        assert_eq!(events_b[0].vault, vault_id_b);
+        assert_eq!(event_b.path, "b-only.md");
+        assert_eq!(event_b.vault, vault_id_b);
 
         live_a.shutdown().await;
         live_b.shutdown().await;

@@ -9,15 +9,16 @@ use super::types::{OutboxStatus, StatusResponse};
 // Step-9 multi-vault behavior:
 //
 // - With **N=1** active vaults the response is byte-identical to v0.1.0
-//   (single vault path + outbox path + indexed_file_count).
+//   (single vault path + indexed_file_count; outbox fields are retained as
+//   legacy empty placeholders while live event streams replace JSONL outbox).
 // - With **N=0** active vaults (Resolution E Case 2 — fresh install / zero
-//   registered vaults) we return an empty representative: empty vault path,
-//   zero counts, empty outbox path. v0 consumers see a "fresh, empty"
-//   snapshot rather than an error.
+//   registered vaults) we return an empty representative: empty vault path
+//   and zero counts. v0 consumers see a "fresh, empty" snapshot rather than
+//   an error.
 // - With **N≥2** (only reachable via direct registry insertion in step 9 —
 //   step 10's `hmn vault create` is the user surface) we sum
-//   `indexed_file_count` across vaults and pick the first vault's path +
-//   outbox as the representative. The cross-vault wire shape lands in
+//   `indexed_file_count` across vaults and pick the first vault's path as
+//   the representative. The cross-vault wire shape lands in
 //   step 10's `/status` amendment per Resolution F's "ahead of spec"
 //   footnote.
 pub(crate) async fn status(
@@ -64,18 +65,13 @@ pub(crate) async fn status(
         }
     }
 
-    let representative = &vaults[0];
-    let outbox_size = std::fs::metadata(&representative.outbox_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
     Ok(Json(StatusResponse {
-        vault: representative.vault_path.display().to_string(),
+        vault: vaults[0].vault_path.display().to_string(),
         indexed_file_count: total_count as u64,
         last_indexed_at: max_indexed,
         outbox: OutboxStatus {
-            path: representative.outbox_path.display().to_string(),
-            size_bytes: outbox_size,
+            path: String::new(),
+            size_bytes: 0,
         },
     }))
 }

@@ -1,22 +1,22 @@
 use std::fs;
-use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use hypomnema::config::Config;
 use hypomnema::embedding::{Embedder, StubEmbedder};
+use hypomnema::events::{EventBus, EventType, FileChangedEvent, StreamEvent};
 use hypomnema::indexer::{Scanner, hash_file};
-use hypomnema::outbox::{ChangeEvent, EventType, Outbox};
 use hypomnema::store::Store;
-use hypomnema::vault_registry::{VaultId, vault_data_dir};
+use hypomnema::vault_registry::VaultId;
 use hypomnema::watcher::{self, Watcher};
 use tempfile::TempDir;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
 const SETTLE: Duration = Duration::from_millis(2 * DEBOUNCE_MS);
+const EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct Fixture {
     _root: TempDir,
@@ -62,21 +62,23 @@ fn fixture() -> Fixture {
     }
 }
 
-fn outbox_path(fx: &Fixture) -> PathBuf {
-    vault_data_dir(&fx.data_dir, &fx.vault_id).join("outbox.jsonl")
-}
-
 struct Live {
-    watcher: Watcher,
+    _watcher: Watcher,
     shutdown_tx: watch::Sender<bool>,
+    _rescan_tx: watch::Sender<u64>,
     consumer: JoinHandle<()>,
+    event_bus: Arc<EventBus>,
 }
 
 impl Live {
+    fn subscribe(&self) -> broadcast::Receiver<StreamEvent> {
+        self.event_bus.subscribe()
+    }
+
     async fn shutdown(self) {
         let _ = self.shutdown_tx.send(true);
         let _ = self.consumer.await;
-        drop(self.watcher);
+        drop(self._watcher);
     }
 }
 
@@ -107,66 +109,80 @@ async fn start(fx: &Fixture) -> Live {
     )
     .expect("spawn watcher");
 
-    let outbox = Outbox::open(fx.vault_id.clone(), outbox_path(fx))
-        .await
-        .expect("open outbox");
+    let event_bus = Arc::new(EventBus::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (_rescan_tx, rescan_rx) = watch::channel(0u64);
+    let (rescan_tx, rescan_rx) = watch::channel(0u64);
     let consumer = tokio::spawn(watcher::run_consumer(
         rx,
         scanner,
-        outbox,
+        fx.vault_id.clone(),
+        event_bus.clone(),
         shutdown_rx,
         rescan_rx,
     ));
+    tokio::time::sleep(Duration::from_millis(fx.debounce_ms)).await;
 
     Live {
-        watcher,
+        _watcher: watcher,
         shutdown_tx,
+        _rescan_tx: rescan_tx,
         consumer,
+        event_bus,
     }
 }
 
-fn read_events(path: &Path) -> Vec<ChangeEvent> {
-    std::fs::read_to_string(path)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect()
+async fn recv_file_changed(rx: &mut broadcast::Receiver<StreamEvent>) -> Option<FileChangedEvent> {
+    match tokio::time::timeout(EVENT_TIMEOUT, rx.recv()).await {
+        Ok(Ok(StreamEvent::FileChanged(ev))) => Some(ev),
+        Ok(Ok(other)) => panic!("unexpected stream event: {other:?}"),
+        Ok(Err(e)) => panic!("event receive failed: {e:?}"),
+        Err(_) => None,
+    }
+}
+
+fn drain_available(rx: &mut broadcast::Receiver<StreamEvent>) -> Vec<FileChangedEvent> {
+    let mut events = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(StreamEvent::FileChanged(ev)) => events.push(ev),
+            Ok(other) => panic!("unexpected stream event: {other:?}"),
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(e) => panic!("event receive failed: {e:?}"),
+        }
+    }
+    events
 }
 
 #[tokio::test]
-async fn editing_existing_file_emits_one_modified_line() {
+async fn editing_existing_file_publishes_one_modified_event() {
     let fx = fixture();
     fs::write(fx.vault.join("hello.md"), b"# v1\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     fs::write(fx.vault.join("hello.md"), b"# v2 longer content\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one modified event, got {events:?}"
-    );
-    let ev = &events[0];
+    let ev = recv_file_changed(&mut rx)
+        .await
+        .expect("expected one modified event");
     assert_eq!(ev.event_type, EventType::Modified);
     assert_eq!(ev.path, "hello.md");
     let expected_hash = hash_file(&fx.vault.join("hello.md")).unwrap();
     assert_eq!(ev.content_hash.as_deref(), Some(expected_hash.as_str()));
+    tokio::time::sleep(SETTLE).await;
+    assert!(drain_available(&mut rx).is_empty());
 
     live.shutdown().await;
 }
 
 #[tokio::test]
-async fn mtime_only_touch_emits_no_outbox_lines() {
+async fn mtime_only_touch_publishes_no_events() {
     let fx = fixture();
     fs::write(fx.vault.join("stable.md"), b"# stable\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     let f = fs::OpenOptions::new()
         .write(true)
@@ -175,35 +191,30 @@ async fn mtime_only_touch_emits_no_outbox_lines() {
     f.set_modified(SystemTime::now() + Duration::from_secs(60))
         .unwrap();
     drop(f);
-    tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
+    tokio::time::sleep(SETTLE * 2).await;
     assert!(
-        events.is_empty(),
-        "mtime-only touch must produce no outbox events, got {events:?}"
+        drain_available(&mut rx).is_empty(),
+        "mtime-only touch must produce no live events"
     );
 
     live.shutdown().await;
 }
 
 #[tokio::test]
-async fn deleting_file_emits_one_deleted_line_with_prior_hash() {
+async fn deleting_file_publishes_one_deleted_event_with_prior_hash() {
     let fx = fixture();
     fs::write(fx.vault.join("bye.md"), b"# bye\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
     let prior_hash = hash_file(&fx.vault.join("bye.md")).unwrap();
 
     fs::remove_file(fx.vault.join("bye.md")).unwrap();
-    tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one deleted event, got {events:?}"
-    );
-    let ev = &events[0];
+    let ev = recv_file_changed(&mut rx)
+        .await
+        .expect("expected one deleted event");
     assert_eq!(ev.event_type, EventType::Deleted);
     assert_eq!(ev.path, "bye.md");
     assert_eq!(ev.content_hash.as_deref(), Some(prior_hash.as_str()));
@@ -212,22 +223,18 @@ async fn deleting_file_emits_one_deleted_line_with_prior_hash() {
 }
 
 #[tokio::test]
-async fn creating_new_md_emits_one_created_line() {
+async fn creating_new_md_publishes_one_created_event() {
     let fx = fixture();
     fs::create_dir_all(fx.vault.join("notes")).unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     fs::write(fx.vault.join("notes/new.md"), b"# new\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
-    assert_eq!(
-        events.len(),
-        1,
-        "expected one created event, got {events:?}"
-    );
-    let ev = &events[0];
+    let ev = recv_file_changed(&mut rx)
+        .await
+        .expect("expected one created event");
     assert_eq!(ev.event_type, EventType::Created);
     assert_eq!(ev.path, "notes/new.md");
     let expected_hash = hash_file(&fx.vault.join("notes/new.md")).unwrap();
@@ -237,74 +244,43 @@ async fn creating_new_md_emits_one_created_line() {
 }
 
 #[tokio::test]
-async fn tail_f_shape_serves_each_new_line_from_captured_offset() {
+async fn live_bus_serves_each_new_event_after_subscription() {
     let fx = fixture();
     fs::write(fx.vault.join("note.md"), b"# v1\n").unwrap();
 
     let live = start(&fx).await;
-    let path = outbox_path(&fx);
-
-    let mut offset: u64 = 0;
+    let mut rx = live.subscribe();
 
     fs::write(fx.vault.join("note.md"), b"# v2\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
-
-    let mut f = fs::File::open(&path).unwrap();
-    f.seek(SeekFrom::Start(offset)).unwrap();
-    let mut buf = String::new();
-    f.read_to_string(&mut buf).unwrap();
-    assert!(
-        buf.ends_with('\n') && buf.lines().count() == 1,
-        "expected exactly one new JSONL line after first edit, got: {buf:?}"
-    );
-    let parsed: ChangeEvent = serde_json::from_str(buf.lines().next().unwrap()).unwrap();
-    assert_eq!(parsed.event_type, EventType::Modified);
-    assert_eq!(parsed.path, "note.md");
-    offset = fs::metadata(&path).unwrap().len();
+    let first = recv_file_changed(&mut rx)
+        .await
+        .expect("expected first modified event");
+    assert_eq!(first.event_type, EventType::Modified);
+    assert_eq!(first.path, "note.md");
 
     fs::write(fx.vault.join("note.md"), b"# v3 even longer\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
-
-    let mut f = fs::File::open(&path).unwrap();
-    f.seek(SeekFrom::Start(offset)).unwrap();
-    let mut buf = String::new();
-    f.read_to_string(&mut buf).unwrap();
-    assert!(
-        buf.ends_with('\n') && buf.lines().count() == 1,
-        "expected exactly one new JSONL line after second edit, got: {buf:?}"
-    );
-    let parsed: ChangeEvent = serde_json::from_str(buf.lines().next().unwrap()).unwrap();
-    assert_eq!(parsed.event_type, EventType::Modified);
+    let second = recv_file_changed(&mut rx)
+        .await
+        .expect("expected second modified event");
+    assert_eq!(second.event_type, EventType::Modified);
     let expected_hash = hash_file(&fx.vault.join("note.md")).unwrap();
-    assert_eq!(parsed.content_hash.as_deref(), Some(expected_hash.as_str()));
+    assert_eq!(second.content_hash.as_deref(), Some(expected_hash.as_str()));
 
     live.shutdown().await;
 }
 
 #[tokio::test]
-async fn outbox_file_lives_in_data_dir_not_in_vault() {
+async fn live_events_do_not_create_outbox_file_in_vault() {
     let fx = fixture();
     fs::write(fx.vault.join("a.md"), b"# a\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     fs::write(fx.vault.join("a.md"), b"# a v2\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
+    assert!(recv_file_changed(&mut rx).await.is_some());
     fs::write(fx.vault.join("b.md"), b"# b\n").unwrap();
-    tokio::time::sleep(SETTLE).await;
-
-    let configured = outbox_path(&fx);
-    assert!(
-        configured.starts_with(&fx.data_dir),
-        "outbox path {configured:?} must live under data_dir {:?}",
-        fx.data_dir,
-    );
-    assert!(configured.exists(), "outbox file must exist after writes");
-    let events = read_events(&configured);
-    assert!(
-        !events.is_empty(),
-        "outbox under data_dir should have collected events"
-    );
+    assert!(recv_file_changed(&mut rx).await.is_some());
 
     assert!(
         !fx.vault.join("outbox.jsonl").exists(),
@@ -316,42 +292,43 @@ async fn outbox_file_lives_in_data_dir_not_in_vault() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn rename_emits_deleted_then_created_lines() {
+async fn rename_publishes_deleted_then_created_events() {
     let fx = fixture();
     fs::create_dir_all(fx.vault.join("notes")).unwrap();
     fs::write(fx.vault.join("notes/a.md"), b"# a\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
     let prior_hash = hash_file(&fx.vault.join("notes/a.md")).unwrap();
 
     fs::rename(fx.vault.join("notes/a.md"), fx.vault.join("notes/b.md")).unwrap();
-    tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
-    assert_eq!(
-        events.len(),
-        2,
-        "rename must emit exactly two events, got {events:?}"
-    );
+    let first = recv_file_changed(&mut rx)
+        .await
+        .expect("expected deleted event");
+    let second = recv_file_changed(&mut rx)
+        .await
+        .expect("expected created event");
 
-    assert_eq!(events[0].event_type, EventType::Deleted);
-    assert_eq!(events[0].path, "notes/a.md");
-    assert_eq!(events[0].content_hash.as_deref(), Some(prior_hash.as_str()));
+    assert_eq!(first.event_type, EventType::Deleted);
+    assert_eq!(first.path, "notes/a.md");
+    assert_eq!(first.content_hash.as_deref(), Some(prior_hash.as_str()));
 
-    assert_eq!(events[1].event_type, EventType::Created);
-    assert_eq!(events[1].path, "notes/b.md");
+    assert_eq!(second.event_type, EventType::Created);
+    assert_eq!(second.path, "notes/b.md");
     let new_hash = hash_file(&fx.vault.join("notes/b.md")).unwrap();
-    assert_eq!(events[1].content_hash.as_deref(), Some(new_hash.as_str()));
+    assert_eq!(second.content_hash.as_deref(), Some(new_hash.as_str()));
 
     live.shutdown().await;
 }
 
 #[tokio::test]
-async fn sync_conflict_files_emit_no_outbox_lines() {
+async fn sync_conflict_files_publish_no_events() {
     let fx = fixture();
     fs::write(fx.vault.join("kept.md"), b"# kept\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     fs::write(
         fx.vault.join("My Note.sync-conflict-202604.md"),
@@ -366,31 +343,31 @@ async fn sync_conflict_files_emit_no_outbox_lines() {
     .unwrap();
     tokio::time::sleep(SETTLE).await;
 
-    let events = read_events(&outbox_path(&fx));
     assert!(
-        events.is_empty(),
-        "conflict files must not produce outbox events, got {events:?}"
+        drain_available(&mut rx).is_empty(),
+        "conflict files must not produce live events"
     );
 
     live.shutdown().await;
 }
 
 #[tokio::test]
-async fn sustained_save_loop_yields_at_most_two_outbox_lines() {
+async fn sustained_save_loop_yields_at_most_two_events() {
     let fx = fixture();
     fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
 
     let live = start(&fx).await;
+    let mut rx = live.subscribe();
 
     for _ in 0..50 {
         fs::write(fx.vault.join("note.md"), b"# v0\n").unwrap();
     }
     tokio::time::sleep(SETTLE * 4).await;
 
-    let events = read_events(&outbox_path(&fx));
+    let events = drain_available(&mut rx);
     assert!(
         events.len() <= 2,
-        "sustained same-byte writes must emit ≤ 2 outbox events, got {events:?}"
+        "sustained same-byte writes must emit at most 2 events, got {events:?}"
     );
     if let Some(last) = events.last() {
         let on_disk = hash_file(&fx.vault.join("note.md")).unwrap();
