@@ -3,15 +3,14 @@
 //! Per step-9 workplan § Resolution B: on first startup with a populated
 //! top-level `[vault]` config block and an empty `vaults.sqlite`, auto-create
 //! one registry row using `default_vault_name` and the legacy `vault.path`,
-//! atomically rename `<data_dir>/index.sqlite{,-wal,-shm}` and
-//! `<data_dir>/outbox.jsonl` into `<data_dir>/vaults/<id>/`, and write a
-//! per-vault `meta.toml`.
+//! atomically rename `<data_dir>/index.sqlite{,-wal,-shm}` into
+//! `<data_dir>/vaults/<id>/`, and write a per-vault `meta.toml`.
 //!
 //! Idempotency / crash safety: the function is safe to run on every startup.
 //! - If the registry already has rows, it skips the auto-create step.
 //! - The rename pass is per-file: only renames when source exists and
 //!   destination does not, so a partial-rename crash recovers cleanly on the
-//!   next start (the four `rename(2)` calls are atomic per-file on POSIX,
+//!   next start (the three `rename(2)` calls are atomic per-file on POSIX,
 //!   and the cross-file consistency window has a single deterministic
 //!   recovery action — re-run this function).
 //!
@@ -130,13 +129,11 @@ fn classify_path(path: &Path) -> (VaultStatus, Option<String>) {
 fn rename_legacy_files_into_vault(config: &Config, rows: &[VaultRow]) -> Result<()> {
     let data_dir = &config.storage.data_dir.0;
     let index_file = &config.storage.index_file;
-    let outbox_file = &config.storage.outbox_file;
 
     let candidates: Vec<String> = vec![
         index_file.clone(),
         format!("{index_file}-wal"),
         format!("{index_file}-shm"),
-        outbox_file.clone(),
     ];
 
     let any_legacy_present = candidates.iter().any(|name| data_dir.join(name).exists());
@@ -152,7 +149,7 @@ fn rename_legacy_files_into_vault(config: &Config, rows: &[VaultRow]) -> Result<
         0 => {
             warn!(
                 data_dir = %data_dir.display(),
-                "legacy_state_migration: legacy index/outbox files exist under data_dir but no \
+                "legacy_state_migration: legacy index files exist under data_dir but no \
                  registry rows are present. Skipping rename."
             );
             return Ok(());
@@ -162,7 +159,7 @@ fn rename_legacy_files_into_vault(config: &Config, rows: &[VaultRow]) -> Result<
             warn!(
                 data_dir = %data_dir.display(),
                 row_count = rows.len(),
-                "legacy_state_migration: legacy index/outbox files exist under data_dir but \
+                "legacy_state_migration: legacy index files exist under data_dir but \
                  multiple registry rows are present — cannot disambiguate target. Skipping rename."
             );
             return Ok(());
@@ -254,7 +251,6 @@ mod tests {
             storage: StorageConfig {
                 data_dir: ConfigPath(data_dir),
                 index_file: "index.sqlite".to_string(),
-                outbox_file: "outbox.jsonl".to_string(),
             },
             logging: LoggingConfig::default(),
             default_vault_name: "default".to_string(),
@@ -346,7 +342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renames_legacy_index_and_outbox_into_vault_dir() {
+    async fn renames_legacy_index_into_vault_dir() {
         let root = TempDir::new().unwrap();
         let vault = root.path().join("vault");
         fs::create_dir_all(&vault).unwrap();
@@ -354,7 +350,7 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
 
         // Pre-populate legacy files at data_dir root.
-        for name in &["index.sqlite", "index.sqlite-wal", "outbox.jsonl"] {
+        for name in &["index.sqlite", "index.sqlite-wal"] {
             let mut f = fs::File::create(data_dir.join(name)).unwrap();
             writeln!(f, "legacy content of {name}").unwrap();
         }
@@ -367,10 +363,8 @@ mod tests {
         let target = vault_data_dir(&data_dir, &rows[0].id);
         assert!(target.join("index.sqlite").is_file());
         assert!(target.join("index.sqlite-wal").is_file());
-        assert!(target.join("outbox.jsonl").is_file());
         assert!(!data_dir.join("index.sqlite").exists());
         assert!(!data_dir.join("index.sqlite-wal").exists());
-        assert!(!data_dir.join("outbox.jsonl").exists());
     }
 
     #[tokio::test]

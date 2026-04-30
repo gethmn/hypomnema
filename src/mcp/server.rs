@@ -218,8 +218,8 @@ impl HypomnemaMcpServer {
 
     #[tool(
         description = "Reset a vault: clear last_error and restart watcher + indexer. With \
-                       rebuild=true, also drop and rebuild chunks + chunks_vec (preserves files + \
-                       outbox). Disabled when [mcp] enable_write_tools = false. \
+                       rebuild=true, also drop and rebuild chunks + chunks_vec (preserves files). \
+                       Disabled when [mcp] enable_write_tools = false. \
                        See docs/specs/vault-management.md § Operations § reset."
     )]
     async fn vault_reset(&self, Parameters(input): Parameters<VaultResetInput>) -> CallToolResult {

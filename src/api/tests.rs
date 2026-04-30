@@ -148,8 +148,6 @@ async fn status_reports_zero_files_when_index_empty() {
     assert_eq!(body["indexed_file_count"], 0);
     assert!(body["last_indexed_at"].is_null());
     assert_eq!(body["vault"], h.vault_path.display().to_string());
-    assert_eq!(body["outbox"]["path"], "");
-    assert_eq!(body["outbox"]["size_bytes"], 0);
 }
 
 #[tokio::test]
@@ -174,8 +172,6 @@ async fn status_reports_count_and_last_indexed_after_seeding() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["indexed_file_count"], 2);
     assert_eq!(body["last_indexed_at"], "2026-04-22T14:31:08.123456Z");
-    assert_eq!(body["outbox"]["path"], "");
-    assert_eq!(body["outbox"]["size_bytes"], 0);
 }
 
 #[tokio::test]
@@ -583,7 +579,6 @@ fn vault_test_config(data_dir: &std::path::Path) -> Config {
         storage: StorageConfig {
             data_dir: ConfigPath(data_dir.to_path_buf()),
             index_file: "index.sqlite".to_string(),
-            outbox_file: "outbox.jsonl".to_string(),
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),

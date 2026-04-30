@@ -124,7 +124,6 @@ fn make_config(data_dir: PathBuf) -> Config {
         storage: StorageConfig {
             data_dir: ConfigPath(data_dir),
             index_file: "index.sqlite".to_string(),
-            outbox_file: "outbox.jsonl".to_string(),
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
@@ -1042,9 +1041,9 @@ async fn errored_vault_skipped_with_last_error_propagated() {
 // Round-3 shipping gate. Each test exercises a single lifecycle op (or a
 // combination) end-to-end through the live HTTP TCP transport using
 // `LiveControlPlaneDaemon` (real `VaultManager::open`, real per-vault store +
-// outbox + watcher + indexer). The unit-level handler tests in
+// watcher + indexer). The unit-level handler tests in
 // `src/api/tests.rs` cover happy-path shapes; these add: real HTTP transport,
-// outbox-file inspection, post-rebuild rescan emission, multi-op composition,
+// post-rebuild rescan emission, multi-op composition,
 // and concurrency edge cases.
 
 /// Like `spawn_live_daemon`, but pre-inserts an `Errored` row into the
@@ -1286,7 +1285,7 @@ async fn http_reset_clears_errored_state() {
     daemon.shutdown().await;
 }
 
-// ===== Test 20 — reset --rebuild clears chunks/chunks_vec/content_hash, preserves outbox =====
+// ===== Test 20 — reset --rebuild clears chunks/chunks_vec/content_hash =====
 
 #[tokio::test]
 async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
@@ -1431,7 +1430,7 @@ async fn http_rename_updates_search_response_vault_name() {
     daemon.shutdown().await;
 }
 
-// ===== Test 22 — rescan emits outbox events for existing files (post-rebuild) =====
+// ===== Test 22 — rescan re-indexes existing files (post-rebuild) =====
 
 #[tokio::test]
 async fn http_rescan_re_indexes_all_files_after_rebuild() {
@@ -1441,7 +1440,7 @@ async fn http_rescan_re_indexes_all_files_after_rebuild() {
     // vault is silent. Pair it with `reset --rebuild` (which clears
     // content_hash) to force per-file re-indexing, exactly the operator
     // workflow Smoke 5 + Smoke 7 verify. Verified via index state (non-empty
-    // content_hash) rather than outbox which no longer exists.
+    // content_hash).
     let daemon = spawn_live_daemon().await;
     let path = daemon.fresh_vault_dir("v");
     fs::write(path.join("one.md"), b"# One\n\nFirst.\n").expect("write");

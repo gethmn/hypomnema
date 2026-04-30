@@ -270,7 +270,7 @@ async fn live_bus_serves_each_new_event_after_subscription() {
 }
 
 #[tokio::test]
-async fn live_events_do_not_create_outbox_file_in_vault() {
+async fn live_events_do_not_write_files_in_vault() {
     let fx = fixture();
     fs::write(fx.vault.join("a.md"), b"# a\n").unwrap();
 
@@ -284,7 +284,7 @@ async fn live_events_do_not_create_outbox_file_in_vault() {
 
     assert!(
         !fx.vault.join("outbox.jsonl").exists(),
-        "outbox file must not appear under the watched vault"
+        "daemon must not write any outbox file under the watched vault"
     );
 
     live.shutdown().await;

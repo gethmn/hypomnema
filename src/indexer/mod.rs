@@ -221,7 +221,7 @@ impl Scanner {
 
     /// Walk the vault and return relative `.md` paths. Used by the
     /// rescan-on-demand path: the consumer task drives one `Upsert` event
-    /// per returned path through `apply_event`, re-emitting outbox events
+    /// per returned path through `apply_event`, emitting live change events
     /// for files whose content_hash drifted from the on-disk hash.
     pub async fn vault_paths(&self) -> Result<Vec<String>> {
         let vault = self.vault.clone();

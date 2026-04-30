@@ -221,13 +221,6 @@ pub struct StatusResponse {
     pub vault: String,
     pub indexed_file_count: u64,
     pub last_indexed_at: Option<String>,
-    pub outbox: OutboxStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutboxStatus {
-    pub path: String,
-    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,7 +372,7 @@ pub struct VaultResetInput {
     pub target: String,
     #[serde(default)]
     #[schemars(
-        description = "When true, also drop and rebuild chunks + chunks_vec (preserves files + outbox). Defaults to false."
+        description = "When true, also drop and rebuild chunks + chunks_vec (preserves files). Defaults to false."
     )]
     pub rebuild: bool,
 }

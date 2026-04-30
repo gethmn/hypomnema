@@ -4,13 +4,12 @@ use tokio::task;
 
 use super::ApiState;
 use super::error::ApiError;
-use super::types::{OutboxStatus, StatusResponse};
+use super::types::StatusResponse;
 
 // Step-9 multi-vault behavior:
 //
 // - With **N=1** active vaults the response is byte-identical to v0.1.0
-//   (single vault path + indexed_file_count; outbox fields are retained as
-//   legacy empty placeholders while live event streams replace JSONL outbox).
+//   (single vault path + indexed_file_count).
 // - With **N=0** active vaults (Resolution E Case 2 — fresh install / zero
 //   registered vaults) we return an empty representative: empty vault path
 //   and zero counts. v0 consumers see a "fresh, empty" snapshot rather than
@@ -30,10 +29,6 @@ pub(crate) async fn status(
             vault: String::new(),
             indexed_file_count: 0,
             last_indexed_at: None,
-            outbox: OutboxStatus {
-                path: String::new(),
-                size_bytes: 0,
-            },
         }));
     }
 
@@ -69,9 +64,5 @@ pub(crate) async fn status(
         vault: vaults[0].vault_path.display().to_string(),
         indexed_file_count: total_count as u64,
         last_indexed_at: max_indexed,
-        outbox: OutboxStatus {
-            path: String::new(),
-            size_bytes: 0,
-        },
     }))
 }

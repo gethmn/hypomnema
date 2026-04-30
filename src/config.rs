@@ -299,8 +299,6 @@ pub struct StorageConfig {
     pub data_dir: ConfigPath,
     #[serde(default = "default_index_file")]
     pub index_file: String,
-    #[serde(default = "default_outbox_file")]
-    pub outbox_file: String,
 }
 
 impl Default for StorageConfig {
@@ -308,7 +306,6 @@ impl Default for StorageConfig {
         Self {
             data_dir: default_data_dir(),
             index_file: default_index_file(),
-            outbox_file: default_outbox_file(),
         }
     }
 }
@@ -319,10 +316,6 @@ fn default_data_dir() -> ConfigPath {
 
 fn default_index_file() -> String {
     "index.sqlite".to_string()
-}
-
-fn default_outbox_file() -> String {
-    "outbox.jsonl".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

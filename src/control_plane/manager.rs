@@ -1037,7 +1037,7 @@ impl VaultManager {
     /// each file through the same `apply_event(Upsert)` pipeline the live
     /// watcher uses. Files whose `content_hash` matches on disk are silent
     /// (the indexer's hash-comparison short-circuit). On an up-to-date
-    /// vault this means few outbox events. Operators wanting "every file
+    /// vault this means few change events. Operators wanting "every file
     /// re-emits" should pair `rescan` with `reset --rebuild` (which clears
     /// `content_hash` and forces re-emit).
     ///

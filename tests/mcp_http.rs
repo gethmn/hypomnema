@@ -281,7 +281,6 @@ fn make_live_config(data_dir: PathBuf) -> Config {
         storage: StorageConfig {
             data_dir: ConfigPath(data_dir),
             index_file: "index.sqlite".to_string(),
-            outbox_file: "outbox.jsonl".to_string(),
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),

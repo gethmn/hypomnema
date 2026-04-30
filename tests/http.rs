@@ -176,7 +176,7 @@ async fn health_endpoint_reachable() {
 }
 
 #[tokio::test]
-async fn status_reports_vault_count_last_indexed_outbox() {
+async fn status_reports_vault_count_last_indexed() {
     let fx = fixture();
     let expected_vault = fx.vault.display().to_string();
     seed_default_vault(&fx);
@@ -197,8 +197,6 @@ async fn status_reports_vault_count_last_indexed_outbox() {
         .expect("last_indexed_at should be a string after a scan");
     chrono::DateTime::parse_from_rfc3339(last)
         .unwrap_or_else(|e| panic!("last_indexed_at must be RFC3339, got {last}: {e}"));
-    assert_eq!(body["outbox"]["path"], "");
-    assert_eq!(body["outbox"]["size_bytes"], 0);
 
     daemon.shutdown().await;
 }

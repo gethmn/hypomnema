@@ -5,7 +5,7 @@
 //! exit. Pitfall #9 (ungraceful shutdown and torn writes) is the reason every
 //! long-running task in steps 2–5 must observe this signal: never call
 //! [`std::process::exit`] from inside a task — let the task return naturally so
-//! its drop handlers run, transactions commit, and outbox writes flush.
+//! its drop handlers run and transactions commit.
 //!
 //! A second signal force-aborts the process with exit code 130 (the shell
 //! convention for SIGINT-terminated processes) so a hung clean shutdown can be

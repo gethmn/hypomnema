@@ -56,7 +56,6 @@ fn make_config(data_dir: PathBuf) -> Config {
         storage: StorageConfig {
             data_dir: ConfigPath(data_dir),
             index_file: "index.sqlite".to_string(),
-            outbox_file: "outbox.jsonl".to_string(),
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
@@ -395,7 +394,7 @@ async fn legacy_state_migration_preserves_index() {
         let _ = scanner.run().await.expect("initial scan");
     }
 
-    // Phase 2: relocate the populated SQLite + outbox into the v0.1.0 layout
+    // Phase 2: relocate the populated SQLite into the v0.1.0 layout
     // (`<data_dir>/index.sqlite`, etc.). The temp vault subdir + an unused
     // vaults.sqlite from the temp open are removed so legacy_state_migration
     // sees an empty registry.
@@ -409,7 +408,6 @@ async fn legacy_state_migration_preserves_index() {
             fs::rename(&src, data_dir.join(sidecar)).expect("relocate sqlite sidecar");
         }
     }
-    fs::write(data_dir.join("outbox.jsonl"), b"").expect("write empty legacy outbox");
     fs::remove_dir_all(&temp_vault_dir).expect("remove temp vault dir");
     let _ = fs::remove_file(data_dir.join("vaults.sqlite"));
     let _ = fs::remove_file(data_dir.join("vaults.sqlite-wal"));

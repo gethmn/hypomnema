@@ -15,7 +15,6 @@ pub mod indexer;
 pub mod legacy_state_migration;
 pub mod logging;
 pub mod mcp;
-pub mod outbox;
 pub mod search;
 pub mod shutdown;
 pub mod store;

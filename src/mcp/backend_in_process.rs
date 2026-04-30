@@ -296,7 +296,6 @@ mod tests {
             storage: StorageConfig {
                 data_dir: ConfigPath(data_dir.to_path_buf()),
                 index_file: "index.sqlite".to_string(),
-                outbox_file: "outbox.jsonl".to_string(),
             },
             logging: LoggingConfig::default(),
             default_vault_name: "default".to_string(),

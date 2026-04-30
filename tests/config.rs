@@ -61,7 +61,6 @@ fn default_round_trip() {
             .any(|s| s == ".obsidian/**")
     );
     assert_eq!(config.storage.index_file, "index.sqlite");
-    assert_eq!(config.storage.outbox_file, "outbox.jsonl");
     assert_eq!(config.logging.level, "info");
     assert_eq!(config.logging.notify_level, "warn");
     assert_eq!(config.logging.tokio_level, "error");

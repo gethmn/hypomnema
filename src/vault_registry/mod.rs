@@ -21,9 +21,8 @@ const VAULTS_DB_FILE: &str = "vaults.sqlite";
 
 /// Per-vault subdirectory under the daemon's `storage.data_dir`. Owns the
 /// `<data_dir>/vaults/<vault_id>/` convention from step-9 workplan § Goal
-/// recap. Used by `Store::open` and (in later step-9 tasks) by the per-vault
-/// outbox writer + the daemon's reconcile loop, so the layout has one source
-/// of truth.
+/// recap. Used by `Store::open` and the daemon's reconcile loop, so the
+/// layout has one source of truth.
 pub fn vault_data_dir(data_dir: &Path, vault_id: &VaultId) -> PathBuf {
     data_dir.join("vaults").join(vault_id.as_str())
 }

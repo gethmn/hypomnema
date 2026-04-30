@@ -85,7 +85,7 @@ pub enum VaultOp {
     Reset {
         /// Vault name or surrogate id.
         target: String,
-        /// Drop and rebuild chunks + chunks_vec; preserves files + outbox.
+        /// Drop and rebuild chunks + chunks_vec; preserves files.
         #[arg(long)]
         rebuild: bool,
         /// Skip the destructive-op confirmation prompt (required for --rebuild).
