@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-30
+
+### Changed
+
+- Retired the durable JSONL outbox in favor of a live-only in-memory event stream.
+- HTTP and CLI `watch` endpoints now stream NDJSON change events with lag detection.
+- Removed all outbox configuration, status reporting, and test surfaces.
+
+### Removed
+
+- `src/outbox/` module and associated integration tests (`tests/outbox.rs`).
+- Outbox-related config keys and status fields.
+- MCP `vault_watch` tool remains deferred pending `rmcp` long-lived streaming support.
+
 ## [0.4.0] - 2026-04-29
 
 ### Added
