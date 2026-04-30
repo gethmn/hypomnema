@@ -1,10 +1,10 @@
 # Hypomnema Roadmap — Round 5: Maintenance Pass
 
-**Scope**: A focused maintenance round covering three workstreams: (1) CHANGELOG.md adoption — settle format, back-fill milestones, and establish the going-forward ritual at each shipping gate; (2) outbox flake hardening — investigate and resolve (or definitively characterize) the `rename_emits_deleted_then_created_lines` ~17%-repro flake that has been silent-as-data since step 6; (3) CI pipeline — ship a GitHub Actions CI workflow (`ci.yml` + Dependabot config) that runs format, lint, and tests on Ubuntu + macOS for every push/PR, promoting the `notes/proposals/ci-cd-pipeline.md` spec to LDS canon.
+**Scope**: A focused maintenance round covering two shipped workstreams and one deferred follow-on: (1) CHANGELOG.md adoption — settle format, back-fill milestones, and establish the going-forward ritual at each shipping gate; (2) CI pipeline — ship a GitHub Actions CI workflow (`ci.yml` + Dependabot config) that runs format, lint, and tests on Ubuntu + macOS for every push/PR, promoting the `notes/proposals/ci-cd-pipeline.md` spec to LDS canon; (3) outbox flake hardening was initially scoped here but is now deferred because the likely next move is removing the outbox entirely.
 
 Release automation (binaries, cross-compilation, OSSF Scorecard, CodeQL) is explicitly **out of scope** for this round and stays in the backlog. The round ships as `v0.4.0`.
 
-**Status**: In progress. Round 4 shipped `v0.3.0` on 2026-04-28; step 13 shipped 2026-04-29.
+**Status**: Shipped 2026-04-29. Round 4 shipped `v0.3.0` on 2026-04-28; step 13 shipped 2026-04-29; step 14 is deferred to round 6+.
 
 **Process**: Same as rounds 1–4. Each step gets a short workplan (`step-NN-workplan.md`) created immediately before that step is built. Deferred decisions are pulled forward to workplan-time. The orchestration shape (orchestrator + per-step coordinator + ephemeral task agents, see [`notes/coordinator-playbook.md`](../coordinator-playbook.md)) carries forward unchanged.
 
@@ -13,11 +13,11 @@ Release automation (binaries, cross-compilation, OSSF Scorecard, CodeQL) is expl
 - **Single-step round delivered cleanly** — the 1-step-round choice was correct when implementation surface had no meaningful internal boundary. Round 5's three workstreams each have a natural step boundary; the 3-step phasing below reflects that.
 - **Spec-fleshout-at-workplan-write scales cleanly** — all proposal open questions resolved at workplan-write; zero scope-question escalations. Round 5 applies the same pattern: `notes/proposals/ci-cd-pipeline.md` stays Draft until step 13's workplan-write phase, at which point it promotes to `docs/specs/ci-pipeline.md`.
 - **Manual smoke on every wiring-shape task** — 6-of-6 across rounds 1–4. Step 13's CI wiring (YAML + Actions config) is a "wiring" task by shape; smoke is first-pass verification that the workflow actually runs green on GitHub before declaring the step shipped.
-- **Silence-as-data for non-recurring flakes carries forward** — the outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) has been silent across steps 9–12. Step 14 is the first active investigation step; if it fails to reproduce the flake under controlled conditions, that extended silence-as-data is a valid outcome worth documenting.
+- **Silence-as-data for non-recurring flakes carries forward** — the outbox flake (`tests/outbox.rs::rename_emits_deleted_then_created_lines`) was the candidate for step 14, but the round closed before that work started. The flake notes stay in the backlog for a future outbox-removal or flake-investigation pass.
 - **MSRV cross-check at workplan self-review** — any new top-level crate added in a workplan should have its MSRV cross-checked against `rust-toolchain.toml`. Round 5 is unlikely to add new crates (CI is YAML, CHANGELOG is Markdown), but the check applies if anything surfaces.
 - **Workplan-prose-vs-load-bearing-decision drift** is the dominant round-3+ source of `coordinator-only` soft flags (~0.5/task). Set the same expectation for round 5; defer-to-boundary routing is correct.
 - **`mcp-http-transport` skill candidate dropped** — evaluated and declined at round-4 step-12 boundary. No new skills anticipated for round 5.
-- **Skills carrying forward**: `rusqlite-in-async` (no SQLite surface this round), `filesystem-watching` (relevant if flake investigation touches the watcher path), `markdown-chunking` (no relevance), `sqlite-vec-extension` (no relevance). `filesystem-watching` is the most likely to be consulted in step 14.
+- **Skills carrying forward**: `rusqlite-in-async` (no SQLite surface this round), `filesystem-watching` (relevant if a future outbox-removal or flake pass touches the watcher path), `markdown-chunking` (no relevance), `sqlite-vec-extension` (no relevance). `filesystem-watching` is the most likely to be consulted in any future outbox-removal or flake-investigation pass.
 
 **Specs amended or created this round**:
 
@@ -30,7 +30,7 @@ Release automation (binaries, cross-compilation, OSSF Scorecard, CodeQL) is expl
 
 - New files: `.github/workflows/ci.yml`, `.github/dependabot.yml`, `CHANGELOG.md`, `docs/specs/ci-pipeline.md`
 - No `src/` changes in steps 13 or 15
-- Step 14 may touch `tests/outbox.rs` and possibly `src/watcher/` depending on root-cause findings
+- Step 14 was deferred out of round 5; a future outbox-removal round may touch `tests/outbox.rs`, `src/watcher/`, and the outbox plumbing more broadly.
 
 **No top-level crate additions anticipated.** CI is pure YAML; CHANGELOG is Markdown; outbox flake investigation is test-surface work against existing crates.
 
@@ -43,10 +43,10 @@ Three steps, one per workstream, ordered to put the most uncertain work (flake i
 | Step | Contents | Risk |
 |------|----------|------|
 | 13 | CI pipeline: spec promotion + `ci.yml` + `dependabot.yml` + branch-protection docs note | Low |
-| 14 | Outbox flake hardening: reproduce + root-cause + fix or characterize | Medium (unknown root cause) |
+| 14 | Deferred out of round 5; likely superseded by outbox removal | N/A |
 | 15 | CHANGELOG.md: format decision + back-fill `v0.1.0`–`v0.3.0` + `v0.4.0` entry + boundary ritual update | Low |
 
-Step 14 is the only uncertain step. If the flake fails to reproduce after a reasonable investigation budget, the outcome is an extended silence-as-data record in the step-14 retro + a carry-forward backlog entry with the investigation notes. The round-5 shipping gate does not depend on step 14 succeeding — step 15 can proceed regardless.
+Step 14 is now deferred out of round 5. The round-5 shipping gate no longer depends on it; the flake notes stay in the backlog as a candidate for a future outbox-removal round.
 
 ---
 
@@ -91,42 +91,23 @@ One small item:
 
 ## Step 14 — Outbox flake hardening
 
-**Status**: Not started.
+**Status**: Deferred to round 6+. The likely follow-on is outbox removal, not a flake-only fix.
 
-**Goal**: Investigate `tests/outbox.rs::rename_emits_deleted_then_created_lines` to root-cause the ~17%-repro flake first observed in step 6. Either (a) fix the underlying race or timing issue and add a flake-check pass to the shipping criteria, or (b) if the flake cannot be reproduced after a bounded investigation effort, document the investigation in the step-14 retro and the backlog entry with enough specificity that a future investigator has a clear starting point.
-
-This step does **not** block the round-5 shipping gate. Step 15 proceeds regardless of step-14 outcome.
-
-**Shipping criteria**:
-
-- If reproduced and fixed: `cargo nextest run --test-threads 1 tests/outbox` is green on 10 consecutive runs (macOS + Linux); the fix is accompanied by a comment explaining the race that was corrected; the flake backlog entry is retired.
-- If reproduced but not fixed within the investigation budget: the step-14 retro documents the reproduction recipe, the race hypothesis, and a specific "next investigation step" for a future engineer. The flake entry stays in the backlog with this context appended.
-- If not reproduced: the extended silence-as-data record is documented in the step-14 retro. Investigation notes cover: what was tried (stress invocation, `--test-threads 1`, `inotify`/`kqueue` event inspection, deliberate timing perturbation), what was observed, and the current hypothesis. Backlog entry updated with investigation notes.
-- In all cases: no regressions in the broader test suite.
-
-**Deferred decisions to resolve at workplan-time**:
-
-- **Reproduction strategy** — the flake was first observed under `cargo nextest run --fail-fast` cancellation on macOS. Does it reproduce under `cargo nextest run` without `--fail-fast`? Under `cargo test`? Under repeated single-test invocation (`cargo nextest run --test outbox::rename_emits_deleted_then_created_lines -j1`)? The workplan author should decide the investigation ladder before the build starts.
-- **Platform scope** — macOS FSEvents and Linux inotify have different event-coalescing semantics. Decide at workplan-write whether step 14 targets macOS (where the flake was first seen) only, or also Linux (via a CI matrix or local Linux VM). Given step 13 ships CI first, Linux coverage via the Actions matrix is available at step-14 time.
-- **Investigation time budget** — if the flake doesn't reproduce within N consecutive stress runs, conclude with silence-as-data. Decide N at workplan-write (reasonable default: 50 consecutive runs on the test in isolation).
-
-**Relevant skills**: `filesystem-watching` — covers the `notify` + `notify-debouncer-full` pattern, editor-save event storms, and macOS FSEvents coalescing. Likely useful for root-cause analysis.
-
-**Risk**: medium. Root cause is unknown. The investigation may take longer than expected if the flake requires specific kernel/scheduler conditions to reproduce. Bounded by the investigation-budget decision at workplan-write; the step outcome is well-defined regardless of whether the flake reproduces.
+**Note**: the step-14 flake candidates remain recorded in [`notes/backlog.md`](../backlog.md) as an open follow-on. If the next round removes outbox entirely, that work supersedes the old flake hardening task and can retire the stale tests as part of the broader cleanup.
 
 ---
 
 ## Step 15 — CHANGELOG.md adoption (round-5 shipping gate)
 
-**Status**: Not started.
+**Status**: Shipped 2026-04-29. See [`notes/project-planning-workflow-notes.md`](../project-planning-workflow-notes.md) § Step 15 for the retrospective.
 
-**Goal**: `CHANGELOG.md` exists at the repo root in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, back-filled with entries for `v0.1.0` through `v0.3.0` derived from the per-step retros and round shipping criteria, with a `v0.4.0` entry capturing this round's changes (CI pipeline, outbox flake work, CHANGELOG adoption itself). The going-forward ritual is codified: the step-boundary checklist in `notes/project-planning-workflow-notes.md` includes a CHANGELOG update step at each round's shipping gate.
+**Goal**: `CHANGELOG.md` exists at the repo root in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, back-filled with entries for `v0.1.0` through `v0.3.0` derived from the per-step retros and round shipping criteria, with a `v0.4.0` entry capturing this round's changes (CI pipeline, CHANGELOG adoption itself, and the decision to defer outbox flake hardening). The going-forward ritual is codified: the step-boundary checklist in `notes/project-planning-workflow-notes.md` includes a CHANGELOG update step at each round's shipping gate.
 
 **Shipping criteria**:
 
 - `CHANGELOG.md` exists at repo root; `## [Unreleased]` section is present and empty (or absent, workplan-time decision); `## [0.4.0]`, `## [0.3.0]`, `## [0.2.0]`, `## [0.1.0]` sections are present with dates and substantive entries.
 - Each back-filled version's entries accurately reflect what shipped: `v0.1.0` = daemon skeleton + scan + watcher + outbox + HTTP search, `v0.2.0` = chunking + embedding + semantic search + MCP stdio + multi-vault + vault lifecycle, `v0.3.0` = MCP Streamable HTTP transport.
-- `v0.4.0` entry covers: CI pipeline (GitHub Actions), outbox flake outcome (fixed or characterized), CHANGELOG adoption.
+- `v0.4.0` entry covers: CI pipeline (GitHub Actions), CHANGELOG adoption, and the explicit deferral of outbox flake hardening to a later round.
 - `notes/project-planning-workflow-notes.md` § Step boundary ritual includes a CHANGELOG update step.
 - `cargo clippy` and `cargo test` remain green (no code changes; this is a doc-only step).
 - The round-5 shipping tag is `v0.4.0`.
@@ -165,7 +146,7 @@ The round-5 shipping gate is:
 
 1. `.github/workflows/ci.yml` is live and green on `main` for format + lint + test (ubuntu + macos).
 2. `CHANGELOG.md` exists with back-filled entries for `v0.1.0`–`v0.3.0` and a `v0.4.0` entry covering this round.
-3. Step-14 outcome documented in the retro (fix, characterization, or extended silence-as-data) — the round does not require the flake to be fixed.
+3. Step 14 has been explicitly deferred to the backlog, with outbox removal called out as the likely follow-on.
 4. `docs/specs/ci-pipeline.md` v1.0.0 is the canonical spec; proposal archived.
 5. `notes/project-planning-workflow-notes.md` § Step boundary ritual includes CHANGELOG update.
 6. Full test suite green; no regressions.

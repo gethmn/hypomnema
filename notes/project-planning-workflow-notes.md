@@ -80,8 +80,9 @@ When a step ships:
 2. Capture any ADRs that hardened during the build
 3. Update the roadmap if reality drifted from the original plan (note what changed and why)
 4. Append a short retrospective to this file: what worked, what didn't, what we'd do differently
-5. Expand the **next** step into a workplan
-6. User reviews the new workplan before I (Claude) start coding
+5. At the round shipping gate, update repo-root `CHANGELOG.md` with the round-level release note before starting the next round
+6. Expand the **next** step into a workplan
+7. User reviews the new workplan before I (Claude) start coding
 
 ---
 
@@ -927,5 +928,39 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 **`retries = 0` stance held**: the `.config/nextest.toml` CI profile's `retries = 0` was not changed despite the macOS flake. The anti-flake convention (flakes are signal, not noise to suppress) is more valuable than a green badge; the macOS failure fed directly into step-14 context.
 
 **Pattern confirmed**: "wiring tasks need a CI iteration budget." The workplan correctly anticipated this (`do not paper over; iterate on failures`). The 3-push cycle is within the expected range for a first-time CI wiring task.
+
+### Step 15 (shipped 2026-04-29)
+
+**Structured Eval**
+
+*Batching outcomes:*
+- None. Doc-only step; no task-agent fan-out.
+
+*Escalations:*
+- Count: 0.
+
+*Retries:*
+- None.
+
+*Time and overhead:*
+- Short. One workplan, two doc edits, one diff check.
+
+**Notes**
+
+- The manual Keep a Changelog ritual was the right fit for this phase. It kept the boundary record explicit without pulling release automation into v0.
+- Round-level backfill was the right granularity. The changelog stays compact and the step-level detail remains in the retros.
+- The boundary ritual now names the CHANGELOG update step explicitly at round shipping gates, which removes ambiguity for the next round.
+
+### End-of-round retrospective (after step 15 ships — round 5)
+
+**Round scope**: roadmap steps 13 and 15 shipped; step 14 was explicitly deferred to the backlog and is likely superseded by outbox removal. 2 shipped step workstreams, 0 escalations in step 15, 0 retries, 0 code changes.
+
+**Did the round hold?** Yes. The infrastructure/process work landed cleanly, and the round closed without forcing a rushed outbox decision.
+
+**What changed for the next round?**
+
+1. *Outbox flake hardening is no longer the right primary shape.* The likely follow-on is outbox removal or broader outbox simplification; that is now a backlog item, not a round-5 promise.
+2. *The changelog ritual is now codified at the boundary.* Future rounds should update `CHANGELOG.md` as part of the shipping gate without re-litigating whether a changelog exists.
+3. *Round 5 ends as a maintenance/process round, not a bug-fix round.* That is fine. The round shipped the CI gate and the release-note machinery, then stopped before pulling the project into a speculative outbox cleanup.
 
 ---

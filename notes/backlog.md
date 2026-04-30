@@ -11,23 +11,24 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 ---
 
-## Round-5 candidates (pulled into roadmap-5.md)
+## Round-5 candidates (pulled into round 5)
 
-Items raised at the round-3/4 boundary and pulled into round 5. See [`notes/roadmap/roadmap-5.md`](roadmap/roadmap-5.md) for the full workstream scoping.
+Items raised at the round-3/4 boundary and pulled into round 5. See [`notes/roadmap/archive/roadmap-5.md`](roadmap/archive/roadmap-5.md) for the full workstream scoping.
 
 - ~~**CHANGELOG.md adoption.**~~ **Pulled into round 5** (step 15 — shipping gate).
-- ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Pulled into round 5** (step 14 — investigation + fix or characterize).
+- ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Superseded by planned outbox removal**; no longer a round-5 item.
 - ~~**CI pipeline (GitHub Actions).**~~ **Pulled into round 5** (step 13 — `ci.yml` + `dependabot.yml` + spec promotion). Source proposal: `notes/proposals/ci-cd-pipeline.md`.
 
-## Round-6 candidates
+## Round-6 candidates (pulled into roadmap-6.md)
 
-Items not yet scoped to a round. Un-scoped is a valid state.
+Items pulled into the round-6 draft roadmap. See [`notes/roadmap/roadmap-6.md`](roadmap-6.md) for the current scope.
 
 - **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred past rounds 4 and 5.
 - **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is round-6+ if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
 - **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as a future candidate if a use-case surfaces.
 - **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Round-6+.
 - **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope for round 5; round-6+ when the project needs binary distribution.
+- ~~**Outbox removal / outbox simplification.**~~ **Pulled into round 6** (step 16--17). The likely next move is removing the outbox entirely, with the exact replacement event model pinned at workplan time.
 - **OSSF Scorecard / CodeQL.** Security tooling for when the project has public visibility. Round-6+.
 - **Windows CI matrix.** Current CI scope is unix-only (ubuntu + macos). Add when Windows support becomes a project goal.
 - **Search-error classification: replace string-prefix routing with typed errors.** Today [`From<anyhow::Error> for ApiError`](../src/api/error.rs) and [`anyhow_is_request_validation`](../src/api/search.rs) classify errors by formatting the chain with `{err:#}` and matching `starts_with("invalid_glob")` / `"invalid_regex"` / `"invalid_prefix"`. The producers ([`search/content.rs`](../src/search/content.rs), [`search/filesystem.rs`](../src/search/filesystem.rs), [`search/mod.rs::normalize_prefix`](../src/search/mod.rs)) emit `anyhow!("invalid_regex: {e}")` etc. Any future `.context(...)` wrap upstream of these sentinels silently degrades the response from 400 to 500 with no test coverage of that case. [`SemanticSearchError::InvalidPrefix`](../src/search/semantic.rs) already half-models this and ends up re-parsing its own Display string. **Round-N research**: confirm the sentinel-prefix pattern is the only contract today, then introduce a small typed error (per-search-mode or a shared `SearchValidationError`) that the API layer pattern-matches structurally. Source: amp code review 2026-04-28 ([notes/amp-code-review.md](amp-code-review.md) preface).
@@ -60,7 +61,7 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 
 ## Operational follow-ups
 
-- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 5** (step 14). Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). Root-cause and fix/characterization happens in step 14. **Step-13 CI update**: a *second* outbox test, `deleting_file_emits_one_deleted_line_with_prior_hash` (`tests/outbox.rs:201`), reproduced on *both* macOS CI runs (run 25086730532 + workflow_dispatch run 25086929198) — consistently, not as a rare local flake. The timing-sensitive assertion fails with "expected one deleted event, got []". Same `tests/outbox.rs` file, same event-timing family. Step 14 now has two candidate tests and a reliable reproduction environment (macOS GitHub Actions runner). `tests/outbox.rs` was unchanged in step 13 (confirmed: `git log 8cd5add..f4130fd -- tests/outbox.rs` returned empty).
+- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 6** via outbox removal. Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). **Step-13 CI update**: a *second* outbox test, `deleting_file_emits_one_deleted_line_with_prior_hash` (`tests/outbox.rs:201`), reproduced on *both* macOS CI runs (run 25086730532 + workflow_dispatch run 25086929198) — consistently, not as a rare local flake. The timing-sensitive assertion fails with "expected one deleted event, got []". Same `tests/outbox.rs` file, same event-timing family. `tests/outbox.rs` was unchanged in step 13 (confirmed: `git log 8cd5add..f4130fd -- tests/outbox.rs` returned empty).
 - **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — any future round that exercises sqlite-vec from a fresh dev shell will need it again.
 - **Brand-identity override revisit on rmcp major version upgrade.** ADR-0012 § Negative consequences notes this: the `#[tool_handler(name = "hypomnema")]` macro syntax is rmcp-macros-1.5.0-specific.
 
