@@ -75,9 +75,9 @@ pub(crate) async fn resume(
 pub(crate) async fn reset(
     State(s): State<ApiState>,
     Path(name_or_id): Path<String>,
-    body: Option<ApiJson<ResetRequest>>,
+    body: Option<axum::Json<ResetRequest>>,
 ) -> Result<Json<VaultRowJson>, ApiError> {
-    let rebuild = body.map(|ApiJson(b)| b.rebuild).unwrap_or(false);
+    let rebuild = body.map(|axum::Json(b)| b.rebuild).unwrap_or(false);
     let row = s.vault_manager.reset(&name_or_id, rebuild).await?;
     Ok(Json(VaultRowJson::from(row)))
 }

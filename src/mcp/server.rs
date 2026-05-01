@@ -692,7 +692,7 @@ mod tests {
     async fn mcp_vault_status_returns_single() {
         let app =
             Router::new().route(
-                "/vaults/:name_or_id",
+                "/vaults/{name_or_id}",
                 get(|AxumPath(name): AxumPath<String>| async move {
                     axum::Json(sample_vault_row(&name))
                 }),
@@ -721,7 +721,7 @@ mod tests {
         // the tool addresses the daemon at the configured default name.
         let app =
             Router::new().route(
-                "/vaults/:name_or_id",
+                "/vaults/{name_or_id}",
                 get(|AxumPath(name): AxumPath<String>| async move {
                     axum::Json(sample_vault_row(&name))
                 }),
@@ -805,7 +805,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_vault_terminate_succeeds_when_write_tools_enabled() {
         let app = Router::new().route(
-            "/vaults/:name_or_id",
+            "/vaults/{name_or_id}",
             delete(|AxumPath(_name): AxumPath<String>| async move {
                 axum::Json(TerminateVaultResponse {
                     terminated: true,
@@ -892,7 +892,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_vault_pause_succeeds_when_write_tools_enabled() {
         let app = Router::new().route(
-            "/vaults/:name_or_id/pause",
+            "/vaults/{name_or_id}/pause",
             post(|AxumPath(name): AxumPath<String>| async move {
                 let mut row = sample_vault_row(&name);
                 row.status = "paused".into();
@@ -944,7 +944,7 @@ mod tests {
     async fn mcp_vault_resume_succeeds_when_write_tools_enabled() {
         let app =
             Router::new().route(
-                "/vaults/:name_or_id/resume",
+                "/vaults/{name_or_id}/resume",
                 post(|AxumPath(name): AxumPath<String>| async move {
                     axum::Json(sample_vault_row(&name))
                 }),
@@ -994,7 +994,7 @@ mod tests {
     async fn mcp_vault_reset_succeeds_when_write_tools_enabled() {
         let app =
             Router::new().route(
-                "/vaults/:name_or_id/reset",
+                "/vaults/{name_or_id}/reset",
                 post(|AxumPath(name): AxumPath<String>| async move {
                     axum::Json(sample_vault_row(&name))
                 }),
@@ -1050,7 +1050,7 @@ mod tests {
         let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
         let captured_for_handler = captured.clone();
         let app = Router::new().route(
-            "/vaults/:name_or_id/reset",
+            "/vaults/{name_or_id}/reset",
             post(
                 |AxumPath(name): AxumPath<String>, body: axum::body::Bytes| async move {
                     let parsed: Value = serde_json::from_slice(&body).expect("body is JSON");
@@ -1086,7 +1086,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_vault_rename_succeeds_when_write_tools_enabled() {
         let app = Router::new().route(
-            "/vaults/:name_or_id/rename",
+            "/vaults/{name_or_id}/rename",
             post(|body: axum::body::Bytes| async move {
                 let parsed: Value = serde_json::from_slice(&body).expect("body is JSON");
                 let new_name = parsed["new_name"]
@@ -1141,7 +1141,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_vault_rescan_succeeds_when_write_tools_enabled() {
         let app = Router::new().route(
-            "/vaults/:name_or_id/rescan",
+            "/vaults/{name_or_id}/rescan",
             post(|AxumPath(name): AxumPath<String>| async move {
                 axum::Json(RescanResponseJson {
                     row: sample_vault_row(&name),

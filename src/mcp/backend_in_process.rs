@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::async_trait;
+use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::api::search::{run_content_search, run_filesystem_search, run_semantic_search};

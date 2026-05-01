@@ -1,5 +1,4 @@
 use axum::Json;
-use axum::async_trait;
 use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -235,7 +234,6 @@ fn trim_token_detail(rest: &str) -> String {
 // plain-text response.
 pub(crate) struct ApiJson<T>(pub T);
 
-#[async_trait]
 impl<S, T> FromRequest<S> for ApiJson<T>
 where
     S: Send + Sync,

@@ -16,7 +16,8 @@ path = "src/bin/hmn.rs"
 
 [dependencies]
 anyhow = "1.0.102"
-axum = "0.7"
+async-trait = "0.1"
+axum = "0.8"
 bytes = "1"
 bytemuck = "1"
 futures-util = { version = "0.3", default-features = false }
