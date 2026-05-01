@@ -294,9 +294,10 @@ After the last task completes (and shipping criteria pass — verify against the
 3. Run § Post-build evaluation. The eval populates the structured-data portion of the retro entry.
 4. Append the per-step retrospective to `notes/project-planning-workflow-notes.md` using the template at the top of that file's Retrospectives section. The eval data goes in the Structured Eval subsection; subjective notes go in the Notes subsection.
 5. Mark all step-NN todos completed (`todo_complete(id, true)` for each).
-6. Archive the step-context scratchpad: `scratchpad_archive(scratchpad_id=<X>)`.
-7. Post a final comment on the step's "outer" todo (the one in the original 17–21 set): `"Step shipped <date>. Workplan, retro, and decisions in repo. Coordinator standing down."`
-8. Stop. The next step's coordinator is a fresh agent for a fresh workplan.
+6. Archive the step workplan file by moving it to `notes/roadmap/archive/`: move `notes/roadmap/step-NN-workplan.md` to `notes/roadmap/archive/step-NN-workplan.md` (do not delete it). If `notes/roadmap/step-NN-workplan.md` is tracked, use `git mv`; if it is untracked, use a normal filesystem move.
+7. Archive the step-context scratchpad: `scratchpad_archive(scratchpad_id=<X>)`.
+8. Post a final comment on the step's "outer" todo (the one in the original 17–21 set): `"Step shipped <date>. Workplan, retro, and decisions in repo. Coordinator standing down."`
+9. Stop. The next step's coordinator is a fresh agent for a fresh workplan.
 
 ---
 
