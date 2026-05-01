@@ -141,7 +141,7 @@ mod tests {
     fn event(kind: EventKind, paths: Vec<PathBuf>) -> DebouncedEvent {
         let mut ev = Event::new(kind);
         ev.paths = paths;
-        DebouncedEvent::from(ev)
+        DebouncedEvent::new(ev, std::time::Instant::now())
     }
 
     #[test]

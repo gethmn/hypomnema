@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use globset::GlobSet;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{Debouncer, FileIdMap, new_debouncer};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
@@ -134,7 +134,6 @@ pub fn spawn_watcher(
     .context("constructing notify debouncer")?;
 
     debouncer
-        .watcher()
         .watch(&canonical_vault, RecursiveMode::Recursive)
         .with_context(|| {
             format!(
