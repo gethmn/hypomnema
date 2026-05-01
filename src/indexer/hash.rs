@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
@@ -7,6 +8,15 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
+
+/// Encodes a byte slice as a lowercase hex string.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(s, "{b:02x}").expect("writing to String is infallible");
+    }
+    s
+}
 
 pub fn hash_file(path: &Path) -> Result<String> {
     let mut file = File::open(path)
@@ -22,7 +32,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(format!("sha256:{}", hex_encode(&hasher.finalize())))
 }
 
 pub fn read_and_hash(path: &Path) -> Result<(String, String)> {
@@ -30,7 +40,7 @@ pub fn read_and_hash(path: &Path) -> Result<(String, String)> {
         fs::read(path).with_context(|| format!("reading file for indexing: {}", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    let hash = format!("sha256:{:x}", hasher.finalize());
+    let hash = format!("sha256:{}", hex_encode(&hasher.finalize()));
     let body = String::from_utf8_lossy(&bytes).into_owned();
     Ok((body, hash))
 }
@@ -74,7 +84,7 @@ mod tests {
 
         let mut hasher = Sha256::new();
         hasher.update(&payload);
-        let expected = format!("sha256:{:x}", hasher.finalize());
+        let expected = format!("sha256:{}", hex_encode(&hasher.finalize()));
         assert_eq!(hash, expected);
     }
 
