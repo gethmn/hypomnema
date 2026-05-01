@@ -83,6 +83,8 @@ If only one runtime is registered, the playbook's spawn lines collapse to a sing
 ## ORCHESTRATOR section
 
 > **Audience**: the top-level agent that talks directly to the human. Could be a Solo agent or a Claude Code terminal session. If you are a coordinator or task agent, skip this section.
+>
+> **Execution surface**: use Solo MCP tool calls (not shell CLI commands) for agent/process control, todos, scratchpads, timers, and terminal/process management. Do not assume a `solo` executable exists in the shell.
 
 ### Identity & setup (run once, on becoming the orchestrator)
 
@@ -145,6 +147,8 @@ When the human asks "what do I do to start step N?" / "how do I kick off step N?
 ### Identity & phases
 
 > **Audience**: the Solo agent spawned by the orchestrator as `step-NN-coordinator`. The orchestrator should not act on this section — it spawned you, but it is not you.
+>
+> **Execution surface**: use Solo MCP tool calls (not shell CLI commands) for agent/process control, todos, scratchpads, timers, and terminal/process management. Do not assume a `solo` executable exists in the shell.
 
 You are the step N coordinator from the moment the orchestrator spawned you. Your name in `list_processes` is `step-NN-coordinator` from spawn time onward. There is no second process and no promotion event — you do all of the coordinator's work in this single Solo process.
 
@@ -304,6 +308,8 @@ After the last task completes (and shipping criteria pass — verify against the
 ## TASK AGENT section
 
 You are an ephemeral worker. You exist to execute one task (or a small batch) and report back. You do not advance the build; the coordinator does that.
+
+**Execution surface**: use Solo MCP tool calls (not shell CLI commands) for agent/process control, todos, scratchpads, timers, and terminal/process management. Do not assume a `solo` executable exists in the shell.
 
 ### On wake-up (your first turn)
 
