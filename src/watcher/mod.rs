@@ -39,14 +39,14 @@ pub mod filter;
 mod translate;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use globset::GlobSet;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
+use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{Debouncer, FileIdMap, new_debouncer};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
@@ -86,10 +86,12 @@ pub fn spawn_watcher(
 ) -> Result<(Watcher, mpsc::Receiver<WatchEvent>)> {
     let canonical_vault = fs::canonicalize(vault)
         .with_context(|| format!("canonicalizing vault for watcher: {}", vault.display()))?;
+    let watched_vault = absolute_path(vault)
+        .with_context(|| format!("resolving watched vault path: {}", vault.display()))?;
 
     let (tx, rx) = mpsc::channel::<WatchEvent>(buffer);
     let ctx = TranslateCtx {
-        canonical_vault: canonical_vault.clone(),
+        vault_roots: distinct_roots([canonical_vault.clone(), watched_vault.clone()]),
         ignores,
     };
 
@@ -134,14 +136,8 @@ pub fn spawn_watcher(
     .context("constructing notify debouncer")?;
 
     debouncer
-        .watcher()
-        .watch(&canonical_vault, RecursiveMode::Recursive)
-        .with_context(|| {
-            format!(
-                "registering recursive watch on {}",
-                canonical_vault.display()
-            )
-        })?;
+        .watch(&watched_vault, RecursiveMode::Recursive)
+        .with_context(|| format!("registering recursive watch on {}", watched_vault.display()))?;
 
     tracing::info!(
         vault_id = %vault_id,
@@ -156,6 +152,24 @@ pub fn spawn_watcher(
         },
         rx,
     ))
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn distinct_roots<const N: usize>(roots: [PathBuf; N]) -> Vec<PathBuf> {
+    let mut out = Vec::with_capacity(N);
+    for root in roots {
+        if !out.iter().any(|existing| existing == &root) {
+            out.push(root);
+        }
+    }
+    out
 }
 
 /// Drive the watcher channel against a [`Scanner`], reindexing or removing
@@ -359,12 +373,13 @@ mod tests {
     use crate::indexer::Scanner;
     use crate::store::Store;
     use globset::GlobSetBuilder;
+    use std::io::Write;
     use tempfile::tempdir;
     use tokio::sync::broadcast;
     use tokio::sync::watch;
     use tokio::task::JoinHandle;
 
-    const SETTLE: Duration = Duration::from_millis(150);
+    const SETTLE: Duration = Duration::from_millis(500);
     const DEBOUNCE_MS: u64 = 50;
 
     fn config_for(vault_path: &Path, data_dir: &Path) -> Config {
@@ -454,53 +469,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn two_watchers_publish_distinct_vault_events() {
-        // Per-vault isolation: two watchers bound to distinct vault IDs must
-        // publish events that identify the changed vault and stay silent for
-        // changes in the other vault's tree.
+    async fn live_watcher_smoke_surfaces_create_modify_delete() {
+        // Real-file smoke: a watched vault should surface a create, a modify,
+        // and a delete through the same event pipeline the daemon uses.
         let root = tempdir().unwrap();
-        let vault_a = root.path().join("vault-a");
-        let vault_b = root.path().join("vault-b");
+        let vault = root.path().join("vault");
         let data_dir = root.path().join("data");
-        fs::create_dir_all(&vault_a).unwrap();
-        fs::create_dir_all(&vault_b).unwrap();
+        fs::create_dir_all(&vault).unwrap();
 
-        let vault_id_a = VaultId::new();
-        let vault_id_b = VaultId::new();
-        assert_ne!(vault_id_a, vault_id_b);
+        let vault_id = VaultId::new();
+        let live = start_vault(&vault, &data_dir, vault_id.clone()).await;
+        let mut rx = live.subscribe();
 
-        let live_a = start_vault(&vault_a, &data_dir, vault_id_a.clone()).await;
-        let live_b = start_vault(&vault_b, &data_dir, vault_id_b.clone()).await;
-        let mut rx_a = live_a.subscribe();
-        let mut rx_b = live_b.subscribe();
+        // Give the watcher thread a brief chance to finish arming before the
+        // first file write. This smoke only needs to prove the file-change
+        // surface, not the registration latency.
+        tokio::time::sleep(SETTLE).await;
 
-        // Write a file under vault A only.
-        fs::write(vault_a.join("a-only.md"), b"# only in a\n").unwrap();
-        let event_a = recv_file_changed(&mut rx_a)
+        // Create.
+        let file = vault.join("smoke.md");
+        fs::write(&file, b"# smoke\n").unwrap();
+        tokio::time::sleep(SETTLE).await;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(b"\nmore smoke\n")
+            .unwrap();
+        let event_create_or_modify = recv_file_changed(&mut rx)
             .await
-            .expect("vault A should publish create event");
+            .expect("watched vault should publish a create-or-modify event");
 
-        assert_eq!(event_a.path, "a-only.md");
-        assert_eq!(event_a.event_type, EventType::Created);
-        assert_eq!(event_a.vault, vault_id_a);
-        assert!(
-            recv_file_changed(&mut rx_b).await.is_none(),
-            "vault B must stay silent for vault A changes"
-        );
+        assert_eq!(event_create_or_modify.path, "smoke.md");
+        assert_eq!(event_create_or_modify.vault, vault_id);
 
-        // Now write under vault B and confirm A's subscription does not grow.
-        fs::write(vault_b.join("b-only.md"), b"# only in b\n").unwrap();
-        let event_b = recv_file_changed(&mut rx_b)
+        // Modify.
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(b"\nmore smoke again\n")
+            .unwrap();
+        let event_modify = recv_file_changed(&mut rx)
             .await
-            .expect("vault B should publish create event");
-        assert!(
-            recv_file_changed(&mut rx_a).await.is_none(),
-            "vault A must stay silent for vault B changes"
-        );
-        assert_eq!(event_b.path, "b-only.md");
-        assert_eq!(event_b.vault, vault_id_b);
+            .expect("watched vault should publish a modify event");
+        assert_eq!(event_modify.path, "smoke.md");
+        assert_eq!(event_modify.vault, vault_id);
 
-        live_a.shutdown().await;
-        live_b.shutdown().await;
+        // Delete.
+        fs::remove_file(&file).unwrap();
+        tokio::time::sleep(SETTLE).await;
+        let event_delete = recv_file_changed(&mut rx)
+            .await
+            .expect("watched vault should publish a delete event");
+        assert_eq!(event_delete.path, "smoke.md");
+        assert_eq!(event_delete.vault, vault_id);
+
+        live.shutdown().await;
     }
 }

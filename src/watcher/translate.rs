@@ -9,7 +9,7 @@ use super::WatchEvent;
 use super::filter;
 
 pub(super) struct TranslateCtx {
-    pub canonical_vault: PathBuf,
+    pub vault_roots: Vec<PathBuf>,
     pub ignores: GlobSet,
 }
 
@@ -23,7 +23,10 @@ pub(super) fn translate(events: Vec<DebouncedEvent>, ctx: &TranslateCtx) -> Vec<
 
 fn translate_event(event: &DebouncedEvent, ctx: &TranslateCtx, out: &mut Vec<WatchEvent>) {
     match &event.event.kind {
-        EventKind::Create(_) | EventKind::Modify(ModifyKind::Data(_)) => {
+        EventKind::Create(_)
+        | EventKind::Modify(ModifyKind::Any)
+        | EventKind::Modify(ModifyKind::Other)
+        | EventKind::Modify(ModifyKind::Data(_)) => {
             push_upserts(&event.event.paths, ctx, out);
         }
         EventKind::Modify(ModifyKind::Name(rename_mode)) => {
@@ -40,9 +43,7 @@ fn translate_event(event: &DebouncedEvent, ctx: &TranslateCtx, out: &mut Vec<Wat
         EventKind::Access(_) => {
             // Reads, opens, closes — never relevant.
         }
-        EventKind::Modify(ModifyKind::Any | ModifyKind::Other)
-        | EventKind::Other
-        | EventKind::Any => {
+        EventKind::Other | EventKind::Any => {
             tracing::trace!(?event.event, "watcher: dropping ambiguous event kind");
         }
     }
@@ -98,7 +99,10 @@ fn push_removes(paths: &[PathBuf], ctx: &TranslateCtx, out: &mut Vec<WatchEvent>
 }
 
 fn filter_pass(abs: &Path, ctx: &TranslateCtx) -> Option<String> {
-    let rel = filter::vault_relative(&ctx.canonical_vault, abs)?;
+    let rel = ctx
+        .vault_roots
+        .iter()
+        .find_map(|root| filter::vault_relative(root, abs))?;
     let rel_path = Path::new(&rel);
     if !filter::is_relevant_path(rel_path) {
         return None;
@@ -118,6 +122,7 @@ mod tests {
     use globset::{Glob, GlobSetBuilder};
     use notify::Event;
     use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, MetadataKind, RemoveKind};
+    use std::time::Instant;
 
     fn empty_ignores() -> GlobSet {
         GlobSetBuilder::new().build().unwrap()
@@ -133,7 +138,7 @@ mod tests {
 
     fn ctx_with(vault: &str, ignores_set: GlobSet) -> TranslateCtx {
         TranslateCtx {
-            canonical_vault: PathBuf::from(vault),
+            vault_roots: vec![PathBuf::from(vault)],
             ignores: ignores_set,
         }
     }
@@ -141,7 +146,7 @@ mod tests {
     fn event(kind: EventKind, paths: Vec<PathBuf>) -> DebouncedEvent {
         let mut ev = Event::new(kind);
         ev.paths = paths;
-        DebouncedEvent::from(ev)
+        DebouncedEvent::new(ev, Instant::now())
     }
 
     #[test]
@@ -162,6 +167,19 @@ mod tests {
         let ctx = ctx_with("/vault", empty_ignores());
         let ev = event(
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![PathBuf::from("/vault/note.md")],
+        );
+        assert_eq!(
+            translate(vec![ev], &ctx),
+            vec![WatchEvent::Upsert("note.md".to_string())]
+        );
+    }
+
+    #[test]
+    fn modify_any_becomes_upsert() {
+        let ctx = ctx_with("/vault", empty_ignores());
+        let ev = event(
+            EventKind::Modify(ModifyKind::Any),
             vec![PathBuf::from("/vault/note.md")],
         );
         assert_eq!(
@@ -286,6 +304,25 @@ mod tests {
             vec![PathBuf::from("/elsewhere/strange.md")],
         );
         assert!(translate(vec![ev], &ctx).is_empty());
+    }
+
+    #[test]
+    fn alternate_vault_root_spelling_is_accepted() {
+        let ctx = TranslateCtx {
+            vault_roots: vec![
+                PathBuf::from("/private/var/folders/example/vault"),
+                PathBuf::from("/var/folders/example/vault"),
+            ],
+            ignores: empty_ignores(),
+        };
+        let ev = event(
+            EventKind::Create(CreateKind::File),
+            vec![PathBuf::from("/var/folders/example/vault/note.md")],
+        );
+        assert_eq!(
+            translate(vec![ev], &ctx),
+            vec![WatchEvent::Upsert("note.md".to_string())]
+        );
     }
 
     #[test]

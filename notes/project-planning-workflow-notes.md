@@ -1067,3 +1067,52 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 **Shipping gate met. Round 6 closed 2026-04-30.**
 
 ---
+
+#### Step 17 (shipped 2026-05-01)
+
+**Structured Eval**
+
+*Batching outcomes:*
+- No batches. Task 17.1 (axum upgrade + compile-fix work) ran as a solo task-agent-driven compile pass followed by a coordinator-led patch for the last router-capture fix. Scope = 7 files (`Cargo.toml`, `Cargo.lock`, `src/api/error.rs`, `src/api/mod.rs`, `src/mcp/backend.rs`, `src/mcp/backend_in_process.rs`, `src/mcp/server.rs`). Assessment: appropriate solo — the migration had two clear compiler breakpoints and a narrow test surface.
+- Solo task 17.2 (verification + live smoke) touched no repo files. Scope signal = integration-test sweep plus live daemon smoke only. Assessment: appropriate solo — this was a verification gate, not a code-change task.
+
+*Escalations:*
+- Count: 0.
+- By type: ambiguity=0, test-failure=0, scope-question=0, surprise-decision=0, other=0.
+
+*Retries:*
+- Tasks with retries: none.
+- Per task: all step-17 tasks completed on the first attempt once the coordinator applied the compile-surface fixes.
+- 2-retry ceiling hit without success: none.
+
+*Time and overhead:*
+- Total wall-clock: ~00:09 (18:57 UTC → 19:06 UTC, 2026-05-01).
+- Per-task wall-clock: task 17.1 ≈ 05m, task 17.2 ≈ 04m.
+- Coordinator wake-up count: 2.
+- Context drift symptoms: none observed.
+
+**Notes**
+
+- *Axum 0.8 was a compatibility migration, not a semantic rewrite.* The first break was the removed `axum::async_trait` re-export, then the `FromRequest` / `OptionalFromRequest` extractor shape for `ApiJson`, then the router syntax change from `:name_or_id` to `{name_or_id}`. Once those were fixed, the HTTP, CLI, MCP, and watch surfaces all stayed green.
+- *The round kept its verification discipline.* `cargo test` and `cargo clippy -- -D warnings` both passed after the migration, and the live smoke covered `/health`, `/vaults`, filesystem search, content search, MCP initialize, and MCP `tools/list` against a real daemon booted on temp data.
+- *One flaky embedding test was observed once and then cleared on rerun.* `tests/embedding.rs::chunks_vec_row_per_chunks_row` failed once in the full-suite pass with a low chunk-count assertion, but rerunning it in isolation passed and the subsequent full-suite pass was green. Track it separately so the next recurrence is visible instead of being buried in the round retro.
+
+### End-of-round retrospective (after step 17 ships — round 7)
+
+**Round scope**: Step A (`notify` + `notify-debouncer-full`) and Step B (`axum`). Two shipped upgrade surfaces, 0 escalations, 0 human round-trips, 0 task retries, 1 observed flaky-test blip that reran cleanly and did not require a code change.
+
+**Did the round hold?** Yes. The round stayed bisectable and the two upgrade tracks remained isolated: the watcher stack was fixed first, then the axum migration landed on top of a clean compile/test base. The coordinator + task-agent flow handled the round without needing any structural change.
+
+**What changed for the next round?**
+
+1. *The watcher surface is now on the notify 8 / debouncer 0.7 stack.* The live smoke showed that the step-A watcher fix held under a real daemon, so future work can assume the watcher upgrade is done.
+2. *The HTTP and MCP surfaces are now on axum 0.8.* The only migration work required was compatibility plumbing, not behavior changes. Future steps should treat the 0.8 router syntax and extractor shapes as the new baseline.
+3. *Flake tracking should now be append-only and explicit.* The `tests/embedding.rs` blip was harmless this time, but it is exactly the kind of recurrence that should be captured in a dedicated note instead of only in a retro paragraph.
+
+**Process insights:**
+
+- The round 7 split was the right one. Watcher and HTTP/MCP migrations would have been harder to bisect if they had landed together.
+- The axum 0.8 migration showed the value of starting from `cargo check` and then moving to targeted test/smoke verification only after the compile surface was clean.
+- The live smoke remains worth keeping even when the full suite passes, because it catches daemon-level wiring that unit tests do not exercise directly.
+
+**Shipping gate met. Round 7 closed 2026-05-01.**

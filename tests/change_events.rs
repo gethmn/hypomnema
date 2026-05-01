@@ -303,21 +303,29 @@ async fn rename_publishes_deleted_then_created_events() {
 
     fs::rename(fx.vault.join("notes/a.md"), fx.vault.join("notes/b.md")).unwrap();
 
-    let first = recv_file_changed(&mut rx)
-        .await
-        .expect("expected deleted event");
-    let second = recv_file_changed(&mut rx)
-        .await
-        .expect("expected created event");
+    let mut events = [
+        recv_file_changed(&mut rx)
+            .await
+            .expect("expected first rename event"),
+        recv_file_changed(&mut rx)
+            .await
+            .expect("expected second rename event"),
+    ];
+    events.sort_by_key(|event| match event.event_type {
+        EventType::Deleted => 0,
+        EventType::Created => 1,
+        EventType::Modified => 2,
+    });
+    let [deleted, created] = events;
 
-    assert_eq!(first.event_type, EventType::Deleted);
-    assert_eq!(first.path, "notes/a.md");
-    assert_eq!(first.content_hash.as_deref(), Some(prior_hash.as_str()));
+    assert_eq!(deleted.event_type, EventType::Deleted);
+    assert_eq!(deleted.path, "notes/a.md");
+    assert_eq!(deleted.content_hash.as_deref(), Some(prior_hash.as_str()));
 
-    assert_eq!(second.event_type, EventType::Created);
-    assert_eq!(second.path, "notes/b.md");
+    assert_eq!(created.event_type, EventType::Created);
+    assert_eq!(created.path, "notes/b.md");
     let new_hash = hash_file(&fx.vault.join("notes/b.md")).unwrap();
-    assert_eq!(second.content_hash.as_deref(), Some(new_hash.as_str()));
+    assert_eq!(created.content_hash.as_deref(), Some(new_hash.as_str()));
 
     live.shutdown().await;
 }

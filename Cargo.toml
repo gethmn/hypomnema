@@ -16,15 +16,16 @@ path = "src/bin/hmn.rs"
 
 [dependencies]
 anyhow = "1.0.102"
-axum = "0.7"
+async-trait = "0.1"
+axum = "0.8"
 bytes = "1"
 bytemuck = "1"
 futures-util = { version = "0.3", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 clap = { version = "4.6.1", features = ["derive"] }
 globset = "0.4"
-notify = "6"
-notify-debouncer-full = "0.3"
+notify = { version = "8", features = ["macos_kqueue"] }
+notify-debouncer-full = "0.7"
 pulldown-cmark = { version = "0.13", default-features = false }
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"

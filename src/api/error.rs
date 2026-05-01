@@ -1,6 +1,6 @@
 use axum::Json;
-use axum::async_trait;
-use axum::extract::{FromRequest, Request};
+use axum::extract::{FromRequest, OptionalFromRequest, Request};
+use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -235,7 +235,6 @@ fn trim_token_detail(rest: &str) -> String {
 // plain-text response.
 pub(crate) struct ApiJson<T>(pub T);
 
-#[async_trait]
 impl<S, T> FromRequest<S> for ApiJson<T>
 where
     S: Send + Sync,
@@ -244,9 +243,28 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
+        match <Json<T> as FromRequest<S>>::from_request(req, state).await {
             Ok(Json(value)) => Ok(ApiJson(value)),
             Err(rej) => Err(ApiError::invalid_request(rej.body_text())),
+        }
+    }
+}
+
+impl<S, T> OptionalFromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
+        if req.headers().get(header::CONTENT_TYPE).is_some() {
+            match <Json<T> as FromRequest<S>>::from_request(req, state).await {
+                Ok(Json(value)) => Ok(Some(ApiJson(value))),
+                Err(rej) => Err(ApiError::invalid_request(rej.body_text())),
+            }
+        } else {
+            Ok(None)
         }
     }
 }

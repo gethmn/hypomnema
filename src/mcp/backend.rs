@@ -1,5 +1,5 @@
 use anyhow::Result;
-use axum::async_trait;
+use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::api::types::{
