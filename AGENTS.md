@@ -86,6 +86,16 @@ cargo run --bin hmnd -- [args]       # run the daemon in the foreground
 cargo run --bin hmn  -- <subcommand> # run the CLI client against a running hmnd
 ```
 
+## Playbook control
+
+For orchestration sessions, use these one-liners:
+
+- `orchestrator status`
+- `orchestrator start-next-round`
+- `orchestrator continue`
+
+For full prompts and role-flow details, load @notes/playbook/README.md.
+
 ## The v0 step order
 
 The canonical v0 step order lives in [docs/implementation/tech-stack.md#implementation-priority](docs/implementation/tech-stack.md#implementation-priority). If a PR touches step N, it must not start building step N+1 opportunistically.
