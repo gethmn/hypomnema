@@ -561,8 +561,8 @@ fn write_blocking(
         )
         .with_context(|| format!("updating files row for {rel}"))?;
         tx.execute(
-            "INSERT INTO files_fts(rowid, path) VALUES(?1, ?2)",
-            params![rowid, rel],
+            "INSERT INTO files_fts(rowid, path, content) VALUES(?1, ?2, ?3)",
+            params![rowid, rel, body],
         )
         .with_context(|| format!("inserting updated files_fts entry for {rel}"))?;
     }

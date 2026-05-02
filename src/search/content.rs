@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
-use rusqlite::params;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use tokio::task;
 
 use super::{normalize_prefix, prefix_successor};
@@ -260,16 +260,18 @@ fn run_ranked_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<Content
     let ranked: Vec<ContentResult> = results
         .into_iter()
         .enumerate()
-        .map(|(i, (path, score, _content_hash, _size, _mtime))| ContentResult {
-            path,
-            match_count: 0,
-            matches: Vec::new(),
-            score: Some(score),
-            rank: Some((i + 1) as u32),
-        })
+        .map(
+            |(i, (path, score, _content_hash, _size, _mtime))| ContentResult {
+                path,
+                match_count: 0,
+                matches: Vec::new(),
+                score: Some(score),
+                rank: Some((i + 1) as u32),
+            },
+        )
         .collect();
 
-     Ok((ranked, truncated))
+    Ok((ranked, truncated))
 }
 
 /// FTS5 row data: (path, BM25 score, content_hash, size, mtime_iso)
@@ -282,11 +284,11 @@ fn collect_ranked_rows(
     let rows = stmt
         .query_map(params, |row| {
             Ok((
-                row.get::<_, String>(0)?,  // path
-                row.get::<_, f64>(1)?,     // rank (BM25, negative)
-                row.get::<_, String>(2)?,  // content_hash
-                row.get::<_, i64>(3)?,     // size
-                row.get::<_, String>(4)?,  // mtime
+                row.get::<_, String>(0)?, // path
+                row.get::<_, f64>(1)?,    // rank (BM25, negative)
+                row.get::<_, String>(2)?, // content_hash
+                row.get::<_, i64>(3)?,    // size
+                row.get::<_, String>(4)?, // mtime
             ))
         })
         .context("executing ranked FTS5 query")?

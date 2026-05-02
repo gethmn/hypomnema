@@ -521,7 +521,11 @@ async fn content_get_paused_vault_behavior() {
     .await
     .expect("open store active");
 
-    seed_files(store_active.pool(), vec![("file.md", "active vault content")]).await;
+    seed_files(
+        store_active.pool(),
+        vec![("file.md", "active vault content")],
+    )
+    .await;
 
     let active_entry = VaultEntry {
         id: vault_id_active.clone(),
@@ -616,7 +620,11 @@ async fn content_get_paused_vault_behavior() {
     let skipped2 = resp2["partial_results"]["skipped"]
         .as_array()
         .expect("skipped array for request 2");
-    assert_eq!(skipped2.len(), 1, "vault2 in skipped even when explicitly requested");
+    assert_eq!(
+        skipped2.len(),
+        1,
+        "vault2 in skipped even when explicitly requested"
+    );
     assert_eq!(skipped2[0]["vault_name"].as_str(), Some("vault2"));
     assert_eq!(skipped2[0]["status"].as_str(), Some("paused"));
 
@@ -697,8 +705,7 @@ async fn content_get_transport_parity_http_vs_mcp_backend() {
         .content_get(&req)
         .await
         .expect("in-process content_get");
-    let mcp_resp_value =
-        serde_json::to_value(&mcp_resp).expect("MCP response to JSON");
+    let mcp_resp_value = serde_json::to_value(&mcp_resp).expect("MCP response to JSON");
 
     // Both responses must have the same number of results
     let http_results = http_resp["results"].as_array().expect("HTTP results");

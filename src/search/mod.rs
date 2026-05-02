@@ -4,7 +4,10 @@ mod semantic;
 
 use anyhow::{Result, anyhow};
 
-pub use content::{ContentGetRow, ContentMatch, ContentMode, ContentQuery, ContentResult, content_get_by_paths, search_content};
+pub use content::{
+    ContentGetRow, ContentMatch, ContentMode, ContentQuery, ContentResult, content_get_by_paths,
+    search_content,
+};
 pub use filesystem::{FilesystemQuery, FilesystemResult, search_filesystem};
 pub use semantic::{SemanticQuery, SemanticResult, SemanticSearchError, search_semantic};
 

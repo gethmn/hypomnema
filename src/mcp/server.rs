@@ -7,9 +7,9 @@ use rmcp::{tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 
 use crate::api::types::{
-    ContentGetRequest, ContentQueryJson, CreateVaultRequest, FilesystemQueryJson, SemanticQueryJson,
-    VaultCreateInput, VaultPauseInput, VaultRenameInput, VaultRescanInput, VaultResetInput,
-    VaultResumeInput, VaultStatusInput, VaultTerminateInput,
+    ContentGetRequest, ContentQueryJson, CreateVaultRequest, FilesystemQueryJson,
+    SemanticQueryJson, VaultCreateInput, VaultPauseInput, VaultRenameInput, VaultRescanInput,
+    VaultResetInput, VaultResumeInput, VaultStatusInput, VaultTerminateInput,
 };
 use crate::mcp::backend::HypomnemaBackend;
 
@@ -84,9 +84,11 @@ impl HypomnemaMcpServer {
         }
     }
 
-    #[tool(description = "Fetch full indexed file content by vault-relative path. Returns content \
+    #[tool(
+        description = "Fetch full indexed file content by vault-relative path. Returns content \
                           from the search index — never reads from the vault filesystem at query \
-                          time. Supports batching multiple paths and cross-vault fan-out.")]
+                          time. Supports batching multiple paths and cross-vault fan-out."
+    )]
     async fn content_get(
         &self,
         Parameters(input): Parameters<ContentGetRequest>,

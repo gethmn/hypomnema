@@ -335,7 +335,7 @@ mod tests {
     fn migrations_advance_user_version_to_4() {
         // Historical pinning test — 0001-0004 advance to 4 when applied manually.
         // The canonical "all migrations" assertion is `migrations_advance_user_version_to_5`.
-        let mut conn = test_conn();
+        let conn = test_conn();
         for (idx, migration) in MIGRATIONS.iter().enumerate().take(4) {
             conn.execute_batch(migration).unwrap();
             conn.pragma_update(None, "user_version", (idx + 1) as i64)
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn migration_0005_backfills_existing_files_into_fts() {
-        let mut conn = test_conn();
+        let conn = test_conn();
         // Apply migrations 0001..=0004, seed a files row, then apply 0005
         // and verify it appears in files_fts.
         for (idx, migration) in MIGRATIONS.iter().enumerate().take(4) {

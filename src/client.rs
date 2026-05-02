@@ -7,11 +7,12 @@ use futures_util::{StreamExt, TryStreamExt};
 use serde::de::DeserializeOwned;
 
 pub use crate::api::types::{
-    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentMatchJson, ContentQueryJson,
-    ContentResultJson, ContentSearchResponse, CreateVaultRequest, ErrorEnvelope, FilesystemQueryJson,
-    FilesystemResultJson, FilesystemSearchResponse, HealthResponse, RenameRequest,
-    RescanResponseJson, ResetRequest, SemanticQueryJson, SemanticResultJson, SemanticSearchResponse,
-    StatusResponse, TerminateVaultResponse, VaultListResponse, VaultRowJson,
+    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentMatchJson,
+    ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, ErrorEnvelope,
+    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, HealthResponse,
+    RenameRequest, RescanResponseJson, ResetRequest, SemanticQueryJson, SemanticResultJson,
+    SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
+    VaultRowJson,
 };
 use crate::config::Config;
 

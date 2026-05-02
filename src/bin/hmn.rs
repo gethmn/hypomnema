@@ -7,11 +7,11 @@ use futures_util::StreamExt;
 
 use hypomnema::cli::{Cli, Command, ContentOp, SearchMode, VaultOp};
 use hypomnema::client::{
-    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentQueryJson, ContentResultJson,
-    ContentSearchResponse, CreateVaultRequest, DaemonClient, FilesystemQueryJson,
-    FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson,
-    SemanticResultJson, SemanticSearchResponse, StatusResponse, TerminateVaultResponse,
-    VaultListResponse, VaultRowJson, is_connect_error,
+    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentQueryJson,
+    ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
+    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson,
+    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
+    TerminateVaultResponse, VaultListResponse, VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
