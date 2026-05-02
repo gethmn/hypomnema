@@ -53,6 +53,22 @@ pub const MIGRATIONS: &[&str] = &[
          chunk_id INTEGER PRIMARY KEY,
          embedding FLOAT[768] distance_metric=cosine
      );",
+    // 0005 — external-content FTS5 virtual table for ranked lexical search
+    // per step-20 workplan. `content='files', content_rowid='rowid'` means
+    // the FTS table reads from files.content at query time; no content is
+    // duplicated. `path UNINDEXED` stores the path for retrieval without
+    // indexing it. `porter unicode61` tokenizer gives stemming on Markdown
+    // prose vaults (Decision 2). The backfill INSERT runs inside the same
+    // migration transaction; on a large vault this may take O(seconds) at
+    // first daemon boot after upgrade, then never again.
+    "CREATE VIRTUAL TABLE files_fts USING fts5(
+         path UNINDEXED,
+         content,
+         content='files',
+         content_rowid='rowid',
+         tokenize='porter unicode61'
+     );
+     INSERT INTO files_fts(rowid, path, content) SELECT rowid, path, content FROM files;",
 ];
 
 pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
@@ -317,8 +333,14 @@ mod tests {
 
     #[test]
     fn migrations_advance_user_version_to_4() {
+        // Historical pinning test — 0001-0004 advance to 4 when applied manually.
+        // The canonical "all migrations" assertion is `migrations_advance_user_version_to_5`.
         let mut conn = test_conn();
-        apply_migrations(&mut conn).unwrap();
+        for (idx, migration) in MIGRATIONS.iter().enumerate().take(4) {
+            conn.execute_batch(migration).unwrap();
+            conn.pragma_update(None, "user_version", (idx + 1) as i64)
+                .unwrap();
+        }
         assert_eq!(user_version(&conn), 4);
     }
 
@@ -337,6 +359,69 @@ mod tests {
             sql.contains("distance_metric=cosine"),
             "expected `distance_metric=cosine` in {sql:?}"
         );
+    }
+
+    #[test]
+    fn migrations_advance_user_version_to_5() {
+        let mut conn = test_conn();
+        apply_migrations(&mut conn).unwrap();
+        assert_eq!(user_version(&conn), 5);
+    }
+
+    #[test]
+    fn migration_0005_creates_files_fts_virtual_table() {
+        let mut conn = test_conn();
+        apply_migrations(&mut conn).unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'files_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("files_fts virtual table should exist after migration 0005");
+        assert!(
+            sql.contains("USING fts5"),
+            "expected `USING fts5` in {sql:?}"
+        );
+        assert!(
+            sql.contains("porter unicode61"),
+            "expected porter tokenizer in {sql:?}"
+        );
+        assert!(
+            sql.contains("content='files'"),
+            "expected external-content pointer in {sql:?}"
+        );
+    }
+
+    #[test]
+    fn migration_0005_backfills_existing_files_into_fts() {
+        let mut conn = test_conn();
+        // Apply migrations 0001..=0004, seed a files row, then apply 0005
+        // and verify it appears in files_fts.
+        for (idx, migration) in MIGRATIONS.iter().enumerate().take(4) {
+            conn.execute_batch(migration).unwrap();
+            conn.pragma_update(None, "user_version", (idx + 1) as i64)
+                .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content)
+             VALUES ('a.md', 4, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z', 'hello world')",
+            [],
+        )
+        .unwrap();
+
+        // Apply migration 0005 (backfill runs inside the migration tx)
+        conn.execute_batch(MIGRATIONS[4]).unwrap();
+        conn.pragma_update(None, "user_version", 5i64).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM files_fts WHERE files_fts MATCH 'hello'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "backfilled row should match 'hello'");
     }
 
     #[test]
@@ -366,7 +451,9 @@ mod tests {
         .unwrap();
 
         apply_migrations(&mut conn).unwrap();
-        assert_eq!(user_version(&conn), 4);
+        // user_version advances to the total migration count; 0004 is the
+        // behavior under test, but subsequent migrations also run.
+        assert!(user_version(&conn) >= 4);
 
         let content_hash: String = conn
             .query_row(

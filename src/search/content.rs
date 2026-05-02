@@ -9,9 +9,18 @@ use tokio::task;
 use super::{normalize_prefix, prefix_successor};
 use crate::store::SqlitePool;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ContentMode {
+    #[default]
+    Substring,
+    Regex,
+    Ranked,
+}
+
 #[derive(Debug, Clone)]
 pub struct ContentQuery {
     pub query: String,
+    pub mode: ContentMode,
     pub regex: bool,
     pub case_sensitive: bool,
     pub prefix: Option<String>,
@@ -20,11 +29,15 @@ pub struct ContentQuery {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ContentResult {
     pub path: String,
     pub match_count: usize,
     pub matches: Vec<ContentMatch>,
+    /// BM25 score (negative; lower = better). Set only for ranked-mode results.
+    pub score: Option<f64>,
+    /// 1-indexed rank in the result set. Set only for ranked-mode results.
+    pub rank: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,11 +157,17 @@ fn process_row(
         path,
         match_count,
         matches,
+        score: None,
+        rank: None,
     });
     true
 }
 
 fn run_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<ContentResult>, bool)> {
+    if q.mode == ContentMode::Ranked {
+        return run_ranked_blocking(pool, q);
+    }
+
     let prefix = match q.prefix.as_deref() {
         Some(raw) => normalize_prefix(raw)?,
         None => String::new(),
@@ -192,6 +211,98 @@ fn run_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<ContentResult>
     }
 
     Ok((results, truncated))
+}
+
+fn run_ranked_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<ContentResult>, bool)> {
+    let conn = pool
+        .get()
+        .context("acquiring connection from pool for ranked search_content")?;
+
+    // FTS5 `rank` column is negative BM25; ORDER BY rank puts best matches first.
+    // The local limit is q.limit + 1 so we can detect truncation.
+    let results = if let Some(raw) = q.prefix.as_deref() {
+        let prefix = normalize_prefix(raw)?;
+        let upper = prefix_successor(&prefix);
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.path, fts.rank, f.content_hash, f.size, f.mtime \
+                 FROM files_fts fts \
+                 JOIN files f ON f.rowid = fts.rowid \
+                 WHERE files_fts MATCH ?1 \
+                   AND f.path >= ?2 AND f.path < ?3 \
+                 ORDER BY fts.rank \
+                 LIMIT ?4",
+            )
+            .context("preparing prefix-scoped ranked search query")?;
+        collect_ranked_rows(&mut stmt, params![q.query, prefix, upper, q.limit + 1])?
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.path, fts.rank, f.content_hash, f.size, f.mtime \
+                 FROM files_fts fts \
+                 JOIN files f ON f.rowid = fts.rowid \
+                 WHERE files_fts MATCH ?1 \
+                 ORDER BY fts.rank \
+                 LIMIT ?2",
+            )
+            .context("preparing ranked search query")?;
+        collect_ranked_rows(&mut stmt, params![q.query, q.limit + 1])?
+    };
+
+    let truncated = results.len() > q.limit;
+    let mut results = results;
+    if truncated {
+        results.truncate(q.limit);
+    }
+
+    // Assign per-vault 1-indexed ranks before returning (cross-vault merge
+    // re-ranks globally in the API layer).
+    let ranked: Vec<ContentResult> = results
+        .into_iter()
+        .enumerate()
+        .map(|(i, (path, score, _content_hash, _size, _mtime))| ContentResult {
+            path,
+            match_count: 0,
+            matches: Vec::new(),
+            score: Some(score),
+            rank: Some((i + 1) as u32),
+        })
+        .collect();
+
+     Ok((ranked, truncated))
+}
+
+/// FTS5 row data: (path, BM25 score, content_hash, size, mtime_iso)
+type RankedRow = (String, f64, String, i64, String);
+
+fn collect_ranked_rows(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: impl rusqlite::Params,
+) -> Result<Vec<RankedRow>> {
+    let rows = stmt
+        .query_map(params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // path
+                row.get::<_, f64>(1)?,     // rank (BM25, negative)
+                row.get::<_, String>(2)?,  // content_hash
+                row.get::<_, i64>(3)?,     // size
+                row.get::<_, String>(4)?,  // mtime
+            ))
+        })
+        .context("executing ranked FTS5 query")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| {
+            // FTS5 parse errors surface as rusqlite errors containing "fts5"
+            // in the message. Classify as invalid_query so callers can return
+            // HTTP 400 rather than 500.
+            let msg = e.to_string();
+            if msg.contains("fts5") || msg.contains("syntax error") || msg.contains("unknown") {
+                anyhow::anyhow!("invalid_query: {msg}")
+            } else {
+                anyhow::anyhow!("{msg}")
+            }
+        })?;
+    Ok(rows)
 }
 
 // ===== content_get: per-vault blocking retrieval by path =====
@@ -251,6 +362,7 @@ mod tests {
     fn base_query(query: &str) -> ContentQuery {
         ContentQuery {
             query: query.to_string(),
+            mode: ContentMode::Substring,
             regex: false,
             case_sensitive: false,
             prefix: None,

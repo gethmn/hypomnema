@@ -24,7 +24,7 @@ HyDE (Hypothetical Document Embeddings) is a semantic-retrieval query-expansion 
 | `notes/qmd-comparison.md` | comparison | background — qmd ships HyDE + a fine-tuned 1.7B query-expansion model; documents both the cross-pollination opportunity and the deliberate Hypomnema/qmd split (substrate-as-events vs search-quality) |
 | `notes/proposals/fts5-bm25-content-search.md` | sibling proposal | background — the other live retrieval-quality proposal; HyDE is explicitly not a substitute for FTS5 (different mode: ranked lexical vs semantic expansion) |
 | `notes/backlog.md` § Round-6 carry-over → "Multi-model embedding per vault" | backlog | background — the deferred per-vault embedding-model item interacts directly with daemon-side HyDE (per-vault embedding implies per-vault generation prompt/model in some shape); flagged in § Open Questions |
-| `notes/proposals/intake-search-result-payload-budget.md` | prior intake | background — round-8 intake template precedent for tone, density, and coverage-map detail |
+| `notes/proposals/archive/intake-search-result-payload-budget.md` | prior intake | background — round-8 intake template precedent for tone, density, and coverage-map detail |
 | `notes/proposals/intake-content-retrieval.md` | prior intake | background — round-9-candidate intake; sibling of this one in the current proposal queue |
 | ADR-0004 (Three Search Modes as Peers) | decision | background — HyDE is additive to `search_semantic`, not a fourth peer mode |
 | ADR-0005 (Local Everything) | decision | background — load-bearing constraint on whether the daemon adopts a generation dependency |

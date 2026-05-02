@@ -19,7 +19,7 @@ Content retrieval gives consumers a direct-fetch operation: hand the daemon one 
 |---|---|---|
 | `notes/proposals/content-retrieval.md` | proposal | primary — defines behavior, schema, edge cases, integration points, open questions |
 | `notes/proposals/content-retrieval-stories.md` | stories | primary — nine acceptance-criteria stories across four epics (core retrieval, multi-vault, transport, validation) |
-| `notes/proposals/intake-search-result-payload-budget.md` | prior intake | background — explicitly deferred full-file retrieval to this proposal; clarifies the search/retrieval boundary |
+| `notes/proposals/archive/intake-search-result-payload-budget.md` | prior intake | background — explicitly deferred full-file retrieval to this proposal; clarifies the search/retrieval boundary |
 | `notes/roadmap/archive/roadmap-8.md` + `step-18-workplan.md` | shipped round | background — search-result payload budget (`include_text`, `preview_bytes`, `content_hash` in semantic results) shipped 2026-05-02; sets up the consumer flow that retrieval completes |
 | `docs/specs/content-search.md` | spec | background — same cross-vault fan-out and partial-results conventions retrieval will reuse |
 | `docs/specs/semantic-search.md` | spec | background — emits `content_hash` (round 8); retrieval consumes that identifier as the freshness anchor |

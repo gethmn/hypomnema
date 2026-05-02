@@ -4,12 +4,12 @@
 
 **Roadmap**: [`notes/roadmap/roadmap-8.md`](./roadmap-8.md) § Step 18.
 
-**Intake**: [`notes/proposals/intake-search-result-payload-budget.md`](../proposals/intake-search-result-payload-budget.md) (six-story coverage map, deferred-decision recommendations).
+**Intake**: [`notes/proposals/archive/intake-search-result-payload-budget.md`](../../proposals/archive/intake-search-result-payload-budget.md) (six-story coverage map, deferred-decision recommendations).
 
 **Inputs**:
 
-- Proposal: [`notes/proposals/search-result-payload-budget.md`](../proposals/search-result-payload-budget.md)
-- Stories: [`notes/proposals/search-result-payload-budget-stories.md`](../proposals/search-result-payload-budget-stories.md)
+- Proposal: [`notes/proposals/archive/search-result-payload-budget.md`](../../proposals/archive/search-result-payload-budget.md)
+- Stories: [`notes/proposals/archive/search-result-payload-budget-stories.md`](../../proposals/archive/search-result-payload-budget-stories.md)
 - Spec to amend: [`docs/specs/semantic-search.md`](../../docs/specs/semantic-search.md)
 - Spec audited: [`docs/specs/content-search.md`](../../docs/specs/content-search.md)
 - Skill: [`.claude/skills/rusqlite-in-async/SKILL.md`](../../.claude/skills/rusqlite-in-async/SKILL.md)

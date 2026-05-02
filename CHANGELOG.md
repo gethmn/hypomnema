@@ -15,6 +15,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP: `content_get` tool (stdio + Streamable-HTTP transports)
 - CLI: `hmn content get PATH... [--vault ...] [--json]`
 
+## Step 20 — FTS5 / BM25 Ranked Content Search (Round 9)
+
+### Added
+
+- Add third matching strategy `mode: "ranked"` to `search_content` using FTS5/BM25
+- HTTP: `mode: "substring" | "regex" | "ranked"` parameter on `POST /search/content`
+- Response includes `score` and `rank` fields for ranked-mode results
+- MCP: `search_content` tool supports same `mode` parameter on both transports
+- CLI: `hmn search content "<query>" --mode ranked`
+- Migration 0005: creates external-content FTS5 virtual table `files_fts` per vault with backfill
+
+### Changed
+
+- `search_content` now validates mode/regex conflicts and rejects `case_sensitive: true` with ranked mode
+- FTS5 maintenance integrated into indexer upsert/delete/reset paths with transactional atomicity
+- Error classification: FTS5 syntax errors return HTTP 400 (invalid_query), not 500
+- Ranked-mode results merged deterministically across vaults by `(score asc, path asc, vault_id asc)`
+
 ## [0.5.0] - 2026-04-30
 
 ### Changed

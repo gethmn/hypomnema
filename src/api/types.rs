@@ -64,14 +64,19 @@ pub struct ContentQueryJson {
         description = "Substring or regex to match against file contents. ASCII case-insensitive by default; see `case_sensitive` and `regex`."
     )]
     pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Search mode: `\"substring\"` (default), `\"regex\"`, or `\"ranked\"`. Ranked uses FTS5/BM25 relevance ordering; results include `score` and `rank` fields. Sending both `mode` and the legacy `regex: true` flag is rejected with `invalid_request`."
+    )]
+    pub mode: Option<String>,
     #[serde(default)]
     #[schemars(
-        description = "If true, `query` is interpreted as a Rust regex pattern (anchors, character classes, etc.). Catastrophic backtracking is not possible — Rust's `regex` crate is linear-time. When true, `case_sensitive` is ignored; embed `(?i)` in the pattern instead."
+        description = "Legacy flag: if true, `query` is interpreted as a Rust regex pattern. Equivalent to `mode: \"regex\"`; cannot be combined with an explicit `mode`. Prefer `mode` for new callers."
     )]
     pub regex: bool,
     #[serde(default)]
     #[schemars(
-        description = "If true, match query case-sensitively. Ignored when `regex` is true."
+        description = "If true, match query case-sensitively. Ignored when `regex` is true or `mode` is `\"ranked\"` (ranked search is always case-insensitive via the porter tokenizer)."
     )]
     pub case_sensitive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -120,6 +125,12 @@ pub struct ContentResultJson {
     pub vault: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_name: Option<String>,
+    /// BM25 relevance score (negative; lower = better match). Present only for ranked-mode results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// 1-indexed ordinal position in the ranked result set. Present only for ranked-mode results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -585,6 +596,8 @@ mod tests {
                 }],
                 vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
                 vault_name: Some("default".to_string()),
+                score: None,
+                rank: None,
             }],
             truncated: false,
             partial_results: None,

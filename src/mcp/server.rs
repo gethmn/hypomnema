@@ -490,6 +490,8 @@ mod tests {
                         }],
                         vault: None,
                         vault_name: None,
+                        score: None,
+                        rank: None,
                     }],
                     truncated: false,
                     partial_results: None,
@@ -502,6 +504,7 @@ mod tests {
         let result = server
             .search_content(Parameters(ContentQueryJson {
                 query: "fox".into(),
+                mode: None,
                 regex: false,
                 case_sensitive: false,
                 prefix: None,

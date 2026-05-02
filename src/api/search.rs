@@ -16,8 +16,9 @@ use super::types::{
 use crate::api::VaultEntry;
 use crate::control_plane::{VaultManager, VaultScopeRow};
 use crate::search::{
-    ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery, SemanticResult,
-    SemanticSearchError, content_get_by_paths, search_content, search_filesystem, search_semantic,
+    ContentMode, ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery,
+    SemanticResult, SemanticSearchError, content_get_by_paths, search_content, search_filesystem,
+    search_semantic,
 };
 use crate::vault_registry::{VaultId, VaultStatus};
 
@@ -152,9 +153,14 @@ pub(crate) async fn run_content_search(
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
+
+    // Resolve and validate mode (Task 3.2)
+    let resolved_mode = resolve_content_mode(req)?;
+
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT);
     let q_template = ContentQuery {
         query: req.query.clone(),
+        mode: resolved_mode,
         regex: req.regex,
         case_sensitive: req.case_sensitive,
         prefix: req.prefix.clone(),
@@ -206,6 +212,32 @@ pub(crate) async fn run_content_search(
         }
     }
 
+    // Ranked mode: merge by (score ASC, path ASC, vault_id ASC), re-rank (Task 4.4)
+    if q_template.mode == ContentMode::Ranked {
+        all_results.sort_by(|a, b| {
+            let score_a = a.score.unwrap_or(0.0);
+            let score_b = b.score.unwrap_or(0.0);
+            score_a
+                .partial_cmp(&score_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| a.vault.as_deref().cmp(&b.vault.as_deref()))
+        });
+        let was_capped = all_results.len() > limit;
+        if was_capped {
+            all_results.truncate(limit);
+        }
+        // Re-assign consumer-facing rank after global sort
+        for (i, r) in all_results.iter_mut().enumerate() {
+            r.rank = Some((i + 1) as u32);
+        }
+        return Ok(ContentSearchResponse {
+            results: all_results,
+            truncated: any_truncated || was_capped,
+            partial_results: build_partial_results(skipped, failed),
+        });
+    }
+
     sort_by_path_then_vault(&mut all_results, |r| (&r.path, r.vault.as_deref()));
     let was_capped = all_results.len() > limit;
     if was_capped {
@@ -217,6 +249,47 @@ pub(crate) async fn run_content_search(
         truncated: any_truncated || was_capped,
         partial_results: build_partial_results(skipped, failed),
     })
+}
+
+/// Resolve the wire-level `mode` + legacy `regex` flag into a `ContentMode`.
+/// Returns `invalid_request` for conflicting inputs; `invalid_query` for
+/// empty ranked query.
+fn resolve_content_mode(req: &ContentQueryJson) -> Result<ContentMode, ApiError> {
+    match (req.mode.as_deref(), req.regex) {
+        // Conflict: both mode and legacy regex flag set
+        (Some(m), true) if m != "regex" => {
+            return Err(ApiError::invalid_request(
+                "cannot combine `regex: true` with `mode` (unless mode is \"regex\")",
+            ));
+        }
+        // Conflict: ranked + case_sensitive
+        (Some("ranked"), _) if req.case_sensitive => {
+            return Err(ApiError::invalid_request(
+                "ranked search is case-insensitive; cannot combine with case_sensitive: true",
+            ));
+        }
+        // Ranked with empty query
+        (Some("ranked"), _) if req.query.is_empty() => {
+            return Err(ApiError::new(
+                "invalid_query",
+                "ranked search requires a non-empty query",
+                axum::http::StatusCode::BAD_REQUEST,
+            ));
+        }
+        _ => {}
+    }
+    let mode = match req.mode.as_deref() {
+        Some("ranked") => ContentMode::Ranked,
+        Some("regex") => ContentMode::Regex,
+        Some("substring") | None if req.regex => ContentMode::Regex,
+        Some("substring") | None => ContentMode::Substring,
+        Some(other) => {
+            return Err(ApiError::invalid_request(format!(
+                "unknown mode \"{other}\"; expected \"substring\", \"regex\", or \"ranked\""
+            )));
+        }
+    };
+    Ok(mode)
 }
 
 pub(crate) async fn semantic(
@@ -512,6 +585,8 @@ fn content_to_json(r: ContentResult, vault: &VaultEntry) -> ContentResultJson {
             .collect(),
         vault: Some(vault.id.to_string()),
         vault_name: Some(vault.name.clone()),
+        score: r.score,
+        rank: r.rank,
     }
 }
 
@@ -684,6 +759,7 @@ fn anyhow_is_request_validation(err: &anyhow::Error) -> bool {
     display.starts_with("invalid_glob")
         || display.starts_with("invalid_regex")
         || display.starts_with("invalid_prefix")
+        || display.starts_with("invalid_query")
 }
 
 #[cfg(test)]

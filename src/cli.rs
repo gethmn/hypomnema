@@ -155,10 +155,14 @@ pub enum SearchMode {
         #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
         vaults: Vec<String>,
     },
-    /// Substring/regex over file contents.
+    /// Substring, regex, or ranked (BM25) search over file contents.
     Content {
-        /// Substring or regex to match.
+        /// Substring, regex, or ranked query.
         query: String,
+        /// Search mode: substring (default), regex, or ranked (FTS5/BM25 relevance).
+        #[arg(long, value_name = "MODE", default_value = "substring",
+              value_parser = ["substring", "regex", "ranked"])]
+        mode: String,
         /// Restrict results to a vault subdirectory.
         #[arg(long, value_name = "PATH")]
         prefix: Option<String>,
@@ -241,6 +245,7 @@ mod tests {
                 mode:
                     SearchMode::Content {
                         query,
+                        mode: _,
                         prefix,
                         limit,
                         vaults,

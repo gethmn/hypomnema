@@ -228,6 +228,13 @@ impl From<anyhow::Error> for ApiError {
                 message: trim_token_detail(rest),
             };
         }
+        if let Some(rest) = display.strip_prefix("invalid_query") {
+            return ApiError {
+                status: StatusCode::BAD_REQUEST,
+                code: "invalid_query",
+                message: trim_token_detail(rest),
+            };
+        }
         tracing::error!(error = ?err, "internal API error");
         ApiError::internal()
     }

@@ -535,13 +535,36 @@ fn write_blocking(
             params![rel, size, mtime, new_hash, body, now_iso],
         )
         .with_context(|| format!("inserting files row for {rel}"))?;
+        let rowid = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO files_fts(rowid, path, content) VALUES(?1, ?2, ?3)",
+            params![rowid, rel, body],
+        )
+        .with_context(|| format!("inserting files_fts row for {rel}"))?;
     } else {
+        // Rowid is stable (path = PRIMARY KEY, no VACUUM). Read it before
+        // deleting the FTS entry so FTS5 can read old content from `files`
+        // to correctly remove inverted-index entries.
+        let rowid: i64 = tx
+            .query_row(
+                "SELECT rowid FROM files WHERE path = ?1",
+                params![rel],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("reading rowid for FTS update for {rel}"))?;
+        tx.execute("DELETE FROM files_fts WHERE rowid = ?1", params![rowid])
+            .with_context(|| format!("deleting old files_fts entry for {rel}"))?;
         tx.execute(
             "UPDATE files SET size = ?1, mtime = ?2, content_hash = ?3, content = ?4, indexed_at = ?5 \
              WHERE path = ?6",
             params![size, mtime, new_hash, body, now_iso, rel],
         )
         .with_context(|| format!("updating files row for {rel}"))?;
+        tx.execute(
+            "INSERT INTO files_fts(rowid, path) VALUES(?1, ?2)",
+            params![rowid, rel],
+        )
+        .with_context(|| format!("inserting updated files_fts entry for {rel}"))?;
     }
     rewrite_chunks_for_file(&tx, rel, chunks_with_embeddings, now_iso)?;
     tx.commit()
@@ -557,6 +580,13 @@ fn delete_file_in_tx(tx: &rusqlite::Transaction<'_>, path: &str) -> Result<()> {
     .with_context(|| format!("deleting chunks_vec rows for {path}"))?;
     tx.execute("DELETE FROM chunks WHERE file_path = ?1", params![path])
         .with_context(|| format!("deleting chunks rows for {path}"))?;
+    // Delete FTS entry before the backing row so FTS5 can read old content
+    // from `files` to correctly remove inverted-index entries.
+    tx.execute(
+        "DELETE FROM files_fts WHERE rowid = (SELECT rowid FROM files WHERE path = ?1)",
+        params![path],
+    )
+    .with_context(|| format!("deleting files_fts entry for {path}"))?;
     tx.execute("DELETE FROM files WHERE path = ?1", params![path])
         .with_context(|| format!("deleting files row for {path}"))?;
     Ok(())

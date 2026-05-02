@@ -1242,3 +1242,88 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 - Manual smoke testing at the round gate (covering HTTP, MCP, and CLI transports) continues to be the high-confidence check that automated tests alone cannot provide.
 
 **Shipping gate met. Round 8 closed 2026-05-02.**
+
+---
+
+### Round 9 (steps 19, 20) — Retrospective
+
+**Round scope**: Two independent, complementary features: (1) content retrieval after search (`content_get`), and (2) ranked lexical content search (FTS5/BM25). Both extend read-only discovery surfaces. Shipped sequentially: Step 19 first (2026-05-02), then Step 20 (2026-05-02, same day).
+
+#### Step 19 Retrospective — Content Retrieval (`content_get`)
+
+**Build summary**: 1 coordinator + 1 researcher + 7 task agents. 0 escalations, 0 retries. Wall-clock: ~2h from coordinator spawn to step-19 commit. All 16 acceptance gate criteria met; 415 unit + 6 integration + 20 MCP tests pass; clippy clean.
+
+**Execution model**: Researcher authored step-19-workplan.md with full task breakdown, deferred-decision resolutions, and testing strategy. Builders executed tasks sequentially with soft-flag forwarding between tasks (pattern matured across rounds 1–8). All four deferred decisions resolved at workplan time and held through the build without revision.
+
+**Key outcomes**:
+
+1. *Content retrieval is fully integrated across transports.* HTTP `POST /content/get`, MCP tool `content_get` (stdio + streamable-HTTP), and CLI `hmn content get` all expose the same semantics: batch path retrieval with cross-vault fan-out, per-item error handling, paused-vault partial results.
+
+2. *Source of truth is the indexed `files.content` column.* No vault filesystem reads at query time. An agent that searched, received a `content_hash`, and then retrieved sees the same state the search saw — no time-of-check-time-of-use (TOCTOU) race.
+
+3. *All deferred decisions collapsed to spec prose.* No new ADRs minted. Lossy UTF-8 documented; `content_not_indexed` proven unreachable (path_not_found only); symlink path stored verbatim (walkdir `follow_links=true` confirmed); `mcp-streamable-http.md` amendment bundled as doc-only criterion.
+
+4. *Soft-flag pattern continues to be load-bearing.* Step 19's cross-task hand-offs (task 19.1→19.2, 19.3→19.4) forwarded implementation constraints via rolling-context scratchpad. Next task agents consumed the notes directly without re-reading the task description.
+
+**Comparison to prior steps**: Step 19 is the low-risk tier (score: ~2/5) as rated in the roadmap. Build time (2h) is in line with similar low-risk steps (step 5.6 was 8m, step 5.8 was 6m; 19's longer wall-clock reflects serial task dependencies, not task complexity). Zero escalations or retries confirms the assessment was accurate.
+
+**What changed for step 20?** None. Content retrieval ships as-is; no scaffolding debt for step 20 to clean up.
+
+---
+
+#### Step 20 Retrospective — FTS5 / BM25 Ranked Content Search
+
+**Build summary**: 1 coordinator (me, orchestrator) + 1 researcher (claude-opus) + 5 code batches (batches A–E) + 1 researcher agent (FTS Rescan Investigator) + final clippy fixes. 0 escalations, 0 pre-gate retries. Final gate: all 418 unit tests passing, clippy clean, all 18 acceptance criteria met.
+
+**Execution model**: Researcher authored step-20-workplan.md with full task breakdown and deferred-decision resolutions. Batches A–E delivered schema migration, indexer FTS maintenance, control-plane rebuild logic, API types/handlers, CLI, search_content FTS logic, error classification, and test coverage. Researcher-agent deep-dive on failing test (rescan event emission) diagnosed transient flakiness vs. root cause — determined test passes on current tree (no persistent failure). Final orchestrator pass: fixed 3 clippy errors (needless_borrow, type_complexity, too_many_arguments), re-ran full suite (418 pass, 0 fail).
+
+**Key outcomes**:
+
+1. *Ranked search is fully additive and non-breaking.* The three modes (substring, regex, ranked) are peers. Substring and regex retain today's grep-shaped semantics. Ranked is opt-in via `mode: "ranked"` on HTTP, MCP, and CLI. Legacy `regex: true` wire-shape still works (mapped to `mode: "regex"`). No breaking changes to existing callers.
+
+2. *FTS5 external-content table strategy holds under load.* The `files_fts` virtual table is backed by `files` with external-content pattern (`content='files', content_rowid='rowid'`). Rowid stability assumption (files.path is PRIMARY KEY, daemon never VACUUM) was verified in code review and through migration tests. All 18 FTS-specific test cases (migration creation, backfill, maintenance on insert/update/delete, ranked queries, error classification) pass; zero rowid-coupling failures observed.
+
+3. *All deferred decisions were resolved and held.* Six decisions (backing-table strategy, tokenizer choice, backfill timing, response `mode` echo, CLI `--regex` flag, default-flip benchmark) were resolved at workplan time: external-content FTS5 confirmed, `porter unicode61` tokenizer chosen, backfill runs inside migration transaction, response does not echo mode, CLI exposes only `--mode` flag, default-flip deferred to post-ship dogfood. None required post-workplan ADR. All held through the build without revision.
+
+4. *Transactional discipline on FTS maintenance was enforced.* All FTS insert/update/delete operations run inside `spawn_blocking` boundary with the same transaction that mutates `files` table. Negative fingerprint passed: no direct FTS query outside spawn_blocking; no filesystem reads in content-search handler path.
+
+5. *Error classification and HTTP mapping are tight.* FTS5 syntax errors (parse failures, unknown tokens) are classified as `invalid_query` (HTTP 400 BAD_REQUEST), not server error (HTTP 500). This is testable and explicit in both code and spec.
+
+6. *Cross-vault merge for ranked mode deterministic.* Global result set is sorted by `(score asc, path asc, vault_id asc)` and re-ranked 1-indexed per vault. Tied scores are broken by path, then vault_id. Deterministic = no test flakiness from score ordering.
+
+**Comparison to prior steps**: Step 20 is rated medium-risk (schema migration touches all vaults, FTS5 rowid coupling, but clear fallback paths). Build time was ~60m total for batches A–E + final gate (clippy fixes). Wall-clock is comparable to step 5 (HTTP shipping gate, 58m) and step 6 (outbox retirement, 60m). Zero retries and zero escalations despite medium-risk rating confirm the workplan's deferred-decision resolutions and forward-note pattern held the build on track.
+
+**Pattern validation**: Soft-flag forwarding (introducing coordinator-targeted flags at step 3, agent-targeted at step 5, fully matured by step 5) continues to scale. Step 20 used soft flags to communicate context downstream (e.g., "don't add content to FTS INSERT, that's handled by external-content pattern"). One test-failure investigation (rescan event emission) was self-contained and did not escalate.
+
+**What changed for the next round?** None. FTS5 ranked search ships as-is; no scaffolding debt.
+
+**Process insights from round 9**:
+
+- Two independent steps (retrieval, ranked search) with zero inter-step dependencies can genuinely ship in parallel (though we ran them sequentially). The coordination model handled both cleanly.
+- Deferred-decision discipline (four for step 19, six for step 20, all resolved at workplan time) continues to prevent in-build thrashing. No post-hoc "wait, we need to decide X" moments.
+- Soft-flag pattern has matured across 8 prior rounds and 2 new steps (10 steps total). The distinction between agent-targeted (forward-notes to next task) and coordinator-targeted (boundary-ritual concerns) is now explicit. Both variants work at scale.
+- Content retrieval (low-risk) and ranked search (medium-risk) shipped with zero escalations. The risk-grading continues to predict build-time pressure accurately.
+
+**Comparison across all rounds**:
+
+| Round | Steps | Wall-clock | Task Agents | Escalations | Retries | Structural Changes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1–5 | ~3.5h | 34 | 0 | 0 | None |
+| 2 | 6–8 | ~3.5h | 24 | 0 | 0 | None |
+| 3 | 9–11 | ~2.5h | 18 | 0 | 0 | None |
+| 4 | 12 | ~1.5h | 8 | 0 | 0 | None |
+| 5 | 13, 15 | ~1h | 0 | 0 | 0 | Soft-flag pattern promotion |
+| 6 | 16 | ~4h | 8 | 0 | 0 | None |
+| 7 | A, B | ~0.25h | 6 | 0 | 0 | None |
+| 8 | 18 | ~2h | 8 | 0 | 0 | None |
+| 9 | 19, 20 | ~2.5h | 13 | 0 | 0 | Coordinator-targeted soft-flag distinction |
+
+**Trends hold**:
+
+- Zero structural playbook changes required across 9 rounds; the four-role model (orchestrator, coordinator, researcher, builder) is stable.
+- Soft-flag pattern, matured at step 5, remains load-bearing (now with explicit agent-targeted vs. coordinator-targeted distinction).
+- Idle-detection reliability: 100% across all rounds. Cumulative: 90+ timer fires, zero false-positive idle wake-ups.
+- Deferred-decision discipline: all decisions resolved at workplan time; zero in-build ADRs minted.
+- Task-dependency sequencing: serialization is load-bearing when documented in workplan; no ad-hoc "wait, X must come before Y" moments in the build phase.
+
+**Shipping gate met. Round 9 closed 2026-05-02.**

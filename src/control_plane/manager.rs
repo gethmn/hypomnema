@@ -1349,6 +1349,10 @@ async fn run_rebuild_sql(store: Arc<Store>) -> Result<()> {
             .context("deleting chunks rows")?;
         tx.execute("UPDATE files SET content_hash = ''", [])
             .context("zeroing files.content_hash")?;
+        // files_fts is NOT cleared here: its entries still reflect the actual
+        // file content, which rebuild does not change. The subsequent rescan
+        // drives each file through the write_blocking UPDATE path which does
+        // DELETE-old-FTS + UPDATE-files + INSERT-new-FTS atomically per file.
         tx.commit().context("committing rebuild transaction")?;
         Ok(())
     })

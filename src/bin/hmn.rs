@@ -64,6 +64,7 @@ async fn main() -> ExitCode {
             }
             SearchMode::Content {
                 query,
+                mode,
                 prefix,
                 limit,
                 vaults,
@@ -72,9 +73,12 @@ async fn main() -> ExitCode {
                     &config,
                     cli.daemon_url.as_deref(),
                     cli.json,
-                    query,
-                    prefix,
-                    limit,
+                    ContentSearchParams {
+                        query,
+                        mode,
+                        prefix,
+                        limit,
+                    },
                     vaults,
                 )
                 .await
@@ -145,24 +149,31 @@ async fn cmd_search_filesystem(
     Ok(())
 }
 
+/// Parameters for content search command.
+struct ContentSearchParams {
+    query: String,
+    mode: String,
+    prefix: Option<String>,
+    limit: Option<usize>,
+}
+
 async fn cmd_search_content(
     config: &Config,
     override_url: Option<&str>,
     json: bool,
-    query: String,
-    prefix: Option<String>,
-    limit: Option<usize>,
+    params: ContentSearchParams,
     vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = ContentQueryJson {
-        query,
+        query: params.query,
+        mode: Some(params.mode),
         regex: false,
         case_sensitive: false,
-        prefix,
+        prefix: params.prefix,
         include_matches: true,
         max_matches_per_file: None,
-        limit,
+        limit: params.limit,
         vaults: vaults_or_none(vaults),
     };
     let resp = client.search_content(&req).await?;
@@ -663,9 +674,13 @@ fn render_content_text(resp: &ContentSearchResponse) {
 }
 
 fn print_content_block(r: &ContentResultJson) {
-    println!("{} ({} matches)", r.path, r.match_count);
-    for m in &r.matches {
-        println!("  {}: {}", m.line, m.text);
+    if let (Some(rank), Some(score)) = (r.rank, r.score) {
+        println!("{}. {} (score: {:.3})", rank, r.path, score);
+    } else {
+        println!("{} ({} matches)", r.path, r.match_count);
+        for m in &r.matches {
+            println!("  {}: {}", m.line, m.text);
+        }
     }
 }
 

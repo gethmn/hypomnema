@@ -392,6 +392,7 @@ mod tests {
         let resp = client
             .search_content(&ContentQueryJson {
                 query: "anything".to_string(),
+                mode: None,
                 regex: false,
                 case_sensitive: false,
                 prefix: None,

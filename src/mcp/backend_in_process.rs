@@ -255,6 +255,7 @@ mod tests {
         let backend = InProcessBackend::new(Arc::clone(&manager));
         let q = ContentQueryJson {
             query: "anything".into(),
+            mode: None,
             regex: false,
             case_sensitive: false,
             prefix: None,

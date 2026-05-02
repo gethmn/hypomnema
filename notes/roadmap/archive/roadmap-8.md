@@ -6,7 +6,7 @@
 
 **Process**: Same as rounds 1–7. One step. Coordinator + researcher + ephemeral builders. See [`notes/coordinator-playbook.md`](../coordinator-playbook.md) and [`notes/playbook/`](../playbook/) for the orchestration contract.
 
-**Intake**: Complete — [`notes/proposals/intake-search-result-payload-budget.md`](../proposals/intake-search-result-payload-budget.md)
+**Intake**: Complete — [`notes/proposals/archive/intake-search-result-payload-budget.md`](../../proposals/archive/intake-search-result-payload-budget.md)
 
 **Why this round**:
 
