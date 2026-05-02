@@ -2,7 +2,7 @@
 
 **Scope**: Land the search-result payload budget feature: correct the semantic search `limit` default from 100 to 10, and introduce explicit text-budgeting controls (`include_text`, `preview_bytes`). Single focused step.
 
-**Status**: In progress. Workplan created just before the step is built, per the established round cadence.
+**Status**: Shipped 2026-05-02. All shipping criteria met. See commit 2888743 (verification gate). Archived.
 
 **Process**: Same as rounds 1–7. One step. Coordinator + researcher + ephemeral builders. See [`notes/coordinator-playbook.md`](../coordinator-playbook.md) and [`notes/playbook/`](../playbook/) for the orchestration contract.
 
@@ -27,28 +27,28 @@ One step:
 
 | Step | Contents | Risk |
 | ---- | -------- | ---- |
-| 17 | Semantic limit correction + text budgeting (`include_text`, `preview_bytes`) | Low |
+| 18 | Semantic limit correction + text budgeting (`include_text`, `preview_bytes`) | Low |
 
 ---
 
-## Step 17 — Semantic Limit Correction and Text Budgeting
+## Step 18 — Semantic Limit Correction and Text Budgeting
 
 **Goal**: Correct the semantic search `limit` default from 100 to 10, and add `include_text` (`preview` | `full` | `none`) and `preview_bytes` request parameters with matching response fields (`text_kind`, `text_truncated`). HTTP and MCP schemas agree on the new contract. All six intake stories pass acceptance criteria.
 
 **Shipping criteria**:
 
-- [ ] Semantic search defaults to `limit: 10`; filesystem and content search remain at 100.
-- [ ] Semantic responses include `text`, `text_kind` (`preview` | `full`), and `text_truncated` (boolean) when `include_text` is `preview` or `full`.
-- [ ] `preview_bytes` parameter accepted (default 600, max server-configurable, clamped to [1, max]); preview text never invalid UTF-8.
-- [ ] `include_text: "none"` omits all text payload; `include_text: "full"` returns complete stored chunk text.
-- [ ] Invalid `include_text` values return 400 `invalid_request`: `include_text must be one of preview, full, none`.
-- [ ] HTTP and MCP schemas agree on new request/response fields and defaults.
-- [ ] `content_hash` is included in semantic search results.
-- [ ] Negative fingerprint clean: `rg 'Defaults to 100|DEFAULT_LIMIT == 100' src/api tests docs/specs` returns no semantic-search survivors.
-- [ ] All six intake stories pass acceptance criteria.
-- [ ] Manual testing covers default (10-result, 600-byte preview), explicit large `limit`, and `include_text: "none"` modes.
-- [ ] `docs/specs/semantic-search.md` canonically specifies the text-budget contract and wire shape.
-- [ ] `cargo test` and `cargo clippy -- -D warnings` pass.
+- [x] Semantic search defaults to `limit: 10`; filesystem and content search remain at 100.
+- [x] Semantic responses include `text`, `text_kind` (`preview` | `full`), and `text_truncated` (boolean) when `include_text` is `preview` or `full`.
+- [x] `preview_bytes` parameter accepted (default 600, max server-configurable, clamped to [1, max]); preview text never invalid UTF-8.
+- [x] `include_text: "none"` omits all text payload; `include_text: "full"` returns complete stored chunk text.
+- [x] Invalid `include_text` values return 400 `invalid_request`: `include_text must be one of preview, full, none`.
+- [x] HTTP and MCP schemas agree on new request/response fields and defaults.
+- [x] `content_hash` is included in semantic search results.
+- [x] Negative fingerprint clean: `rg 'Defaults to 100|DEFAULT_LIMIT == 100' src/api tests docs/specs` returns no semantic-search survivors.
+- [x] All six intake stories pass acceptance criteria.
+- [x] Manual testing covers default (10-result, 600-byte preview), explicit large `limit`, and `include_text: "none"` modes.
+- [x] `docs/specs/semantic-search.md` canonically specifies the text-budget contract and wire shape.
+- [x] `cargo test` and `cargo clippy -- -D warnings` pass.
 
 **Deferred decisions to resolve at workplan-time**:
 

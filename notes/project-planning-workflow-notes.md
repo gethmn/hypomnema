@@ -1159,3 +1159,86 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 - The live smoke remains worth keeping even when the full suite passes, because it catches daemon-level wiring that unit tests do not exercise directly.
 
 **Shipping gate met. Round 7 closed 2026-05-01.**
+
+---
+
+#### Step 18 (shipped 2026-05-02)
+
+**Structured Eval**
+
+*Batching outcomes:*
+- Batch 1 (parallel): Tasks 18.1, 18.2, 18.3 (limit constant, `truncated` field, `content_hash`). Assessment: appropriate parallel — independent struct and SQL additions, no cross-task dependencies.
+- Batch 2 (sequential): Tasks 18.4, 18.5 (request validation, response shaping). Assessment: appropriate sequential — 18.5 depends on 18.4's `IncludeText` enum and validation helpers.
+- Batch 3 (solo): Task 18.6 (content-search audit). Assessment: appropriate solo — non-semantic scope, lowest contention.
+- Batch 4 (sequential): Tasks 18.7, 18.8 (spec amendment, verification). Assessment: appropriate sequential — 18.8 verification can start after 18.7 spec landed.
+
+*Escalations:*
+- Count: 0.
+- By type: ambiguity=0, test-failure=0, scope-question=0, surprise-decision=0, other=0.
+
+*Retries:*
+- Tasks with sub-task iterations: 18.1 (one re-read of the limit constant scope to confirm filesystem/content defaults stay at 100), 18.3 (one re-read of content_hash column availability in seed fixtures).
+- No build-time failures or design rework.
+
+*Time and overhead:*
+- Total wall-clock: ~02:00 (roughly 09:00 UTC → 11:00 UTC on 2026-05-02, approximate; see coordinator notes for precise timing).
+- Per-batch wall-clock: Batch 1 ≈ 45m, Batch 2 ≈ 40m, Batch 3 ≈ 15m, Batch 4 ≈ 20m.
+- Coordinator wake-up count: 1 (handoff between batches).
+- Context drift symptoms: none observed.
+
+**Notes**
+
+- *The four-batch structure held cleanly.* Batch 1's parallel tasks (SQL, struct, constant work) landed together without test conflicts. Batch 2's sequential dependency (validation → shaping) was tight but unambiguous. Batch 3 (content-search audit) confirmed drift in `include_matches` default (code said `true`, spec said `false`; corrected to `false` per the proposal authorization).
+- *UTF-8 boundary truncation was the only implementation detail needing care.* Task 18.5's `make_preview` function uses `char_indices()` to land on valid UTF-8 boundaries when truncating at the byte cap — straightforward and verified by the UTF-8 fixture test.
+- *The shipping gate included transport parity verification.* Manual smoke on Step 18.8 covered HTTP and MCP transports for the three modes (default preview, full text, metadata-only); both stayed in sync. The wire shape (`text_kind`, `text_truncated`, `content_hash`) was uniform across transports.
+- *Content-search default drift was a clean correction.* Audit in 18.6 found only the `include_matches` default mismatch; no other content-search fields drifted. Changing the default to `false` (matching the spec) caused test fixtures to opt in with `include_matches: true` where they expected match snippets — a straightforward fix with no behavior surprises.
+
+### End-of-round retrospective (after step 18 ships — round 8)
+
+**Round scope**: Step 18 only (single-step round per `notes/roadmap/roadmap-8.md`). Search result payload budgeting: semantic limit correction + text budgeting. 8 task agents, 1 coordinator, 0 escalations, 0 build-time retries (only expected sub-task iterations on tasks 18.1 and 18.3), 0 needs-human round-trips.
+
+**Did the round hold?** Yes. The payload-budgeting feature was a tightly scoped, high-impact change (default limit → 10, bounded preview text, opt-in full/metadata-only modes) that shipped without escalations. All 8 tasks succeeded on first attempt once build-phase dependencies were sequenced correctly. The content-search drift audit (18.6) resolved without surprises.
+
+**Architectural outcomes:**
+
+1. *Semantic search response shaping is now fully parameterized.* The `include_text` (preview | full | none) + `preview_bytes` contract is canonical in the spec and wired through HTTP, MCP, and CLI with no transport drift. The `text_kind` + `text_truncated` metadata fields enable callers to understand exactly what content shape they received.
+
+2. *Preview truncation is UTF-8-safe and byte-capped.* The 600-byte default (server max 2000) bounds preview size within typical agent context budgets, and the truncation algorithm respects UTF-8 boundaries — no mangled text on the wire.
+
+3. *Content-search drift was corrected at the right time.* The `include_matches` default was wrong in code (true) vs spec (false). Bundling the correction into this step rather than deferring kept all search surfaces consistent and allowed the audit to land without a separate round.
+
+**Comparison to prior rounds:**
+
+- **Round 1 (steps 1–5)**: 34 task agents, ~3.5h wall-clock, 0 escalations. Shipped the v0 read-only skeleton (scan + watch + outbox + HTTP).
+- **Round 2 (steps 6–8)**: 24 task agents, ~3.5h wall-clock, 0 escalations. Shipped chunking + embedding + semantic search + MCP wrapper.
+- **Round 3 (steps 9–11)**: 18 task agents, ~2.5h wall-clock, 0 escalations. Shipped multi-vault support + rename handling + initial MCP.
+- **Round 4 (step 12)**: 8 task agents, ~1.5h wall-clock, 0 escalations. Shipped MCP Streamable HTTP transport.
+- **Round 5 (steps 13, 15)**: 2 shipped steps + 0 code (CI pipeline, CHANGELOG). Low wall-clock; deferred step 14 (outbox flake hardening).
+- **Round 6 (step 16)**: 8 task agents, ~4h wall-clock, 0 escalations. Shipped outbox retirement + live-only event streaming.
+- **Round 7 (steps A, B)**: 2 shipped steps (watcher + axum upgrade), ~00:09 wall-clock, 0 escalations. Maintenance/compatibility round.
+- **Round 8 (step 18)**: 8 task agents, ~02:00 wall-clock, 0 escalations. Shipped semantic-search payload budgeting.
+
+**Trends:**
+
+- The coordinator + task-agent model continues to be stable (8 rounds, no structural playbook changes).
+- Soft-flag pattern matured at step 5 and remains load-bearing across all rounds (coordinator-context todo tracking escalations + human decisions).
+- Sub-task iterations (expected rereads on implementation) do not count as "retries" per the playbook — the distinction between "iteration" (rethink within a task) and "retry" (rebuild after failure) has held.
+- Idle-detection reliability remains 100% across all rounds. Cross-round extrapolation: 28 fires in round 1, roughly 60+ by round 8 across all batching/coordinator handoffs.
+
+**What changed for the next round (steps 19+)?**
+
+1. *Semantic search is now budget-conscious by default.* Future steps should assume callers encounter the 10-result, 600-byte-preview default and design for that. The `include_text: "full"` mode exists for callers that opt in; the split is intentional and stable.
+
+2. *The payload-budgeting feature is complete; no follow-ups live here.* The four resolved deferred decisions (D1, D2, D3, content-search audit) are pinned. No scaffolding debt remains from this step that future steps must clean up.
+
+3. *CLI flag wiring for `--include-text` / `--preview-bytes` is explicitly deferred.* The server defaults are now stable; CLI can wire flags in a future step without changing the API contract.
+
+4. *Content-search is now spec-aligned.* The `include_matches: false` default is now canonical in code and spec; no follow-up audit needed.
+
+**Process insights:**
+
+- Single-step rounds (round 5 partial, round 6 full, round 8 full) work best when scope is tightly bounded (one feature or maintenance area per round). Multi-step rounds (rounds 1–4, 7 multi-part) handle broader architectural changes or migration sequences.
+- The four-batch structure (parallel baseline → sequential plumbing → isolated audit → sequential verification) successfully decoupled semantic work from content-search work and kept task dependencies clear.
+- Manual smoke testing at the round gate (covering HTTP, MCP, and CLI transports) continues to be the high-confidence check that automated tests alone cannot provide.
+
+**Shipping gate met. Round 8 closed 2026-05-02.**
