@@ -616,7 +616,9 @@ fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
     if !segments.is_empty() {
         out.push_str(&format!("  > {}\n", segments.join(" / ")));
     }
-    out.push_str(&format!("  {}\n", r.text));
+    if let Some(text) = &r.text {
+        out.push_str(&format!("  {text}\n"));
+    }
 }
 
 fn render_status_text(resp: &StatusResponse) {
@@ -665,7 +667,9 @@ mod tests {
             file_path: file_path.to_string(),
             chunk_index: 0,
             heading_path: heading_path.into_iter().map(String::from).collect(),
-            text: text.to_string(),
+            text: Some(text.to_string()),
+            text_kind: None,
+            text_truncated: None,
             content_hash: String::new(),
             vault: None,
             vault_name: None,

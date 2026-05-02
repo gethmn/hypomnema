@@ -230,8 +230,8 @@ pub(crate) async fn run_semantic_search(
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
-    let _include_text = parse_include_text(req.include_text.as_deref())?;
-    let _preview_bytes = resolve_preview_bytes(req.preview_bytes)?;
+    let include_text = parse_include_text(req.include_text.as_deref())?;
+    let preview_bytes = resolve_preview_bytes(req.preview_bytes)?;
     let limit = req.limit.unwrap_or(DEFAULT_SEMANTIC_LIMIT);
     let q_template = SemanticQuery {
         query: req.query.clone(),
@@ -269,7 +269,12 @@ pub(crate) async fn run_semantic_search(
                             any_hint = hint;
                         }
                         for r in rows {
-                            all_results.push(semantic_to_json(r, &entry));
+                            all_results.push(semantic_to_json(
+                                r,
+                                &entry,
+                                &include_text,
+                                preview_bytes,
+                            ));
                         }
                     }
                     Err(e) => match e {
@@ -352,13 +357,43 @@ fn content_to_json(r: ContentResult, vault: &VaultEntry) -> ContentResultJson {
     }
 }
 
-fn semantic_to_json(r: SemanticResult, vault: &VaultEntry) -> SemanticResultJson {
+fn make_preview(s: &str, max_bytes: usize) -> (String, bool) {
+    if s.len() <= max_bytes {
+        return (s.to_string(), false);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (s[..end].to_string(), true)
+}
+
+fn semantic_to_json(
+    r: SemanticResult,
+    vault: &VaultEntry,
+    include_text: &IncludeText,
+    preview_bytes: usize,
+) -> SemanticResultJson {
+    let (text, text_kind, text_truncated) = match include_text {
+        IncludeText::None => (None, None, None),
+        IncludeText::Full => (Some(r.text), Some("full".to_string()), Some(false)),
+        IncludeText::Preview => {
+            let (preview, was_truncated) = make_preview(&r.text, preview_bytes);
+            (
+                Some(preview),
+                Some("preview".to_string()),
+                Some(was_truncated),
+            )
+        }
+    };
     SemanticResultJson {
         score: r.score,
         file_path: r.file_path,
         chunk_index: r.chunk_index,
         heading_path: r.heading_path.split('/').map(String::from).collect(),
-        text: r.text,
+        text,
+        text_kind,
+        text_truncated,
         content_hash: r.content_hash,
         vault: Some(vault.id.to_string()),
         vault_name: Some(vault.name.clone()),

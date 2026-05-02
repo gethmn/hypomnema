@@ -1,7 +1,7 @@
 # Semantic Search Specification
 
-**Version**: 0.2.0
-**Date**: 2026-04-27
+**Version**: 0.3.0
+**Date**: 2026-05-01
 **Status**: Draft
 
 ---
@@ -69,6 +69,8 @@ query: "how do we prevent spurious reindexes on Dropbox?"
 limit: 10                       # optional; default 10
 prefix: "notes/"                # optional; restrict to a subdirectory
 min_similarity: 0.3             # optional; default 0.0
+include_text: "preview"         # optional; preview | full | none; default preview
+preview_bytes: 600              # optional; default 600, server max 2000
 vaults:                         # optional; multi-vault scoping
   - "personal"
   - "work"
@@ -80,6 +82,8 @@ vaults:                         # optional; multi-vault scoping
 | `limit` | integer | no | 10 | Global result cap after cross-vault merge. Validation: `1..=1000`. |
 | `prefix` | string | no | none | Path-prefix scope. |
 | `min_similarity` | float | no | 0.0 | Clamped to `[0.0, 1.0]`. Filtering happens *after* the kNN match per vault and *before* the cross-vault merge. |
+| `include_text` | enum string | no | `preview` | Controls chunk text payload: `preview`, `full`, or `none`. `preview` returns up to `preview_bytes` bytes of the chunk text; `full` returns the complete stored chunk; `none` omits the `text` field entirely. |
+| `preview_bytes` | integer | no | `600` | Maximum UTF-8 byte length for preview text. Applied only when `include_text: "preview"`; values above the server maximum (2000) are silently clamped. Validation: must be `> 0` when supplied. |
 | `vaults` | array of strings | no | none → all active | Subset of vaults to query, by name or surrogate ID. Empty array is rejected as `invalid_request`. |
 
 **Request validation**:
@@ -95,6 +99,9 @@ results:
     chunk_index: 4
     heading_path: ["Pitfalls", "Sync conflicts"]
     text: "Syncthing and Dropbox write files in bursts…"
+    text_kind: "preview"
+    text_truncated: true
+    content_hash: "sha256:abc123…"
     vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
     vault_name: "personal"
   - score: 0.71
@@ -102,6 +109,9 @@ results:
     chunk_index: 2
     heading_path: ["Change detection"]
     text: "mtime alone is not enough; compare content hashes…"
+    text_kind: "preview"
+    text_truncated: false
+    content_hash: "sha256:def456…"
     vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
     vault_name: "personal"
 # `hint` omitted when results are populated; see § Edge Cases — Empty index.
@@ -125,7 +135,10 @@ results:
 | `file_path` | string | yes | Vault-relative path of the file the chunk came from |
 | `chunk_index` | integer | yes | Ordinal of the chunk within the file |
 | `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
-| `text` | string | yes | The chunk content |
+| `text` | string | conditional | Present unless `include_text: "none"`. Omitted when `include_text` is `none`. |
+| `text_kind` | enum string | conditional | `preview` or `full`, matching what was returned in `text`. Present alongside `text`. |
+| `text_truncated` | boolean | conditional | `true` when preview text omits part of the stored chunk; `false` for full text or short chunks that fit within the preview budget. Present alongside `text`. |
+| `content_hash` | string | yes | `sha256:`-prefixed parent file content hash, projected from the chunk's indexed row. Used for cache validation and follow-up retrieval consistency. |
 | `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
 | `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
 
@@ -150,6 +163,98 @@ partial_results:
 ```
 
 `partial_results` is omitted entirely when no vault was skipped or failed.
+
+---
+
+## Validation Rules
+
+| Condition | Error code | Error message |
+|---|---|---|
+| `include_text` is not one of `preview`, `full`, `none` | `invalid_request` | `include_text must be one of preview, full, none` |
+| `preview_bytes` is `0` | `invalid_request` | `preview_bytes must be greater than 0` |
+| `preview_bytes` exceeds server maximum (2000) | — | Values above 2000 are silently clamped to 2000; no error is returned. Callers can detect truncation via `text_truncated`. |
+| `vaults` is an empty array | `invalid_request` | `vaults filter must be non-empty` |
+| `limit` is outside `1..=1000` | `invalid_request` | existing range-validation message |
+
+---
+
+## Examples
+
+### Example 1: Default preview (recommended starting point)
+
+**Request**:
+
+```yaml
+query: "why do sync tools cause watcher event storms?"
+```
+
+**Behavior**: Hypomnema embeds the query, queries each active vault's vector index, merges by score descending, caps to the default limit of 10, and returns preview text (up to 600 bytes) for each result.
+
+**Response shape** (abbreviated):
+
+```yaml
+results:
+  - score: 0.87
+    file_path: "notes/tools/hypomnema.md"
+    chunk_index: 3
+    heading_path: ["Pitfalls", "Sync conflicts"]
+    text: "Syncthing and Dropbox write files in bursts…"
+    text_kind: "preview"
+    text_truncated: true
+    content_hash: "sha256:abc123…"
+truncated: false
+```
+
+### Example 2: Full chunk text for a small targeted query
+
+**Request**:
+
+```yaml
+query: "sqlite vec migration risks"
+limit: 3
+include_text: "full"
+```
+
+**Behavior**: Returns the top three matching chunks with complete stored chunk text. The larger payload is intentional and bounded by the caller's explicit `limit`.
+
+**Response shape** (abbreviated):
+
+```yaml
+results:
+  - score: 0.91
+    file_path: "docs/decisions/0007-sqlite-vec-over-alternatives.md"
+    chunk_index: 1
+    heading_path: ["Amendments"]
+    text: "Migration 0004 bakes `distance_metric=cosine` and the 768-dim shape into…"
+    text_kind: "full"
+    text_truncated: false
+    content_hash: "sha256:def456…"
+truncated: false
+```
+
+### Example 3: Metadata-only discovery pass
+
+**Request**:
+
+```yaml
+query: "semantic search ranking problems"
+limit: 20
+include_text: "none"
+```
+
+**Behavior**: Returns scores, file paths, chunk indexes, heading paths, and content hashes without chunk text. The caller uses the response as a cheap candidate list, then fetches selected content via a retrieval operation.
+
+**Response shape** (abbreviated):
+
+```yaml
+results:
+  - score: 0.79
+    file_path: "notes/design/search.md"
+    chunk_index: 5
+    heading_path: ["Ranking", "Score normalization"]
+    content_hash: "sha256:ghi789…"
+truncated: false
+```
 
 ---
 
@@ -189,13 +294,21 @@ Two vaults may contain a file at the same vault-relative path, and a chunk from 
 
 A vault in `paused` or `errored` status is silently skipped; one entry per skipped vault is appended to `partial_results.skipped` with its current status and (for `errored`) the registry's `last_error` text.
 
+### Preview boundary in multibyte UTF-8
+
+The `preview_bytes` cap is a byte limit, not a character limit. The implementation walks back from the byte cap to the nearest valid UTF-8 character boundary to avoid returning invalid UTF-8. In v0 there is no paragraph or sentence heuristic: the boundary is wherever the byte cap falls, aligned to a character boundary. A preview may therefore end mid-sentence or mid-word.
+
+### Boilerplate-heavy chunks
+
+The chunker does not strip fenced code blocks, Dataview queries, or other generated content. A matched chunk that is predominantly boilerplate will return preview text up to the byte cap, which may be entirely code or table syntax. Callers that need clean prose can request `include_text: "none"` for a discovery pass, then fetch the full file via a retrieval operation after reviewing `file_path` and `heading_path`.
+
 ---
 
 ## Open Questions
 
 - [ ] Reranking: should we rerank the top-N using a cross-encoder, or return raw cosine-similarity order?
 - [ ] Hybrid search: should semantic and content results be fused (e.g., RRF) into a single operation, or kept separate?
-- [ ] Should the response include adjacent chunks for context, or just the matched chunk?
+- [ ] Chunk/section retrieval: is full-file content retrieval enough for follow-up workflows, or is a dedicated chunk/section retrieval operation needed? — deferred to the [content-retrieval proposal](../../notes/proposals/content-retrieval.md).
 - [ ] Pagination / cursor across N independent indexes — deferred to round 4+ per [vault-management.md § Open Questions](./vault-management.md#open-questions). Round 3 ships `truncated: bool` only; no cursor.
 - [ ] Multi-model embeddings per vault — deferred to round 4+ per [vault-management.md § Open Questions](./vault-management.md#open-questions). The cross-vault score-desc ordering relies on the same-embedding-model assumption; relaxing it requires either score normalization or per-vault top-K with re-ranking.
 - [ ] Streaming response shapes (chunked HTTP / SSE / NDJSON) for high-vault-count deployments — deferred per [vault-management.md § Open Questions](./vault-management.md#open-questions).
@@ -208,3 +321,4 @@ A vault in `paused` or `errored` status is silently skipped; one entry per skipp
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
 | 0.2.0 | 2026-04-27 | Multi-vault adoption (round 3 / step 10): `vault` semantics flipped from "always absent" to "populated when multi-vault active"; added `vault_name`, request-side `vaults` filter, response-envelope `partial_results`, global score-desc cross-vault ordering with `vault_id` tie-break. Same-embedding-model assumption documented. Cross-vault execution semantics cross-referenced from [vault-management.md](./vault-management.md). |
+| 0.3.0 | 2026-05-01 | Round 8 / Step 17: payload budgeting added. Request: `include_text` (`preview` \| `full` \| `none`, default `preview`) and `preview_bytes` (default 600, server max 2000, silently clamped). Response: `text` changed from required to conditional; added `text_kind`, `text_truncated` (both conditional, present alongside `text`); added `content_hash` (required, `sha256:`-prefixed, projected from chunk metadata). `limit` default re-pinned as 10. Validation Rules section added; Examples section added (default preview, full-text, metadata-only); Edge Cases: added "Preview boundary in multibyte UTF-8" and "Boilerplate-heavy chunks". Resolved proposal questions (text-field strategy → `text` + `text_kind` + `text_truncated`; `preview_bytes` max → 2000, clamped; `content_hash` inclusion → yes; content-search `include_matches` default drift → corrected in step 17.6). Chunk/section-retrieval question deferred to content-retrieval proposal. |
