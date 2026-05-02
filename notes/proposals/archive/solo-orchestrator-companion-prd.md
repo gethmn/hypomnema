@@ -1,11 +1,16 @@
 # Solo Orchestrator Companion — PRD
 
 **Author**: Codex / Solo orchestration session  
-**Status**: Draft  
+**Status**: Archived — moved out of Hypomnema scope  
 **Last Updated**: 2026-05-01  
+**Archived**: 2026-05-02  
 **Scope Profile**: solo-local-cli  
 **Stakeholders**: Solo users, playbook authors, agent-runtime maintainers  
-**User Stories**: [`notes/proposals/solo-orchestrator-companion-stories.md`](./solo-orchestrator-companion-stories.md)
+**User Stories**: [`solo-orchestrator-companion-stories.md`](./solo-orchestrator-companion-stories.md)
+
+---
+
+> **Archive note (2026-05-02)**: This proposal has been moved out of Hypomnema scope. The Solo Orchestrator Companion is being implemented in a separate project, **Duo**, and will be developed there rather than as a Hypomnema feature. This file is preserved here as a frozen historical record of the planning that happened in Hypomnema before the scope split — future work on this idea lives in Duo, not Hypomnema. Do not surface this proposal as a candidate for any Hypomnema round.
 
 ---
 

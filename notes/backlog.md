@@ -17,20 +17,20 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 Items raised at the round-3/4 boundary and pulled into round 5. See [`notes/roadmap/archive/roadmap-5.md`](roadmap/archive/roadmap-5.md) for the full workstream scoping.
 
 - ~~**CHANGELOG.md adoption.**~~ **Pulled into round 5** (step 15 — shipping gate).
-- ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Superseded by planned outbox removal**; no longer a round-5 item.
+- ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Superseded by outbox removal in round 6**; no longer a round-5 item.
 - ~~**CI pipeline (GitHub Actions).**~~ **Pulled into round 5** (step 13 — `ci.yml` + `dependabot.yml` + spec promotion). Source proposal: `notes/proposals/ci-cd-pipeline.md`.
 
-## Round-6 candidates (pulled into roadmap-6.md)
+## Round-6 carry-over (round 6 = outbox retirement only)
 
-Items pulled into the round-6 draft roadmap. See [`notes/roadmap/roadmap-6.md`](roadmap-6.md) for the current scope.
+Items considered at the round-5/6 boundary. Round 6 ended up as a single-step outbox-retirement round (see [`notes/roadmap/archive/roadmap-6.md`](roadmap/archive/roadmap-6.md)) — only the outbox-removal item was pulled. The rest carried forward through round 7 (dependency upgrades) and round 8 (search-result payload budget) and remain live.
 
-- **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred past rounds 4 and 5.
-- **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is round-6+ if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
+- **Compose-style declarative layer** (Resolution A from step-11 workplan). Surface is pinned in [`docs/specs/vault-management.md` § Compose-Style Declarative Layer (deferred)](../docs/specs/vault-management.md#compose-style-declarative-layer-deferred); a future workplan pins format + merging rules. Originally a step-11 deferred-decision; deferred past rounds 4–8.
+- **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is a future round if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
 - **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as a future candidate if a use-case surfaces.
-- **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Round-6+.
-- **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope for round 5; round-6+ when the project needs binary distribution.
-- ~~**Outbox removal / outbox simplification.**~~ **Pulled into round 6** (step 16--17). The likely next move is removing the outbox entirely, with the exact replacement event model pinned at workplan time.
-- **OSSF Scorecard / CodeQL.** Security tooling for when the project has public visibility. Round-6+.
+- **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Future round.
+- **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope through round 8; future round when the project needs binary distribution.
+- ~~**Outbox removal / outbox simplification.**~~ **Pulled into round 6** (step 16). Outbox surface fully retired — `src/outbox/` and `tests/outbox.rs` are gone; consumer-facing event delivery moved to the change-events shape (`tests/change_events.rs`).
+- **OSSF Scorecard / CodeQL.** Security tooling for when the project has public visibility. Future round.
 - **Windows CI matrix.** Current CI scope is unix-only (ubuntu + macos). Add when Windows support becomes a project goal.
 - **Search-error classification: replace string-prefix routing with typed errors.** Today [`From<anyhow::Error> for ApiError`](../src/api/error.rs) and [`anyhow_is_request_validation`](../src/api/search.rs) classify errors by formatting the chain with `{err:#}` and matching `starts_with("invalid_glob")` / `"invalid_regex"` / `"invalid_prefix"`. The producers ([`search/content.rs`](../src/search/content.rs), [`search/filesystem.rs`](../src/search/filesystem.rs), [`search/mod.rs::normalize_prefix`](../src/search/mod.rs)) emit `anyhow!("invalid_regex: {e}")` etc. Any future `.context(...)` wrap upstream of these sentinels silently degrades the response from 400 to 500 with no test coverage of that case. [`SemanticSearchError::InvalidPrefix`](../src/search/semantic.rs) already half-models this and ends up re-parsing its own Display string. **Round-N research**: confirm the sentinel-prefix pattern is the only contract today, then introduce a small typed error (per-search-mode or a shared `SearchValidationError`) that the API layer pattern-matches structurally. Source: amp code review 2026-04-28 ([notes/amp-code-review.md](amp-code-review.md) preface).
 - **`path_under` / `paths_equal` swallow canonicalize failures.** [`src/control_plane/manager.rs`](../src/control_plane/manager.rs) helpers fall back to `to_path_buf()` on canonicalize error, then run `starts_with` / `==`. For `path_under`, the data-dir-under-vault check during `create` can pass spuriously when either path is inaccessible. For `paths_equal`, two un-canonicalizable paths spelled differently compare unequal, so the `VaultPathConflict` precheck could let two registry rows resolve to the same logical directory. The `canonicalize_for_create` call earlier in `create` mitigates the second case for the *new* path but not for an existing row whose stored path is now inaccessible. **Round-N research**: enumerate the call sites, decide whether "can't canonicalize" should fail closed (return `VaultPathInvalid`) or open with a logged warning. Source: amp code review 2026-04-28.
@@ -40,14 +40,14 @@ Items pulled into the round-6 draft roadmap. See [`notes/roadmap/roadmap-6.md`](
 
 ## Multi-vault — shipped in Round 3
 
-Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); shipped across roadmap-3 steps 9–11 (per-vault refactor → control plane create/list/status/terminate + cross-vault search → remaining lifecycle ops + `hmnd scan` removal). The four search/event spec amendments (Solo todo 64) and the vault-management.md fleshout (Solo todo 65) landed in step 10. The Compose-style declarative layer was deferred to round 4 (see § Round-4 candidates above).
+Scope settled by [ADR-0009](../docs/decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../docs/decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../docs/decisions/0011-vault-management-on-hmn.md); shipped across roadmap-3 steps 9–11 (per-vault refactor → control plane create/list/status/terminate + cross-vault search → remaining lifecycle ops + `hmnd scan` removal). The four search/event spec amendments (Solo todo 64) and the vault-management.md fleshout (Solo todo 65) landed in step 10. The Compose-style declarative layer was deferred and remains live (see § Round-6 carry-over above).
 
 ## Agent-host integration — round-3-or-later, no roadmap slot yet
 
 - **MCP tool discoverability.** `search_filesystem` and `search_content` are reliably triggered by natural-language phrasing ("files named X" / "files containing Y"). `search_semantic` is not — agent hosts (verified against Claude Code) fan out to multiple content searches instead of selecting the semantic tool for "files about X" phrasing. Workaround today: explicit invocation. Fix path: agent-side skill magic — better tool descriptions, examples, possibly a dedicated Hypomnema skill installed into agent contexts. Not a daemon bug; lives at the host. Captured in step-8 retro § Human perspective.
 - ~~**MCP Streamable HTTP transport.**~~ **Shipped in round 4** ([ADR-0013](../docs/decisions/0013-mcp-transport-streamable-http.md), [`docs/specs/mcp-streamable-http.md`](../docs/specs/mcp-streamable-http.md)). The third standard MCP transport now mounts on `hmnd`'s Axum router at `/mcp` alongside `/search/*` and `/vaults/*`; trust-posture-inheritance from the existing HTTP listener (loopback by default, no auth, no TLS) plus Origin-header validation as DNS-rebinding defense. Browser-hosted hosts and remote-MCP scenarios reachable.
 
-This bucket is its own track, not part of round 3 (multi-vault). Could become a focused workplan slotted between rounds 3 and 4, or a continuous low-priority track, or a dedicated round 4.
+This bucket is its own track, not part of round 3 (multi-vault). The MCP Streamable HTTP item shipped as round 4; the remaining `MCP tool discoverability` item is host-side work and can sit in this bucket as a continuous low-priority track until a daemon-side surface is needed.
 
 ## Process / playbook (rolling)
 
@@ -62,7 +62,7 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 
 ## Operational follow-ups
 
-- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Pulled into round 6** via outbox removal. Investigation history: silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep). **Step-13 CI update**: a *second* outbox test, `deleting_file_emits_one_deleted_line_with_prior_hash` (`tests/outbox.rs:201`), reproduced on *both* macOS CI runs (run 25086730532 + workflow_dispatch run 25086929198) — consistently, not as a rare local flake. The timing-sensitive assertion fails with "expected one deleted event, got []". Same `tests/outbox.rs` file, same event-timing family. `tests/outbox.rs` was unchanged in step 13 (confirmed: `git log 8cd5add..f4130fd -- tests/outbox.rs` returned empty).
+- ~~**Outbox flake under `cargo nextest run --fail-fast` cancellation.**~~ **Resolved by round 6 outbox retirement.** `src/outbox/` and `tests/outbox.rs` are gone; the timing-sensitive assertions that flaked no longer exist. Historical context (preserved as a breadcrumb): silent across steps 9–12 (round-3 step-11 3× flake-check, round-4 step-12 full-suite sweep); a *second* outbox test (`deleting_file_emits_one_deleted_line_with_prior_hash` at `tests/outbox.rs:201`) reproduced on both macOS CI runs in step-13 before the surface was retired.
 - **`flake.nix` sqlite-vec dylib provisioning.** Carried from steps 6 and 7. The dylib is an operator-side prereq the dev shell does not handle — any future round that exercises sqlite-vec from a fresh dev shell will need it again.
 - **Brand-identity override revisit on rmcp major version upgrade.** ADR-0012 § Negative consequences notes this: the `#[tool_handler(name = "hypomnema")]` macro syntax is rmcp-macros-1.5.0-specific.
 
@@ -72,7 +72,7 @@ Captured from round-2 retros; apply when the next coordinator/orchestrator/task-
 - **GitHub org branding, README hero, logo, favicon.** Not in any roadmap.
 - **Project website.** Hinted at in `docs/hypomnema-handoff.md` § Reference material. Not in any roadmap.
 
-Strong candidate for a small dedicated round between 3 and 4, or a continuous low-priority track. The MCP `serverInfo.name = "hypomnema"` brand-identity override (ADR-0012) is the same theme — the project is now *named*, and the visible-look layer is the natural next ring out.
+Strong candidate for a small dedicated round or a continuous low-priority track. The MCP `serverInfo.name = "hypomnema"` brand-identity override (ADR-0012, shipped round 4) is the same theme — the project is now *named*, and the visible-look layer is the natural next ring out.
 
 ## Product-level non-goals — pointer only
 

@@ -1,7 +1,12 @@
 # Solo Orchestrator Companion — User Stories
 
-**PRD**: [`notes/proposals/solo-orchestrator-companion-prd.md`](./solo-orchestrator-companion-prd.md)  
-**Status**: Draft
+**PRD**: [`solo-orchestrator-companion-prd.md`](./solo-orchestrator-companion-prd.md)  
+**Status**: Archived — moved out of Hypomnema scope  
+**Archived**: 2026-05-02
+
+> **Archive note (2026-05-02)**: This stories file has been moved out of Hypomnema scope alongside its PRD. The Solo Orchestrator Companion is being implemented in a separate project, **Duo**, and will be developed there rather than as a Hypomnema feature. This file is preserved here as a frozen historical record of the planning that happened in Hypomnema before the scope split — future work on these stories lives in Duo, not Hypomnema. Do not surface this proposal as a candidate for any Hypomnema round.
+
+---
 
 These stories define delivery scope for a standalone TypeScript MCP companion to Solo. They do not prescribe the internal implementation beyond the PRD's global invariants.
 
