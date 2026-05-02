@@ -664,6 +664,7 @@ mod tests {
             chunk_index: 0,
             heading_path: heading_path.into_iter().map(String::from).collect(),
             text: text.to_string(),
+            content_hash: String::new(),
             vault: None,
             vault_name: None,
         }
@@ -678,6 +679,7 @@ mod tests {
                 vec!["Architecture", "Indexing"],
                 "Pgvector supports HNSW indexes.",
             )],
+            truncated: false,
             hint: None,
             partial_results: None,
         };
@@ -705,6 +707,7 @@ mod tests {
                 vec!["Setup", "", "Prereqs"],
                 "body",
             )],
+            truncated: false,
             hint: None,
             partial_results: None,
         };
@@ -723,6 +726,7 @@ mod tests {
     fn render_semantic_text_renders_hint_when_present() {
         let resp = SemanticSearchResponse {
             results: vec![],
+            truncated: false,
             hint: Some("semantic index is building".to_string()),
             partial_results: None,
         };

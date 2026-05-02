@@ -516,9 +516,11 @@ mod tests {
                         chunk_index: 2,
                         heading_path: vec!["H1".into(), "H2".into()],
                         text: "some chunk text".into(),
+                        content_hash: "sha256:baz".into(),
                         vault: None,
                         vault_name: None,
                     }],
+                    truncated: false,
                     hint: None,
                     partial_results: None,
                 })
