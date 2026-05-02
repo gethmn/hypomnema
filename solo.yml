@@ -1,5 +1,5 @@
 name: Hypomnema
-icon: null
+icon: art/Hypomnema Bold.png
 processes:
   bacon:
     command: direnv exec . just watch

@@ -186,6 +186,8 @@ async fn cmd_search_semantic(
         limit,
         min_similarity: None,
         vaults: vaults_or_none(vaults),
+        include_text: None,
+        preview_bytes: None,
     };
     let resp = client.search_semantic(&req).await?;
     if json {

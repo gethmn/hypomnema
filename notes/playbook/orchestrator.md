@@ -49,6 +49,19 @@ When human resolves escalation:
 1. Comment on escalation todo.
 2. Remove `needs-human` from escalation and blocked task todo.
 
+## Round Candidate Sourcing
+
+When the human asks for next-round candidates (typical trigger: `orchestrator status` with no round in flight):
+
+- Treat `notes/backlog.md` and `notes/proposals/` as **separate** sources. Surface both.
+  - `notes/backlog.md` = identified-but-deferred work. Items can be old, may be in-flight, may have shipped.
+  - `notes/proposals/` = drafted feature specs awaiting Proposal Intake. Each one is a non-trivial design deliverable, not a one-line item.
+- Before recommending any backlog item, verify it has not already shipped:
+  - Skip entries with `~~strikethrough~~` markup.
+  - Skip entries annotated "Pulled into round N", "Shipped", or similar lifecycle markers.
+  - Cross-check candidates against `notes/roadmap/archive/roadmap-N.md` shipping-gate sections when in doubt.
+- If a candidate looks live in `notes/backlog.md` but is referenced in shipped scope elsewhere, flag the discrepancy as a backlog-hygiene action rather than silently recommending the item.
+
 ## Ambiguous Start Questions
 
 Do not answer with "just type start step N".

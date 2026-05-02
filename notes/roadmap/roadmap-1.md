@@ -1,6 +1,6 @@
 # Roadmap 1
 
-**Project**: PROJECT_NAME
+**Project**: Hypomnema
 **Status**: draft
 **Currently working on**: step 1
 

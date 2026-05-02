@@ -79,7 +79,7 @@ pub struct ContentQueryJson {
     pub prefix: Option<String>,
     #[serde(default = "default_include_matches")]
     #[schemars(
-        description = "If true, response includes per-line match details for each file (line number + matching text). Defaults to true."
+        description = "If true, response includes per-line match details for each file (line number + matching text). Defaults to false; opt in explicitly to receive snippets."
     )]
     pub include_matches: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -98,7 +98,7 @@ pub struct ContentQueryJson {
 }
 
 fn default_include_matches() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -152,6 +152,16 @@ pub struct SemanticQueryJson {
         description = "Restrict the search to a subset of vaults. Each entry matches against vault name first, then surrogate id. Unknown entries land in `partial_results.failed`. Omitting (or `null`) queries all currently active vaults; `[]` is rejected with `invalid_request`."
     )]
     pub vaults: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "How much chunk text to include with each result. One of `preview` (default), `full`, or `none`. `preview` returns up to `preview_bytes` bytes of the chunk text; `full` returns the complete chunk text; `none` omits the text field entirely."
+    )]
+    pub include_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum bytes of chunk text returned when `include_text` is `preview`. Defaults to 600; server maximum is 2000 (values above this are clamped silently, not rejected). Ignored when `include_text` is `full` or `none`."
+    )]
+    pub preview_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -172,7 +182,12 @@ pub struct SemanticResultJson {
     pub file_path: String,
     pub chunk_index: u32,
     pub heading_path: Vec<String>,
-    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_truncated: Option<bool>,
     pub content_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<String>,
@@ -537,7 +552,9 @@ mod tests {
                 file_path: "notes/a.md".to_string(),
                 chunk_index: 0,
                 heading_path: vec!["Intro".to_string()],
-                text: "alpha body".to_string(),
+                text: Some("alpha body".to_string()),
+                text_kind: None,
+                text_truncated: None,
                 content_hash: "sha256:00".to_string(),
                 vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
                 vault_name: Some("default".to_string()),

@@ -391,7 +391,7 @@ async fn content_search_returns_line_and_text_per_match() {
 
     let body: Value = http()
         .post(format!("{}/search/content", daemon.base_url))
-        .json(&json!({ "query": "Pgvector", "case_sensitive": true }))
+        .json(&json!({ "query": "Pgvector", "case_sensitive": true, "include_matches": true }))
         .send()
         .await
         .expect("POST /search/content match")

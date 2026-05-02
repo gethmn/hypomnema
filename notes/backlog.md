@@ -6,7 +6,8 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 > **Conventions**
 > - Each item is short. Deeper context lives in the source the item came from (retro, ADR, spec, vision doc). Always link.
-> - Items move out of this file when they land in a roadmap (`notes/roadmap/roadmap-N.md` § Round N) or, for non-roadmap work like playbook edits, when they're applied.
+> - When an item lands in a roadmap or is applied (for non-roadmap work like playbook edits), mark it shipped in place by wrapping the item label in `~~strikethrough~~` and prefixing or appending a lifecycle annotation such as **Pulled into round N** (`notes/roadmap/roadmap-N.md` § Round N) or **Shipped <date>**. Strikethrough-in-place is the default because it preserves historical context for future readers; outright removal is acceptable only when the item is genuinely obsolete and not worth a historical breadcrumb.
+> - Live (un-shipped) items have no strikethrough and no lifecycle annotation. Anything with strikethrough or a "Pulled into round N" / "Shipped" annotation is **done** — do not surface it as a candidate for a future round.
 > - Items can stay in this file indefinitely — un-scoped is a valid state.
 
 ---

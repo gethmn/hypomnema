@@ -49,6 +49,8 @@
               just
               sqlite
 
+              python3
+
               pkg-config
             ]
             ++ darwinDeps;

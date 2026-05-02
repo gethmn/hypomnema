@@ -218,7 +218,9 @@ async fn search_filesystem_invalid_glob_returns_400_with_code() {
 }
 
 #[tokio::test]
-async fn search_content_returns_results_with_matches() {
+async fn search_content_default_omits_matches() {
+    // Per spec: include_matches defaults to false. Matches field is empty
+    // unless the caller opts in; match_count is always populated.
     let h = harness().await;
     seed_files(
         h.pool(),
@@ -234,6 +236,44 @@ async fn search_content_returns_results_with_matches() {
     .await;
     let app = router(h.state.clone());
     let req = json_request("POST", "/search/content", json!({ "query": "pgvector" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["path"], "a.md");
+    assert_eq!(results[0]["match_count"], 1);
+    let matches = results[0]["matches"].as_array().unwrap();
+    assert!(
+        matches.is_empty(),
+        "default include_matches=false must yield empty matches"
+    );
+}
+
+#[tokio::test]
+async fn search_content_returns_matches_when_opted_in() {
+    // include_matches: true must populate per-line snippets, capped at
+    // max_matches_per_file (default 5).
+    let h = harness().await;
+    seed_files(
+        h.pool(),
+        vec![
+            (
+                "a.md",
+                "first line\nsecond pgvector line",
+                "2026-04-01T00:00:00Z",
+            ),
+            ("b.md", "no relevant content", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/content",
+        json!({ "query": "pgvector", "include_matches": true }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
@@ -2183,4 +2223,359 @@ async fn watch_all_filters_out_inactive_vault_events() {
     assert_eq!(event["type"], "file_changed");
     assert_eq!(event["vault"], vault_id.to_string());
     assert_eq!(event["path"], "active.md");
+}
+
+// ===== Step 17 · Task 17.5: seed helper for dynamic chunk content =====
+
+async fn seed_chunk_owned(
+    pool: SqlitePool,
+    file_path: String,
+    chunk_index: u32,
+    heading_path: String,
+    content: String,
+    embedding: Vec<f32>,
+) {
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let end_byte = content.len() as i64;
+        let tx = conn.transaction().unwrap();
+        tx.execute(
+            "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                file_path,
+                chunk_index,
+                heading_path,
+                content,
+                "sha256:00",
+                0i64,
+                end_byte,
+                "2026-01-01T00:00:00Z"
+            ],
+        )
+        .unwrap();
+        let chunk_id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+            params![chunk_id, bytemuck::cast_slice::<f32, u8>(&embedding)],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+// ===== Step 17 · Task 17.4: include_text + preview_bytes validation tests =====
+
+#[tokio::test]
+async fn semantic_handler_rejects_invalid_include_text() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "include_text": "preivew" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(
+        body["error"]["message"],
+        "include_text must be one of preview, full, none"
+    );
+}
+
+#[tokio::test]
+async fn semantic_handler_rejects_preview_bytes_zero() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "preview_bytes": 0 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    assert_eq!(
+        body["error"]["message"],
+        "preview_bytes must be greater than 0"
+    );
+}
+
+#[tokio::test]
+async fn semantic_handler_accepts_oversized_preview_bytes_clamped() {
+    // preview_bytes: 999999 exceeds the server max of 2000; it must be
+    // accepted (clamped silently) rather than rejected.
+    // Task 17.5 will verify the clamp shows up in the response text length.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "preview_bytes": 999999 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, _body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[test]
+fn semantic_query_json_schema_has_include_text_and_preview_bytes() {
+    use crate::api::types::SemanticQueryJson;
+    let schema = rmcp::schemars::schema_for!(SemanticQueryJson);
+    let props = schema
+        .as_object()
+        .and_then(|o| o.get("properties"))
+        .and_then(|p| p.as_object())
+        .expect("schema has properties");
+    for key in ["include_text", "preview_bytes"] {
+        assert!(props.contains_key(key), "missing property: {key}");
+        let desc = props
+            .get(key)
+            .and_then(|v| v.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        assert!(!desc.is_empty(), "empty description for: {key}");
+    }
+}
+
+// ===== Step 17 · Task 17.5: Response shaping tests =====
+
+#[tokio::test]
+async fn semantic_include_text_none_omits_text_fields() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        h.pool(),
+        "a.md",
+        0,
+        "Intro",
+        "alpha body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "include_text": "none" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert!(
+        result.get("text").is_none(),
+        "text must be absent for include_text=none"
+    );
+    assert!(
+        result.get("text_kind").is_none(),
+        "text_kind must be absent for include_text=none"
+    );
+    assert!(
+        result.get("text_truncated").is_none(),
+        "text_truncated must be absent for include_text=none"
+    );
+    // metadata fields still populated
+    assert!(result["score"].is_number(), "score must be present");
+    assert!(result["file_path"].is_string(), "file_path must be present");
+    assert!(
+        result["content_hash"].is_string(),
+        "content_hash must be present"
+    );
+}
+
+#[tokio::test]
+async fn semantic_default_include_text_returns_preview_kind_long_chunk_truncated() {
+    // Default include_text = "preview", default preview_bytes = 600.
+    // Chunk of 800 'x' bytes must be truncated to <= 600 bytes.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![("a.md", "placeholder", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk_owned(
+        h.pool(),
+        "a.md".to_string(),
+        0,
+        "Intro".to_string(),
+        "x".repeat(800),
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert_eq!(result["text_kind"], "preview");
+    assert_eq!(result["text_truncated"], true);
+    let text = result["text"].as_str().expect("text present");
+    assert!(
+        text.len() <= 600,
+        "preview text must be <= 600 bytes, got {}",
+        text.len()
+    );
+}
+
+#[tokio::test]
+async fn semantic_default_include_text_short_chunk_not_truncated() {
+    // Chunk shorter than 600 bytes: text_truncated=false, full content in text.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![("a.md", "short content", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        h.pool(),
+        "a.md",
+        0,
+        "Intro",
+        "short content",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert_eq!(result["text_kind"], "preview");
+    assert_eq!(result["text_truncated"], false);
+    assert_eq!(result["text"], "short content");
+}
+
+#[tokio::test]
+async fn semantic_include_text_full_returns_complete_content() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let full_content = "full chunk content for full-mode test".to_string();
+    seed_files(
+        h.pool(),
+        vec![("a.md", "placeholder", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk_owned(
+        h.pool(),
+        "a.md".to_string(),
+        0,
+        "Intro".to_string(),
+        full_content.clone(),
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "include_text": "full", "limit": 3 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert_eq!(result["text_kind"], "full");
+    assert_eq!(result["text_truncated"], false);
+    assert_eq!(result["text"], full_content);
+}
+
+#[tokio::test]
+async fn semantic_preview_truncation_produces_valid_utf8() {
+    // Chunk filled with 3-byte '€' characters (U+20AC). 205 × 3 = 615 bytes,
+    // which exceeds the 600-byte default. The truncation point must land on a
+    // char boundary so the returned text is valid UTF-8.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let content: String = "€".repeat(205); // 615 bytes
+    assert!(content.len() > 600, "fixture must exceed 600 bytes");
+    seed_files(
+        h.pool(),
+        vec![("utf8.md", "placeholder", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk_owned(
+        h.pool(),
+        "utf8.md".to_string(),
+        0,
+        "".to_string(),
+        content,
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    let text = result["text"].as_str().expect("text present");
+    assert!(
+        std::str::from_utf8(text.as_bytes()).is_ok(),
+        "truncated text must be valid UTF-8"
+    );
+    assert!(
+        text.len() <= 600,
+        "preview text must be <= 600 bytes, got {}",
+        text.len()
+    );
+}
+
+#[tokio::test]
+async fn semantic_oversized_preview_bytes_clamped_to_2000() {
+    // preview_bytes: 100000 must be silently clamped to 2000. A 3000-byte
+    // chunk should be truncated to <= 2000 bytes, not returned in full.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![("long.md", "placeholder", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk_owned(
+        h.pool(),
+        "long.md".to_string(),
+        0,
+        "".to_string(),
+        "y".repeat(3000),
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "preview_bytes": 100000 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    let text = result["text"].as_str().expect("text present");
+    assert!(
+        text.len() <= 2000,
+        "clamped preview must be <= 2000 bytes, got {}",
+        text.len()
+    );
+    assert_eq!(result["text_truncated"], true);
 }

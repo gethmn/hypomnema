@@ -21,6 +21,35 @@ use crate::vault_registry::{VaultId, VaultStatus};
 const DEFAULT_LIMIT: usize = 100;
 const DEFAULT_SEMANTIC_LIMIT: usize = 10;
 const DEFAULT_MAX_MATCHES_PER_FILE: usize = 5;
+const DEFAULT_PREVIEW_BYTES: usize = 600;
+const SEMANTIC_PREVIEW_BYTES_MAX: usize = 2000;
+
+enum IncludeText {
+    Preview,
+    Full,
+    None,
+}
+
+fn parse_include_text(opt: Option<&str>) -> Result<IncludeText, ApiError> {
+    match opt {
+        None | Some("preview") => Ok(IncludeText::Preview),
+        Some("full") => Ok(IncludeText::Full),
+        Some("none") => Ok(IncludeText::None),
+        _ => Err(ApiError::invalid_request(
+            "include_text must be one of preview, full, none",
+        )),
+    }
+}
+
+fn resolve_preview_bytes(opt: Option<usize>) -> Result<usize, ApiError> {
+    match opt {
+        None => Ok(DEFAULT_PREVIEW_BYTES),
+        Some(0) => Err(ApiError::invalid_request(
+            "preview_bytes must be greater than 0",
+        )),
+        Some(n) => Ok(n.min(SEMANTIC_PREVIEW_BYTES_MAX)),
+    }
+}
 
 pub(crate) async fn filesystem(
     State(s): State<ApiState>,
@@ -201,6 +230,8 @@ pub(crate) async fn run_semantic_search(
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
+    let _include_text = parse_include_text(req.include_text.as_deref())?;
+    let _preview_bytes = resolve_preview_bytes(req.preview_bytes)?;
     let limit = req.limit.unwrap_or(DEFAULT_SEMANTIC_LIMIT);
     let q_template = SemanticQuery {
         query: req.query.clone(),
