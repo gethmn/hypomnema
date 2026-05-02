@@ -140,7 +140,7 @@ pub struct SemanticQueryJson {
     #[schemars(description = "Vault-relative path prefix to scope results to a subdirectory.")]
     pub prefix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(description = "Maximum number of result chunks. Defaults to 100.")]
+    #[schemars(description = "Maximum number of result chunks. Defaults to 10.")]
     pub limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
@@ -158,6 +158,7 @@ pub struct SemanticQueryJson {
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticSearchResponse {
     pub results: Vec<SemanticResultJson>,
+    pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +173,7 @@ pub struct SemanticResultJson {
     pub chunk_index: u32,
     pub heading_path: Vec<String>,
     pub text: String,
+    pub content_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,9 +538,11 @@ mod tests {
                 chunk_index: 0,
                 heading_path: vec!["Intro".to_string()],
                 text: "alpha body".to_string(),
+                content_hash: "sha256:00".to_string(),
                 vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
                 vault_name: Some("default".to_string()),
             }],
+            truncated: false,
             hint: None,
             partial_results: None,
         };
@@ -549,5 +553,6 @@ mod tests {
             Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0")
         );
         assert_eq!(entry["vault_name"].as_str(), Some("default"));
+        assert_eq!(entry["content_hash"].as_str(), Some("sha256:00"));
     }
 }

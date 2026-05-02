@@ -19,6 +19,7 @@ use crate::search::{
 use crate::vault_registry::{VaultId, VaultStatus};
 
 const DEFAULT_LIMIT: usize = 100;
+const DEFAULT_SEMANTIC_LIMIT: usize = 10;
 const DEFAULT_MAX_MATCHES_PER_FILE: usize = 5;
 
 pub(crate) async fn filesystem(
@@ -200,7 +201,7 @@ pub(crate) async fn run_semantic_search(
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
-    let limit = req.limit.unwrap_or(DEFAULT_LIMIT);
+    let limit = req.limit.unwrap_or(DEFAULT_SEMANTIC_LIMIT);
     let q_template = SemanticQuery {
         query: req.query.clone(),
         prefix: req.prefix.clone(),
@@ -216,6 +217,7 @@ pub(crate) async fn run_semantic_search(
 
     let mut all_results: Vec<SemanticResultJson> = Vec::new();
     let mut any_hint: Option<String> = None;
+    let mut any_truncated = false;
     let mut skipped: Vec<SkippedVault> = Vec::new();
     let mut failed: Vec<FailedVault> = plan.unknown_failures;
 
@@ -230,7 +232,8 @@ pub(crate) async fn run_semantic_search(
                 )
                 .await;
                 match res {
-                    Ok((rows, hint)) => {
+                    Ok((rows, hint, vault_truncated)) => {
+                        any_truncated |= vault_truncated;
                         if any_hint.is_none() && hint.is_some() {
                             any_hint = hint;
                         }
@@ -270,7 +273,8 @@ pub(crate) async fn run_semantic_search(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.vault.as_deref().cmp(&b.vault.as_deref()))
     });
-    if all_results.len() > limit {
+    let was_capped = all_results.len() > limit;
+    if was_capped {
         all_results.truncate(limit);
     }
     let hint = if all_results.is_empty() {
@@ -281,6 +285,7 @@ pub(crate) async fn run_semantic_search(
 
     Ok(SemanticSearchResponse {
         results: all_results,
+        truncated: any_truncated || was_capped,
         hint,
         partial_results: build_partial_results(skipped, failed),
     })
@@ -323,6 +328,7 @@ fn semantic_to_json(r: SemanticResult, vault: &VaultEntry) -> SemanticResultJson
         chunk_index: r.chunk_index,
         heading_path: r.heading_path.split('/').map(String::from).collect(),
         text: r.text,
+        content_hash: r.content_hash,
         vault: Some(vault.id.to_string()),
         vault_name: Some(vault.name.clone()),
     }

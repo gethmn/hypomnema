@@ -38,6 +38,7 @@ pub struct SemanticResult {
     pub chunk_index: u32,
     pub heading_path: String,
     pub text: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug)]
@@ -75,7 +76,7 @@ pub async fn search_semantic(
     embedder: Arc<dyn Embedder>,
     dimension: u32,
     q: SemanticQuery,
-) -> Result<(Vec<SemanticResult>, Option<String>), SemanticSearchError> {
+) -> Result<(Vec<SemanticResult>, Option<String>, bool), SemanticSearchError> {
     let prefix = match q.prefix.as_deref() {
         Some(raw) => normalize_prefix(raw).map_err(|e| {
             let msg = format!("{e:#}");
@@ -153,7 +154,7 @@ fn run_blocking_query(
     prefix: String,
     limit: usize,
     min_similarity: f32,
-) -> Result<(Vec<SemanticResult>, Option<String>), SemanticSearchError> {
+) -> Result<(Vec<SemanticResult>, Option<String>, bool), SemanticSearchError> {
     let conn = pool.get().map_err(|e| {
         SemanticSearchError::Internal(anyhow::anyhow!(
             "acquiring connection from pool for search_semantic: {e}"
@@ -184,6 +185,7 @@ fn run_blocking_query(
         c.chunk_index,
         c.heading_path,
         c.content,
+        c.content_hash,
         knn.distance
     FROM knn
     JOIN chunks c ON c.id = knn.chunk_id
@@ -201,13 +203,15 @@ fn run_blocking_query(
             let chunk_index: i64 = row.get(1)?;
             let heading_path: String = row.get(2)?;
             let content: String = row.get(3)?;
-            let distance: f64 = row.get(4)?;
+            let content_hash: String = row.get(4)?;
+            let distance: f64 = row.get(5)?;
             Ok(SemanticResult {
                 score: distance_to_score(distance),
                 file_path,
                 chunk_index: chunk_index as u32,
                 heading_path,
                 text: content,
+                content_hash,
             })
         })
         .context("executing semantic kNN query")
@@ -216,17 +220,20 @@ fn run_blocking_query(
         .context("collecting semantic kNN rows")
         .map_err(SemanticSearchError::Internal)?;
 
+    let rows_count = rows.len();
     let filtered: Vec<SemanticResult> = rows
         .into_iter()
         .filter(|r| r.score >= min_similarity)
         .collect();
 
+    let was_capped = rows_count >= limit;
+
     if filtered.is_empty() {
         let hint = decide_hint(&conn).map_err(SemanticSearchError::Internal)?;
-        return Ok((filtered, hint));
+        return Ok((filtered, hint, was_capped));
     }
 
-    Ok((filtered, None))
+    Ok((filtered, None, was_capped))
 }
 
 fn decide_hint(conn: &Connection) -> anyhow::Result<Option<String>> {
@@ -395,15 +402,17 @@ mod tests {
         .await;
 
         let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
-        let (results, hint) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
-            .await
-            .expect("search ok");
+        let (results, hint, _truncated) =
+            search_semantic(store.pool(), embedder, 768, base_query("alpha"))
+                .await
+                .expect("search ok");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "a.md");
         assert_eq!(results[0].chunk_index, 0);
         assert_eq!(results[0].heading_path, "Intro");
         assert_eq!(results[0].text, "alpha body");
+        assert_eq!(results[0].content_hash, "sha256:00");
         // Identical vectors → cosine distance 0 → score 1.0.
         assert!(
             (results[0].score - 1.0).abs() < 1e-6,
@@ -419,9 +428,10 @@ mod tests {
         seed_file(&store, "a.md").await;
 
         let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
-        let (results, hint) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
-            .await
-            .expect("search ok");
+        let (results, hint, _truncated) =
+            search_semantic(store.pool(), embedder, 768, base_query("alpha"))
+                .await
+                .expect("search ok");
 
         assert!(results.is_empty());
         assert_eq!(hint.as_deref(), Some(HINT_INDEX_BUILDING));
@@ -432,9 +442,10 @@ mod tests {
         let (_dir, store) = open_store().await;
 
         let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
-        let (results, hint) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
-            .await
-            .expect("search ok");
+        let (results, hint, _truncated) =
+            search_semantic(store.pool(), embedder, 768, base_query("alpha"))
+                .await
+                .expect("search ok");
 
         assert!(results.is_empty());
         assert!(hint.is_none(), "no hint when both tables empty");
@@ -452,7 +463,7 @@ mod tests {
             min_similarity: 0.6,
             ..base_query("alpha")
         };
-        let (results, hint) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, hint, _truncated) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
@@ -478,7 +489,7 @@ mod tests {
             limit: 2,
             ..base_query("alpha")
         };
-        let (results, _) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
@@ -499,7 +510,7 @@ mod tests {
             min_similarity: 0.6,
             ..base_query("alpha")
         };
-        let (results, _) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
@@ -518,7 +529,7 @@ mod tests {
             min_similarity: -1.0,
             ..base_query("alpha")
         };
-        let (results, _) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
@@ -539,7 +550,7 @@ mod tests {
             prefix: Some("notes/".to_string()),
             ..base_query("alpha")
         };
-        let (results, _) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
@@ -558,7 +569,7 @@ mod tests {
         seed_chunk(&store, "a.md", 0, "", "a", unit_vec(&[(0, 1.0)])).await;
 
         let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
-        let (results, _) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
             .await
             .expect("search ok");
 

@@ -410,6 +410,7 @@ async fn semantic_handler_returns_200_with_results_for_seeded_chunks() {
     assert_eq!(results[0]["chunk_index"], 0);
     assert_eq!(results[0]["heading_path"], json!(["Intro"]));
     assert_eq!(results[0]["text"], "alpha body");
+    assert_eq!(results[0]["content_hash"], "sha256:00");
     assert!(body.get("hint").is_none() || body["hint"].is_null());
 }
 
@@ -513,16 +514,16 @@ async fn semantic_handler_clamps_min_similarity_to_unit_range() {
 }
 
 #[tokio::test]
-async fn semantic_handler_default_limit_caps_at_default() {
-    // Default limit (DEFAULT_LIMIT == 100) caps the result count even when
-    // more chunks are present. Seed 105 identical-vector chunks, omit
-    // `limit`, expect exactly 100 results.
+async fn semantic_handler_default_limit_caps_at_10() {
+    // Semantic default is DEFAULT_SEMANTIC_LIMIT == 10; filesystem and content
+    // stay at 100. Seed 15 identical-vector chunks, omit `limit`, expect
+    // exactly 10 results.
     let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
     let pool = h.pool();
     task::spawn_blocking(move || {
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        for i in 0u32..105 {
+        for i in 0u32..15 {
             let path = format!("f{i:03}.md");
             tx.execute(
                 "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
@@ -558,7 +559,136 @@ async fn semantic_handler_default_limit_caps_at_default() {
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["results"].as_array().unwrap().len(), 100);
+    assert_eq!(body["results"].as_array().unwrap().len(), 10);
+}
+
+#[tokio::test]
+async fn semantic_explicit_limit_returns_up_to_limit() {
+    // Explicit limit overrides the semantic default. Seed 20 chunks, request
+    // limit=17, expect exactly 17 results.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let pool = h.pool();
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0u32..20 {
+            let path = format!("g{i:03}.md");
+            tx.execute(
+                "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
+                 VALUES (?1, 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z', '')",
+                params![path],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at) \
+                 VALUES (?1, 0, '', 'x', 'sha256:00', 0, 1, '2026-01-01T00:00:00Z')",
+                params![path],
+            )
+            .unwrap();
+            let chunk_id = tx.last_insert_rowid();
+            let v = {
+                let mut v = vec![0.0f32; DIM];
+                v[0] = 1.0;
+                v
+            };
+            tx.execute(
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, bytemuck::cast_slice::<f32, u8>(&v)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "limit": 17 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 17);
+}
+
+#[tokio::test]
+async fn semantic_truncated_true_when_results_exceed_limit() {
+    // Seed 15 chunks, request limit=10 (the default). The per-vault kNN
+    // returns 10 rows (k=10), hitting the cap → truncated: true.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let pool = h.pool();
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0u32..15 {
+            let path = format!("t{i:03}.md");
+            tx.execute(
+                "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
+                 VALUES (?1, 1, '2026-01-01T00:00:00Z', 'sha256:00', '2026-01-01T00:00:00Z', '')",
+                params![path],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, start_byte, end_byte, created_at) \
+                 VALUES (?1, 0, '', 'x', 'sha256:00', 0, 1, '2026-01-01T00:00:00Z')",
+                params![path],
+            )
+            .unwrap();
+            let chunk_id = tx.last_insert_rowid();
+            let v = {
+                let mut v = vec![0.0f32; DIM];
+                v[0] = 1.0;
+                v
+            };
+            tx.execute(
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                params![chunk_id, bytemuck::cast_slice::<f32, u8>(&v)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 10);
+    assert_eq!(body["truncated"], true);
+}
+
+#[tokio::test]
+async fn semantic_truncated_false_when_results_within_limit() {
+    // Seed 3 chunks, request limit=10 (the default). The per-vault kNN
+    // returns 3 rows (k=10, fewer available) → truncated: false.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![
+            ("u1.md", "x", "2026-04-01T00:00:00Z"),
+            ("u2.md", "x", "2026-04-01T00:00:00Z"),
+            ("u3.md", "x", "2026-04-01T00:00:00Z"),
+        ],
+    )
+    .await;
+    seed_chunk(h.pool(), "u1.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "u2.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "u3.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["results"].as_array().unwrap().len(), 3);
+    assert_eq!(body["truncated"], false);
 }
 
 // ===== Vault control-plane handler tests =====
