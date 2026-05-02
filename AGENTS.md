@@ -86,16 +86,14 @@ cargo run --bin hmnd -- [args]       # run the daemon in the foreground
 cargo run --bin hmn  -- <subcommand> # run the CLI client against a running hmnd
 ```
 
-## Playbook control
+## Orchestration sessions
 
-For orchestration sessions, use these one-liners:
+When the user opens a message with one of the shorthand prompts below, treat it as a request to enter the orchestration playbook — load @notes/playbook/README.md for the full prompts, role flow, and entrypoint details, then use the long-form prompt that matches.
 
-- `orchestrator status`
-- `orchestrator intake-proposal`
-- `orchestrator start-next-round`
-- `orchestrator continue`
-
-For full prompts and role-flow details, load @notes/playbook/README.md.
+- orchestrator status
+- orchestrator intake-proposal
+- orchestrator start-next-round
+- orchestrator continue
 
 ## The v0 step order
 
