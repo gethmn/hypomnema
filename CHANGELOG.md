@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## Step 19 — Content Retrieval (Round 9)
+
+### Added
+
+- Add `content_get` read-only operation for fetching indexed file content by vault-relative path
+- HTTP: `POST /content/get`
+- MCP: `content_get` tool (stdio + Streamable-HTTP transports)
+- CLI: `hmn content get PATH... [--vault ...] [--json]`
+
 ## [0.5.0] - 2026-04-30
 
 ### Changed

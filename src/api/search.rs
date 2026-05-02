@@ -1,20 +1,23 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use axum::http::StatusCode;
 use axum::{Json, extract::State};
 
 use super::ApiState;
 use super::error::{ApiError, ApiJson};
 use super::types::{
-    ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse, FailedVault,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, PartialResults,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, SkippedVault,
+    ContentGetError, ContentGetErrorDetail, ContentGetRequest, ContentGetResponse,
+    ContentGetResultItem, ContentGetSuccess, ContentMatchJson, ContentQueryJson, ContentResultJson,
+    ContentSearchResponse, FailedVault, FilesystemQueryJson, FilesystemResultJson,
+    FilesystemSearchResponse, PartialResults, SemanticQueryJson, SemanticResultJson,
+    SemanticSearchResponse, SkippedVault,
 };
 use crate::api::VaultEntry;
 use crate::control_plane::{VaultManager, VaultScopeRow};
 use crate::search::{
     ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery, SemanticResult,
-    SemanticSearchError, search_content, search_filesystem, search_semantic,
+    SemanticSearchError, content_get_by_paths, search_content, search_filesystem, search_semantic,
 };
 use crate::vault_registry::{VaultId, VaultStatus};
 
@@ -327,6 +330,161 @@ pub(crate) async fn run_semantic_search(
     })
 }
 
+pub(crate) async fn content_get(
+    State(s): State<ApiState>,
+    ApiJson(req): ApiJson<ContentGetRequest>,
+) -> Result<Json<ContentGetResponse>, ApiError> {
+    run_content_get(&s.vault_manager, &req).await.map(Json)
+}
+
+pub(crate) async fn run_content_get(
+    manager: &VaultManager,
+    req: &ContentGetRequest,
+) -> Result<ContentGetResponse, ApiError> {
+    // 1. Validate request
+    if req.paths.is_empty() {
+        return Err(ApiError::invalid_request("paths must not be empty"));
+    }
+    for path in &req.paths {
+        validate_retrieval_path(path)?;
+    }
+    if let Some(vaults) = &req.vaults {
+        if vaults.is_empty() {
+            return Err(ApiError::invalid_request(
+                "vaults must not be empty if provided",
+            ));
+        }
+    }
+
+    // 2. Normalize paths: strip leading "./"
+    let normalized_paths: Vec<String> = req
+        .paths
+        .iter()
+        .map(|p| normalize_retrieval_path(p))
+        .collect();
+
+    // 3. Fan-out across vaults
+    let scope = manager.search_scope().await?;
+    let plan = filter_scope(scope, req.vaults.as_deref());
+
+    let mut all_results: Vec<ContentGetResultItem> = Vec::new();
+    let mut skipped: Vec<SkippedVault> = Vec::new();
+    let mut failed: Vec<FailedVault> = plan.unknown_failures;
+
+    for row in plan.in_scope {
+        match (row.status, row.entry) {
+            (VaultStatus::Active, Some(entry)) => {
+                match content_get_by_paths(entry.store.pool(), normalized_paths.clone()).await {
+                    Ok(rows) => {
+                        for (path, opt_row) in rows {
+                            let item = match opt_row {
+                                Some(r) => ContentGetResultItem::Success(ContentGetSuccess {
+                                    path,
+                                    content: r.content,
+                                    content_hash: r.content_hash,
+                                    size: r.size,
+                                    mtime: r.mtime,
+                                    vault: entry.id.to_string(),
+                                    vault_name: entry.name.clone(),
+                                }),
+                                None => ContentGetResultItem::Error(ContentGetError {
+                                    path,
+                                    vault: entry.id.to_string(),
+                                    vault_name: entry.name.clone(),
+                                    error: ContentGetErrorDetail {
+                                        code: "path_not_found".to_string(),
+                                        message: "path not found in vault index".to_string(),
+                                    },
+                                }),
+                            };
+                            all_results.push(item);
+                        }
+                    }
+                    Err(e) => {
+                        failed.push(FailedVault {
+                            vault: entry.id.to_string(),
+                            vault_name: entry.name.clone(),
+                            code: "vault_search_failed".to_string(),
+                            message: format!("{e:#}"),
+                        });
+                    }
+                }
+            }
+            (VaultStatus::Paused, _) => skipped.push(skipped_for_paused(&row.id, &row.name)),
+            (VaultStatus::Errored, _) => skipped.push(skipped_for_errored(
+                &row.id,
+                &row.name,
+                row.last_error.as_deref(),
+            )),
+            (VaultStatus::Active, None) => failed.push(no_runner_failure(&row.id, &row.name)),
+        }
+    }
+
+    // 4. Sort by (path ASC, vault_id ASC)
+    all_results.sort_by(|a, b| {
+        let (path_a, vault_a) = result_item_sort_key(a);
+        let (path_b, vault_b) = result_item_sort_key(b);
+        path_a.cmp(path_b).then_with(|| vault_a.cmp(vault_b))
+    });
+
+    Ok(ContentGetResponse {
+        results: all_results,
+        partial_results: build_partial_results(skipped, failed),
+    })
+}
+
+fn result_item_sort_key(item: &ContentGetResultItem) -> (&str, &str) {
+    match item {
+        ContentGetResultItem::Success(s) => (s.path.as_str(), s.vault.as_str()),
+        ContentGetResultItem::Error(e) => (e.path.as_str(), e.vault.as_str()),
+    }
+}
+
+fn normalize_retrieval_path(path: &str) -> String {
+    // Strip a leading "./" component and collapse any duplicate internal slashes.
+    let stripped = path.strip_prefix("./").unwrap_or(path);
+    // Collapse duplicate slashes (simple pass — do not shell out)
+    let mut result = String::with_capacity(stripped.len());
+    let mut prev_slash = false;
+    for ch in stripped.chars() {
+        if ch == '/' {
+            if !prev_slash {
+                result.push(ch);
+            }
+            prev_slash = true;
+        } else {
+            result.push(ch);
+            prev_slash = false;
+        }
+    }
+    result
+}
+
+pub(crate) fn validate_retrieval_path(path: &str) -> Result<(), ApiError> {
+    if path.is_empty() {
+        return Err(ApiError::new(
+            "invalid_path",
+            "path must not be empty",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ));
+    }
+    if path.starts_with('/') {
+        return Err(ApiError::new(
+            "invalid_path",
+            "path must be vault-relative, not absolute",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ));
+    }
+    if path.split('/').any(|seg| seg == "..") {
+        return Err(ApiError::new(
+            "invalid_path",
+            "path must not contain .. segments",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ));
+    }
+    Ok(())
+}
+
 // ===== Helpers =====
 
 fn filesystem_to_json(r: FilesystemResult, vault: &VaultEntry) -> FilesystemResultJson {
@@ -526,4 +684,38 @@ fn anyhow_is_request_validation(err: &anyhow::Error) -> bool {
     display.starts_with("invalid_glob")
         || display.starts_with("invalid_regex")
         || display.starts_with("invalid_prefix")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ===== Task 8.1: Unit tests for validate_retrieval_path =====
+
+    #[test]
+    fn test_validate_retrieval_path_valid() {
+        assert!(validate_retrieval_path("notes/file.md").is_ok());
+        assert!(validate_retrieval_path("a.md").is_ok());
+        assert!(validate_retrieval_path("deeply/nested/file.md").is_ok());
+        // Leading "./" is valid (normalized downstream, not rejected here)
+        assert!(validate_retrieval_path("./notes/file.md").is_ok());
+    }
+
+    #[test]
+    fn test_validate_retrieval_path_invalid_empty() {
+        assert!(validate_retrieval_path("").is_err());
+    }
+
+    #[test]
+    fn test_validate_retrieval_path_invalid_absolute() {
+        assert!(validate_retrieval_path("/abs/path.md").is_err());
+        assert!(validate_retrieval_path("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn test_validate_retrieval_path_invalid_dotdot() {
+        assert!(validate_retrieval_path("../escape.md").is_err());
+        assert!(validate_retrieval_path("notes/../escape.md").is_err());
+        assert!(validate_retrieval_path("a/../../etc/passwd").is_err());
+    }
 }

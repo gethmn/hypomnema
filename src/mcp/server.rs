@@ -7,9 +7,9 @@ use rmcp::{tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 
 use crate::api::types::{
-    ContentQueryJson, CreateVaultRequest, FilesystemQueryJson, SemanticQueryJson, VaultCreateInput,
-    VaultPauseInput, VaultRenameInput, VaultRescanInput, VaultResetInput, VaultResumeInput,
-    VaultStatusInput, VaultTerminateInput,
+    ContentGetRequest, ContentQueryJson, CreateVaultRequest, FilesystemQueryJson, SemanticQueryJson,
+    VaultCreateInput, VaultPauseInput, VaultRenameInput, VaultRescanInput, VaultResetInput,
+    VaultResumeInput, VaultStatusInput, VaultTerminateInput,
 };
 use crate::mcp::backend::HypomnemaBackend;
 
@@ -75,6 +75,23 @@ impl HypomnemaMcpServer {
         Parameters(input): Parameters<SemanticQueryJson>,
     ) -> CallToolResult {
         match self.backend.search_semantic(&input).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
+        }
+    }
+
+    #[tool(description = "Fetch full indexed file content by vault-relative path. Returns content \
+                          from the search index — never reads from the vault filesystem at query \
+                          time. Supports batching multiple paths and cross-vault fan-out.")]
+    async fn content_get(
+        &self,
+        Parameters(input): Parameters<ContentGetRequest>,
+    ) -> CallToolResult {
+        match self.backend.content_get(&input).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),

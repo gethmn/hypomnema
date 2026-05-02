@@ -428,16 +428,17 @@ async fn mcp_tools_list_advertises_all_tools() {
         .collect();
     // Step 10 added 4 vault tools (vault_list/status/create/terminate) on
     // top of the step-8 search trio. Step 11 added the 5 lifecycle ops
-    // (vault_pause/resume/reset/rename/rescan). All write tools — create,
-    // terminate, pause, resume, reset, rename, rescan — are advertised even
-    // when `[mcp] enable_write_tools = false`; gating short-circuits at call
-    // time. See step-10 workplan § Task 10.6 § C and step-11 workplan §
-    // Task 11.5.
-    assert_eq!(names.len(), 12, "expected 12 tools, got {names:?}");
+    // (vault_pause/resume/reset/rename/rescan). Step 19 added content_get.
+    // All write tools — create, terminate, pause, resume, reset, rename,
+    // rescan — are advertised even when `[mcp] enable_write_tools = false`;
+    // gating short-circuits at call time. See step-10 workplan § Task 10.6 §
+    // C and step-11 workplan § Task 11.5.
+    assert_eq!(names.len(), 13, "expected 13 tools, got {names:?}");
     for expected in [
         "search_filesystem",
         "search_content",
         "search_semantic",
+        "content_get",
         "vault_list",
         "vault_status",
         "vault_create",

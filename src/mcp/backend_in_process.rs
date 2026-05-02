@@ -5,11 +5,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::api::search::{run_content_search, run_filesystem_search, run_semantic_search};
+use crate::api::search::{
+    run_content_get, run_content_search, run_filesystem_search, run_semantic_search,
+};
 use crate::api::types::{
-    ContentQueryJson, ContentSearchResponse, CreateVaultRequest, FilesystemQueryJson,
-    FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson, SemanticSearchResponse,
-    TerminateVaultResponse, VaultListResponse, VaultRowJson,
+    ContentGetRequest, ContentGetResponse, ContentQueryJson, ContentSearchResponse,
+    CreateVaultRequest, FilesystemQueryJson, FilesystemSearchResponse, RescanResponseJson,
+    SemanticQueryJson, SemanticSearchResponse, TerminateVaultResponse, VaultListResponse,
+    VaultRowJson,
 };
 use crate::control_plane::{CreateVaultRequest as ControlCreateRequest, VaultManager};
 use crate::mcp::backend::HypomnemaBackend;
@@ -45,6 +48,12 @@ impl HypomnemaBackend for InProcessBackend {
 
     async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse> {
         run_semantic_search(&self.vault_manager, q)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
+        run_content_get(&self.vault_manager, req)
             .await
             .map_err(Into::into)
     }

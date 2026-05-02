@@ -16,6 +16,14 @@ pub(crate) struct ApiError {
 }
 
 impl ApiError {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>, status: StatusCode) -> Self {
+        ApiError {
+            status,
+            code,
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn invalid_request(message: impl Into<String>) -> Self {
         ApiError {
             status: StatusCode::BAD_REQUEST,

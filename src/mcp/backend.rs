@@ -3,9 +3,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::api::types::{
-    ContentQueryJson, ContentSearchResponse, CreateVaultRequest, FilesystemQueryJson,
-    FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson, SemanticSearchResponse,
-    TerminateVaultResponse, VaultListResponse, VaultRowJson,
+    ContentGetRequest, ContentGetResponse, ContentQueryJson, ContentSearchResponse,
+    CreateVaultRequest, FilesystemQueryJson, FilesystemSearchResponse, RescanResponseJson,
+    SemanticQueryJson, SemanticSearchResponse, TerminateVaultResponse, VaultListResponse,
+    VaultRowJson,
 };
 use crate::client::{DaemonClient, is_connect_error};
 
@@ -16,6 +17,8 @@ pub trait HypomnemaBackend: Send + Sync + 'static {
     async fn search_content(&self, q: &ContentQueryJson) -> Result<ContentSearchResponse>;
 
     async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse>;
+
+    async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse>;
 
     async fn list_vaults(&self) -> Result<VaultListResponse>;
 
@@ -55,6 +58,10 @@ impl HypomnemaBackend for DaemonClient {
 
     async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse> {
         DaemonClient::search_semantic(self, q).await
+    }
+
+    async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
+        DaemonClient::content_get(self, req).await
     }
 
     async fn list_vaults(&self) -> Result<VaultListResponse> {

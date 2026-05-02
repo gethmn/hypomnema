@@ -5,12 +5,13 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use futures_util::StreamExt;
 
-use hypomnema::cli::{Cli, Command, SearchMode, VaultOp};
+use hypomnema::cli::{Cli, Command, ContentOp, SearchMode, VaultOp};
 use hypomnema::client::{
-    ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
-    TerminateVaultResponse, VaultListResponse, VaultRowJson, is_connect_error,
+    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentQueryJson, ContentResultJson,
+    ContentSearchResponse, CreateVaultRequest, DaemonClient, FilesystemQueryJson,
+    FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson,
+    SemanticResultJson, SemanticSearchResponse, StatusResponse, TerminateVaultResponse,
+    VaultListResponse, VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
@@ -96,6 +97,9 @@ async fn main() -> ExitCode {
                 .await
             }
         },
+        Command::Content { op } => {
+            cmd_content(&config, cli.daemon_url.as_deref(), cli.json, op).await
+        }
         Command::Status => cmd_status(&config, cli.daemon_url.as_deref(), cli.json).await,
         Command::Mcp => cmd_mcp(&config, cli.daemon_url.as_deref()).await,
         Command::Vault { op } => cmd_vault(&config, cli.daemon_url.as_deref(), cli.json, op).await,
@@ -195,6 +199,85 @@ async fn cmd_search_semantic(
     } else {
         print!("{}", render_semantic_text(&resp));
     }
+    Ok(())
+}
+
+async fn cmd_content(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    op: ContentOp,
+) -> Result<()> {
+    match op {
+        ContentOp::Get { paths, vault } => {
+            cmd_content_get(config, override_url, json, paths, vault).await
+        }
+    }
+}
+
+async fn cmd_content_get(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    paths: Vec<String>,
+    vault: Vec<String>,
+) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)?;
+    let vaults = if vault.is_empty() { None } else { Some(vault) };
+    let req = ContentGetRequest { paths, vaults };
+    let response = client.content_get(&req).await?;
+
+    if json {
+        print_json(&response)?;
+        // Determine exit: if all items are errors, return exit code 1.
+        let all_errored = response
+            .results
+            .iter()
+            .all(|r| matches!(r, ContentGetResultItem::Error(_)));
+        if all_errored && !response.results.is_empty() {
+            return Err(anyhow!("all requested paths returned errors"));
+        }
+        return Ok(());
+    }
+
+    render_content_get_text(&response)?;
+    Ok(())
+}
+
+fn render_content_get_text(response: &ContentGetResponse) -> Result<()> {
+    let mut first = true;
+    let mut any_success = false;
+
+    for item in &response.results {
+        match item {
+            ContentGetResultItem::Success(s) => {
+                if !first {
+                    println!();
+                }
+                first = false;
+                any_success = true;
+                println!("PATH: {}", s.path);
+                println!("VAULT: {}", s.vault_name);
+                println!("HASH: {}", s.content_hash);
+                println!("SIZE: {}", s.size);
+                println!("MTIME: {}", s.mtime);
+                println!("---");
+                print!("{}", s.content);
+                // Ensure trailing newline after content block.
+                if !s.content.ends_with('\n') {
+                    println!();
+                }
+            }
+            ContentGetResultItem::Error(e) => {
+                eprintln!("error: {} ({}): {}", e.path, e.vault_name, e.error.message);
+            }
+        }
+    }
+
+    if !any_success && !response.results.is_empty() {
+        return Err(anyhow!("all requested paths returned errors"));
+    }
+
     Ok(())
 }
 

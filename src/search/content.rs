@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 use tokio::task;
 
 use super::{normalize_prefix, prefix_successor};
@@ -191,6 +192,52 @@ fn run_blocking(pool: SqlitePool, q: ContentQuery) -> Result<(Vec<ContentResult>
     }
 
     Ok((results, truncated))
+}
+
+// ===== content_get: per-vault blocking retrieval by path =====
+
+#[derive(Debug)]
+pub struct ContentGetRow {
+    pub content: String,
+    pub content_hash: String,
+    pub size: i64,
+    pub mtime: String,
+}
+
+pub async fn content_get_by_paths(
+    pool: SqlitePool,
+    paths: Vec<String>,
+) -> Result<Vec<(String, Option<ContentGetRow>)>> {
+    tokio::task::spawn_blocking(move || content_get_blocking(pool, paths))
+        .await
+        .context("spawn_blocking join error in content_get_by_paths")?
+}
+
+fn content_get_blocking(
+    pool: SqlitePool,
+    paths: Vec<String>,
+) -> Result<Vec<(String, Option<ContentGetRow>)>> {
+    let conn = pool.get().context("acquiring connection for content_get")?;
+    let mut results = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let row = conn
+            .query_row(
+                "SELECT content, content_hash, size, mtime FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| {
+                    Ok(ContentGetRow {
+                        content: row.get(0)?,
+                        content_hash: row.get(1)?,
+                        size: row.get(2)?,
+                        mtime: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .context("querying files for content_get")?;
+        results.push((path.clone(), row));
+    }
+    Ok(results)
 }
 
 #[cfg(test)]

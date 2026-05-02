@@ -64,7 +64,20 @@ serverInfo:
 
 ### Tool surface
 
-Identical to the stdio transport. Request/response tools include `search_filesystem`, `search_content`, `search_semantic`, and the vault-management request/response tools. `vault_watch` adds a read-only long-lived live-event subscription; its semantics are defined in [change-events.md](./change-events.md#mcp-subscription). Search request/response shapes are the `*QueryJson` / `*SearchResponse` types defined in the search specs.
+Identical to the stdio transport. Request/response tools include `search_filesystem`, `search_content`, `search_semantic`, `content_get`, and the vault-management request/response tools. `vault_watch` adds a read-only long-lived live-event subscription; its semantics are defined in [change-events.md](./change-events.md#mcp-subscription). Search request/response shapes are the `*QueryJson` / `*SearchResponse` types defined in the search specs.
+
+#### Read-only tools
+
+The following tools are always available regardless of the `[mcp] enable_write_tools` configuration setting.
+
+| Tool | Description | Availability |
+|---|---|---|
+| `search_filesystem` | List vault files by path prefix or glob | Available regardless of `enable_write_tools` (read-only) |
+| `search_content` | Search file contents by substring or regex | Available regardless of `enable_write_tools` (read-only) |
+| `search_semantic` | Semantic similarity search over indexed chunks | Available regardless of `enable_write_tools` (read-only) |
+| `content_get` | Fetch indexed file content by vault-relative path | Available regardless of `enable_write_tools` (read-only) |
+| `vault_watch` | Subscribe to live vault change events (SSE stream) | Available regardless of `enable_write_tools` (read-only) |
+| `vault_status` | Get the current status of a vault | Available regardless of `enable_write_tools` (read-only) |
 
 ### Endpoint configuration
 
@@ -254,3 +267,4 @@ This spec assumes rmcp 1.5 ships a server-side Streamable HTTP transport feature
 | 0.1.1 | 2026-04-28 | Round-4 pre-round prep: resolved Open Question 1 (rmcp 1.5 ships `transport-streamable-http-server`; `StreamableHttpService` mounts on an axum `Router` via `nest_service`; no custom scaffolding needed). |
 | 1.0.0 | 2026-04-28 | Promoted from `notes/proposals/mcp-streamable-http.md` (was 0.1.1). Round-4 step 12 workplan resolutions: Open Question 1 → resolved at pre-round prep (rmcp ships transport feature; mount via `nest_service` on axum 0.7 with hand-rolled-handler fallback); Open Question 2 → v1 stateless; Open Question 3 → defer; Open Question 4 → v1 sets no CORS headers; Open Question 5 → v1 rejects `mcp.http.path != "/mcp"` with startup error. |
 | 1.1.0 | 2026-04-30 | Amended for live `vault_watch`: MCP HTTP remains stateless and non-resumable, but can carry live server-to-client event notifications for active watch subscribers. |
+| 1.2.0 | 2026-05-02 | Added `content_get` to the read-only tools table (Step 19, Round 9). Added explicit read-only tools table listing all tools and their `enable_write_tools` availability. |

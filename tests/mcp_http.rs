@@ -558,7 +558,7 @@ async fn initialize_returns_serverinfo_hypomnema() {
 }
 
 #[tokio::test]
-async fn tools_list_returns_all_twelve_tools() {
+async fn tools_list_returns_all_tools() {
     let daemon = spawn_seeded_daemon(vec!["alpha"]).await;
     let mut client = HttpMcpClient::new(&daemon.base_url);
     client.initialize().await;
@@ -571,11 +571,13 @@ async fn tools_list_returns_all_twelve_tools() {
         .iter()
         .map(|t| t["name"].as_str().expect("tool name string"))
         .collect();
-    assert_eq!(names.len(), 12, "expected 12 tools, got {names:?}");
+    // Step 19 added content_get (read-only), bringing the total to 13.
+    assert_eq!(names.len(), 13, "expected 13 tools, got {names:?}");
     for expected in [
         "search_filesystem",
         "search_content",
         "search_semantic",
+        "content_get",
         "vault_list",
         "vault_status",
         "vault_create",

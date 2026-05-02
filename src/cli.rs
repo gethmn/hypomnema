@@ -33,6 +33,11 @@ pub enum Command {
         #[command(subcommand)]
         mode: SearchMode,
     },
+    /// Fetch indexed file content by vault-relative path.
+    Content {
+        #[command(subcommand)]
+        op: ContentOp,
+    },
     /// Report daemon health.
     Status,
     /// Serve the MCP surface over stdio against a running `hmnd` daemon.
@@ -43,6 +48,20 @@ pub enum Command {
     Vault {
         #[command(subcommand)]
         op: VaultOp,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ContentOp {
+    /// Fetch full indexed content for one or more vault-relative paths.
+    Get {
+        /// One or more vault-relative paths to fetch.
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<String>,
+        /// Restrict the lookup to a subset of vaults (name or id).
+        /// Repeatable. Omitting queries all active vaults.
+        #[arg(long, value_name = "NAME|ID")]
+        vault: Vec<String>,
     },
 }
 

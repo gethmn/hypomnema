@@ -195,6 +195,60 @@ pub struct SemanticResultJson {
     pub vault_name: Option<String>,
 }
 
+// ===== content_get request/response types =====
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContentGetRequest {
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vaults: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(untagged)]
+pub enum ContentGetResultItem {
+    Success(ContentGetSuccess),
+    Error(ContentGetError),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContentGetSuccess {
+    pub path: String,
+    pub content: String,
+    pub content_hash: String,
+    pub size: i64,
+    pub mtime: String,
+    pub vault: String,
+    pub vault_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContentGetError {
+    pub path: String,
+    pub vault: String,
+    pub vault_name: String,
+    pub error: ContentGetErrorDetail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContentGetErrorDetail {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ContentGetResponse {
+    pub results: Vec<ContentGetResultItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_results: Option<PartialResults>,
+}
+
 // ===== Cross-vault partial-results diagnostics =====
 //
 // Pinned to docs/specs/vault-management.md § Cross-Vault Search Semantics §

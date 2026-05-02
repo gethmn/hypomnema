@@ -7,11 +7,11 @@ use futures_util::{StreamExt, TryStreamExt};
 use serde::de::DeserializeOwned;
 
 pub use crate::api::types::{
-    ContentMatchJson, ContentQueryJson, ContentResultJson, ContentSearchResponse,
-    CreateVaultRequest, ErrorEnvelope, FilesystemQueryJson, FilesystemResultJson,
-    FilesystemSearchResponse, HealthResponse, RenameRequest, RescanResponseJson, ResetRequest,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
-    TerminateVaultResponse, VaultListResponse, VaultRowJson,
+    ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentMatchJson, ContentQueryJson,
+    ContentResultJson, ContentSearchResponse, CreateVaultRequest, ErrorEnvelope, FilesystemQueryJson,
+    FilesystemResultJson, FilesystemSearchResponse, HealthResponse, RenameRequest,
+    RescanResponseJson, ResetRequest, SemanticQueryJson, SemanticResultJson, SemanticSearchResponse,
+    StatusResponse, TerminateVaultResponse, VaultListResponse, VaultRowJson,
 };
 use crate::config::Config;
 
@@ -77,6 +77,12 @@ impl DaemonClient {
     pub async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse> {
         let url = format!("{}/search/semantic", self.base_url);
         let resp = self.http.post(&url).json(q).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
+        let url = format!("{}/content/get", self.base_url);
+        let resp = self.http.post(&url).json(req).send().await?;
         decode_response(resp).await
     }
 
