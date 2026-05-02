@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use globset::GlobSet;
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{Debouncer, FileIdMap, new_debouncer};
+use notify_debouncer_full::{Debouncer, RecommendedCache, new_debouncer};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
@@ -68,7 +68,7 @@ pub enum WatchEvent {
 
 pub struct Watcher {
     vault_id: VaultId,
-    _debouncer: Debouncer<RecommendedWatcher, FileIdMap>,
+    _debouncer: Debouncer<RecommendedWatcher, RecommendedCache>,
 }
 
 impl Watcher {
