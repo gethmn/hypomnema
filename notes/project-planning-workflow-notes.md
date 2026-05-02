@@ -115,16 +115,17 @@ Per Beau's call: **just-in-time through step 5**.
 
 ## Step boundary ritual
 
+**Current changelog policy (2026-05-02)**: no standalone changelog ritual. Do not update or recreate `CHANGELOG.md` at round boundaries unless a future release-process workplan reintroduces changelog generation as part of a real release command. See [`proposals/release-process-and-changelog.md`](./proposals/release-process-and-changelog.md).
+
 When a step ships:
 
 1. Mark the step done in the roadmap (e.g. add a `**Status**: shipped <date>` line at the top of its section)
 2. Capture any ADRs that hardened during the build
 3. Update the roadmap if reality drifted from the original plan (note what changed and why)
 4. Append a short retrospective to this file: what worked, what didn't, what we'd do differently
-5. At the round shipping gate, update repo-root `CHANGELOG.md` with the round-level release note before starting the next round
-6. Expand the **next** step into a workplan
-7. User reviews the new workplan before I (Claude) start coding
-8. Push `HEAD` and any new tag(s) to `origin` when the round closes (or per-round policy for intermediate steps)
+5. Expand the **next** step into a workplan
+6. User reviews the new workplan before I (Claude) start coding
+7. Push `HEAD` and any new tag(s) to `origin` when the round closes (or per-round policy for intermediate steps)
 
 ---
 

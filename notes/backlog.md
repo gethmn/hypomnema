@@ -16,7 +16,7 @@ This file replaces the earlier "round 4+ / handoff doc § Out of scope" framing.
 
 Items raised at the round-3/4 boundary and pulled into round 5. See [`notes/roadmap/archive/roadmap-5.md`](roadmap/archive/roadmap-5.md) for the full workstream scoping.
 
-- ~~**CHANGELOG.md adoption.**~~ **Pulled into round 5** (step 15 — shipping gate).
+- ~~**CHANGELOG.md adoption.**~~ **Pulled into round 5** (step 15 — shipping gate). **Retired 2026-05-02**; changelog generation is now gated on a future release process.
 - ~~**Outbox flake hardening (`rename_emits_deleted_then_created_lines`).**~~ **Superseded by outbox removal in round 6**; no longer a round-5 item.
 - ~~**CI pipeline (GitHub Actions).**~~ **Pulled into round 5** (step 13 — `ci.yml` + `dependabot.yml` + spec promotion). Source proposal: `notes/proposals/ci-cd-pipeline.md`.
 
@@ -28,7 +28,7 @@ Items considered at the round-5/6 boundary. Round 6 ended up as a single-step ou
 - **MCP write-tool gating granularity.** Step 10 committed to a single `[mcp] enable_write_tools` flag; with step 11 the gated set grew from 2 tools (create/terminate) to 7 (full lifecycle). Per-tool gating is a future round if a use-case surfaces — e.g. an operator who wants `vault_pause` / `vault_resume` enabled for an agent but not `vault_terminate`.
 - **Multi-model embedding per vault.** Today the embedding service is daemon-wide and the `chunks_vec` dimension is migration-baked. [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions) lists this as a future candidate if a use-case surfaces.
 - **Cross-vault search pagination + streaming.** Pinned forward-compat in [`docs/specs/vault-management.md` § Open Questions](../docs/specs/vault-management.md#open-questions); request-side cursor field is reserved on the wire shape. Future round.
-- **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope through round 8; future round when the project needs binary distribution.
+- **Release automation** (`release.yml`, binary cross-compilation, checksums, cargo-dist). Explicitly out of scope through round 8; future round when the project needs binary distribution. Changelog generation is gated on this work; see [`proposals/release-process-and-changelog.md`](proposals/release-process-and-changelog.md).
 - ~~**Outbox removal / outbox simplification.**~~ **Pulled into round 6** (step 16). Outbox surface fully retired — `src/outbox/` and `tests/outbox.rs` are gone; consumer-facing event delivery moved to the change-events shape (`tests/change_events.rs`).
 - **OSSF Scorecard / CodeQL.** Security tooling for when the project has public visibility. Future round.
 - **Windows CI matrix.** Current CI scope is unix-only (ubuntu + macos). Add when Windows support becomes a project goal.
