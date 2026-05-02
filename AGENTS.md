@@ -91,6 +91,7 @@ cargo run --bin hmn  -- <subcommand> # run the CLI client against a running hmnd
 For orchestration sessions, use these one-liners:
 
 - `orchestrator status`
+- `orchestrator intake-proposal`
 - `orchestrator start-next-round`
 - `orchestrator continue`
 

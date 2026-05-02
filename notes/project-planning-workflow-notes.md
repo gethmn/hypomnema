@@ -10,6 +10,47 @@
 
 ## The three phases
 
+### Phase A.0 — Proposal Intake (before roadmap drafting)
+
+Normalize planning inputs into a roadmap-ready shape. Inputs can be any mix of:
+
+- idea notes
+- proposal docs
+- PRDs
+- user stories
+- specs
+- architecture notes
+
+This phase is format-agnostic. It should not depend on any single generator schema.
+
+Required outputs:
+
+- Intake artifact using `notes/proposals/intake-output-template.md`.
+- Proposed step breakdown for a round.
+- Candidate goals and shipping criteria per step.
+- Deferred decisions list (what is still unknown and where it should be resolved).
+- Story/requirement coverage map linking source inputs to proposed steps.
+- Explicit unresolved blockers that require human decisions.
+- Recommendation: start step N now, or refine inputs first.
+
+### Proposal Intake Checklist
+
+Use this checklist when turning planning inputs into roadmap/workplan artifacts:
+
+1. Gather and list all planning inputs with file paths.
+2. Extract candidate requirements/outcomes from each input.
+3. Group outcomes into step-sized increments that can ship independently.
+4. Draft per-step goals and shipping criteria.
+5. Identify deferred decisions and assign each to a target step.
+6. Build a coverage map:
+   - each requirement/story should map to a step or be explicitly deferred
+   - each planned step should map back to at least one source input
+7. Write an intake artifact under `notes/proposals/` using `intake-output-template.md`.
+8. Surface unresolved blockers and the smallest set of human decisions needed.
+9. Decide:
+   - proceed to `roadmap-N.md` + next `step-NN-workplan.md`, or
+   - pause for input refinement.
+
 ### Phase A — Roadmap
 
 A short, scannable document covering the full scope of a planning round (here: steps 1–5). Lives at `notes/roadmap/roadmap-N.md` while the round is active and `notes/roadmap/archive/roadmap-N.md` after it ships.
@@ -83,6 +124,7 @@ When a step ships:
 5. At the round shipping gate, update repo-root `CHANGELOG.md` with the round-level release note before starting the next round
 6. Expand the **next** step into a workplan
 7. User reviews the new workplan before I (Claude) start coding
+8. Push `HEAD` and any new tag(s) to `origin` when the round closes (or per-round policy for intermediate steps)
 
 ---
 
@@ -95,6 +137,7 @@ When a step ships:
 | Workplan (active step) | `notes/roadmap/step-NN-workplan.md` | Short-lived; one file per step, while active |
 | Workplan (archived) | `notes/roadmap/archive/step-NN-workplan.md` | Long-lived; frozen historical record after the step ships |
 | In-flight proposals | `notes/proposals/<slug>.md` | Short/medium-lived; moves to `archive/` after approval and decomposition |
+| Proposal intake output | `notes/proposals/<slug>-intake.md` | Short/medium-lived; bridge from idea/proposal inputs to roadmap steps; use `notes/proposals/intake-output-template.md` |
 | Archived proposals | `notes/proposals/archive/<slug>.md` | Long-lived; frozen historical record |
 | LDS gaps | `notes/lds-evaluation.md` | Long-lived; appended as new gaps surface |
 | Process notes (this file) | `notes/project-planning-workflow-notes.md` | Long-lived; revised continuously |
