@@ -2,7 +2,7 @@
 
 **Scope**: Optional polish round before v0.5.0 / v0 stable cut. Two read-only / additive operational improvements bundled into a single step. No new daemon dependencies beyond a `.gitignore`-parsing crate.
 
-**Status**: In progress. Round shape decided 2026-05-02 from `notes/scratchpads/v0 Polish Round Scope` (Solo scratchpad #17, Option B). Workplan pending.
+**Status**: Shipped 2026-05-03. Commit `b100c60`. Accepted post-hoc by human review; gate violation logged separately in Solo kv `round-10/step-21/gate-violation` and notes/project-planning-workflow-notes.md auto-retro (the latter pending human retro pass).
 
 **Process**: Same as rounds 1–9. One step. Coordinator + researcher + ephemeral builders. See [`notes/playbook/`](../playbook/) for the orchestration contract.
 

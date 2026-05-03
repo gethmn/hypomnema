@@ -1,7 +1,7 @@
 # Step 21 — Health Endpoint and VCS-Aware Ignores — Workplan
 
 **Round**: 10 (v0 Polish)
-**Status**: Draft (workplan-ready handoff)
+**Status**: Shipped 2026-05-03 (commit b100c60; accepted post-hoc — see Solo kv `round-10/step-21/gate-violation`)
 **Authored**: 2026-05-02
 **Source**: `notes/roadmap/roadmap-10.md`; Solo scratchpad #17 "v0 Polish Round Scope" (tasks 1 and 2)
 
