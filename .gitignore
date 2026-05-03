@@ -6,3 +6,4 @@ result-*
 # Negate global gitignore rule that ignores .config/ — nextest.toml belongs in the repo.
 !.config/
 !.config/nextest.toml
+/.claude/worktrees

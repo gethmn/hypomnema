@@ -1,6 +1,6 @@
 [package]
 name = "hypomnema"
-version = "0.5.0"
+version = "0.5.3"
 edition = "2024"
 
 [lib]
@@ -46,3 +46,12 @@ walkdir = "2.5"
 [dev-dependencies]
 tempfile = "3.10"
 tower = "0.5"
+
+[package.metadata.release]
+pre-release-hook = ["./contrib/changelog-hook"]
+sign-commit = false
+sign-tag = false
+publish = false              # set true when you want `cargo publish`
+push = false                 # set true when you want auto-push
+tag-prefix = "v"             # default for single-package repos; explicit is nice
+allow-branch = ["main"]

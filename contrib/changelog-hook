@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+: "${NEW_VERSION:?NEW_VERSION not set; this script must run under cargo-release}"
+
+git-cliff --unreleased --tag "v${NEW_VERSION}" --prepend CHANGELOG.md

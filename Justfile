@@ -41,3 +41,6 @@ dev:
 
 release:
     just build-release install
+
+changelog-preview:
+    git cliff --unreleased

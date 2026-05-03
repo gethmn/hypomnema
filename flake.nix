@@ -52,6 +52,8 @@
               python3
 
               pkg-config
+
+              git-cliff
             ]
             ++ darwinDeps;
 
