@@ -36,7 +36,9 @@
 //! rather than worked around — the startup re-scan is the safety net.
 
 pub mod filter;
+pub mod inclusion;
 mod translate;
+pub mod vcs_ignore;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,7 +47,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use globset::GlobSet;
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{Debouncer, RecommendedCache, new_debouncer};
 use tokio::sync::mpsc::error::TrySendError;
@@ -55,6 +56,7 @@ use tokio::time::timeout;
 use crate::events::{EventBus, EventType, StreamEvent};
 use crate::indexer::{ReindexOutcome, RemoveOutcome, Scanner};
 use crate::vault_registry::VaultId;
+use inclusion::InclusionFilter;
 use translate::{TranslateCtx, translate};
 
 const BACKPRESSURE_WARN_EVERY: usize = 64;
@@ -80,7 +82,7 @@ impl Watcher {
 pub fn spawn_watcher(
     vault_id: &VaultId,
     vault: &Path,
-    ignores: GlobSet,
+    filter: Arc<InclusionFilter>,
     debounce: Duration,
     buffer: usize,
 ) -> Result<(Watcher, mpsc::Receiver<WatchEvent>)> {
@@ -92,7 +94,7 @@ pub fn spawn_watcher(
     let (tx, rx) = mpsc::channel::<WatchEvent>(buffer);
     let ctx = TranslateCtx {
         vault_roots: distinct_roots([canonical_vault.clone(), watched_vault.clone()]),
-        ignores,
+        filter,
     };
 
     // Backpressure counter: incremented every time a `try_send` would have
@@ -372,7 +374,7 @@ mod tests {
     use crate::events::{FileChangedEvent, StreamEvent};
     use crate::indexer::Scanner;
     use crate::store::Store;
-    use globset::GlobSetBuilder;
+    use crate::watcher::vcs_ignore::VcsIgnore;
     use std::io::Write;
     use tempfile::tempdir;
     use tokio::sync::broadcast;
@@ -412,9 +414,17 @@ mod tests {
 
     async fn start_vault(vault_path: &Path, data_dir: &Path, vault_id: VaultId) -> LiveVault {
         let config = config_for(vault_path, data_dir);
+        start_vault_with_config(vault_path, vault_id, config).await
+    }
+
+    async fn start_vault_with_config(
+        vault_path: &Path,
+        vault_id: VaultId,
+        config: Config,
+    ) -> LiveVault {
         let store = Store::open(
             &vault_id,
-            data_dir,
+            &config.storage.data_dir.0,
             &config.storage.index_file,
             &config.embedding,
         )
@@ -425,11 +435,18 @@ mod tests {
             Scanner::new(vault_path, &config, &store, embedder).expect("construct scanner");
         scanner.run().await.expect("initial scan");
 
-        let ignores = GlobSetBuilder::new().build().unwrap();
+        let filter = Arc::new(InclusionFilter {
+            config: config
+                .watcher
+                .compiled_ignores_split()
+                .expect("compile ignores"),
+            vcs: VcsIgnore::build(vault_path).expect("build vcs ignores"),
+            respect_gitignore: config.watcher.respect_gitignore,
+        });
         let (watcher, rx) = spawn_watcher(
             &vault_id,
             vault_path,
-            ignores,
+            filter,
             Duration::from_millis(DEBOUNCE_MS),
             64,
         )
@@ -524,6 +541,91 @@ mod tests {
             .expect("watched vault should publish a delete event");
         assert_eq!(event_delete.path, "smoke.md");
         assert_eq!(event_delete.vault, vault_id);
+
+        live.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn watcher_respects_gitignore_excludes() {
+        // A vault with a .gitignore that excludes `node_modules/` should not
+        // emit watcher events for files created inside that directory.
+        let root = tempdir().unwrap();
+        let vault = root.path().join("vault");
+        let data_dir = root.path().join("data");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join(".gitignore"), b"node_modules/\n").unwrap();
+        fs::create_dir_all(vault.join("node_modules")).unwrap();
+
+        let vault_id = VaultId::new();
+        let live = start_vault(&vault, &data_dir, vault_id.clone()).await;
+        let mut rx = live.subscribe();
+
+        tokio::time::sleep(SETTLE).await;
+
+        // Write a file outside node_modules/ — should surface an event.
+        let kept = vault.join("kept.md");
+        fs::write(&kept, b"# kept\n").unwrap();
+        tokio::time::sleep(SETTLE).await;
+
+        let ev = recv_file_changed(&mut rx)
+            .await
+            .expect("kept.md should emit a watcher event");
+        assert_eq!(ev.path, "kept.md");
+
+        // Write a file inside node_modules/ — gitignore says exclude, so no event.
+        let ignored = vault.join("node_modules/pkg.md");
+        fs::write(&ignored, b"# pkg\n").unwrap();
+        tokio::time::sleep(SETTLE).await;
+
+        let no_ev = recv_file_changed(&mut rx).await;
+        assert!(
+            no_ev.is_none(),
+            "node_modules/pkg.md must be silenced by .gitignore; got event: {no_ev:?}"
+        );
+
+        live.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn watcher_config_reinclude_beats_gitignore() {
+        // .gitignore excludes the entire `drafts/` directory. The operator adds
+        // `!drafts/important.md` to watcher.ignore_patterns to re-include one
+        // file. Only drafts/important.md should surface watcher events;
+        // drafts/other.md remains silenced by .gitignore.
+        let root = tempdir().unwrap();
+        let vault = root.path().join("vault");
+        let data_dir = root.path().join("data");
+        fs::create_dir_all(vault.join("drafts")).unwrap();
+        fs::write(vault.join(".gitignore"), b"drafts/\n").unwrap();
+
+        let mut config = config_for(&vault, &data_dir);
+        config.watcher.ignore_patterns = vec!["!drafts/important.md".to_string()];
+
+        let vault_id = VaultId::new();
+        let live = start_vault_with_config(&vault, vault_id.clone(), config).await;
+        let mut rx = live.subscribe();
+
+        tokio::time::sleep(SETTLE).await;
+
+        // drafts/important.md is re-included by the config override — should emit an event.
+        let important = vault.join("drafts/important.md");
+        fs::write(&important, b"# important\n").unwrap();
+        tokio::time::sleep(SETTLE).await;
+
+        let ev = recv_file_changed(&mut rx).await.expect(
+            "drafts/important.md must emit a watcher event (config re-include beats .gitignore)",
+        );
+        assert_eq!(ev.path, "drafts/important.md");
+
+        // drafts/other.md is excluded by .gitignore with no override — no event.
+        fs::write(vault.join("drafts/other.md"), b"# other\n").unwrap();
+        tokio::time::sleep(SETTLE).await;
+
+        let no_ev = recv_file_changed(&mut rx).await;
+        assert!(
+            no_ev.is_none(),
+            "drafts/other.md must be silenced by .gitignore; got event: {no_ev:?}"
+        );
 
         live.shutdown().await;
     }

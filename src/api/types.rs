@@ -308,6 +308,17 @@ pub struct StatusResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
+    pub vaults_active: u64,
+    pub vaults_errored: u64,
+    pub uptime_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingHealth>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingHealth {
+    pub status: String,
+    pub endpoint: String,
 }
 
 // ===== Vault control-plane request/response shapes =====

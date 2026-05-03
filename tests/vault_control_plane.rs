@@ -89,6 +89,8 @@ async fn spawn_live_daemon() -> LiveControlPlaneDaemon {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
 
@@ -233,6 +235,8 @@ async fn spawn_multi_vault_daemon_with(
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
 
@@ -1090,6 +1094,8 @@ async fn spawn_live_daemon_with_errored_row(
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
 

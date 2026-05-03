@@ -260,6 +260,7 @@ fn compiled_ignores_reports_offending_pattern() {
     let cfg = WatcherConfig {
         debounce_ms: 500,
         ignore_patterns: vec!["valid/**".to_string(), "[".to_string()],
+        respect_gitignore: true,
     };
 
     let err = cfg

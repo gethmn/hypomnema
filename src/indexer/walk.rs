@@ -4,9 +4,10 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use globset::GlobSet;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
+
+use crate::watcher::inclusion::InclusionFilter;
 
 #[derive(Debug)]
 pub struct WalkedFile {
@@ -23,7 +24,7 @@ pub struct WalkOutcome {
     pub walk_errors: usize,
 }
 
-pub fn walk_vault(vault: &Path, ignores: &GlobSet) -> Result<WalkOutcome> {
+pub fn walk_vault(vault: &Path, filter: &InclusionFilter) -> Result<WalkOutcome> {
     let canonical_vault = fs::canonicalize(vault)
         .with_context(|| format!("canonicalizing vault {}", vault.display()))?;
 
@@ -85,7 +86,7 @@ pub fn walk_vault(vault: &Path, ignores: &GlobSet) -> Result<WalkOutcome> {
                 continue;
             }
         };
-        if ignores.is_match(&rel_str) {
+        if !filter.includes(&rel_str, false) {
             debug!("walk: ignoring {}", rel_str);
             continue;
         }
@@ -134,19 +135,35 @@ pub(crate) fn format_mtime(t: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use globset::{Glob, GlobSetBuilder};
     use tempfile::tempdir;
 
-    fn empty_globset() -> GlobSet {
-        GlobSetBuilder::new().build().unwrap()
+    use crate::config::WatcherConfig;
+    use crate::watcher::vcs_ignore::VcsIgnore;
+
+    fn empty_filter() -> InclusionFilter {
+        InclusionFilter {
+            config: WatcherConfig {
+                ignore_patterns: vec![],
+                ..WatcherConfig::default()
+            }
+            .compiled_ignores_split()
+            .unwrap(),
+            vcs: VcsIgnore::empty(),
+            respect_gitignore: false,
+        }
     }
 
-    fn ignore_set(patterns: &[&str]) -> GlobSet {
-        let mut builder = GlobSetBuilder::new();
-        for p in patterns {
-            builder.add(Glob::new(p).unwrap());
+    fn filter_with_patterns(patterns: &[&str]) -> InclusionFilter {
+        InclusionFilter {
+            config: WatcherConfig {
+                ignore_patterns: patterns.iter().map(|s| s.to_string()).collect(),
+                ..WatcherConfig::default()
+            }
+            .compiled_ignores_split()
+            .unwrap(),
+            vcs: VcsIgnore::empty(),
+            respect_gitignore: false,
         }
-        builder.build().unwrap()
     }
 
     #[test]
@@ -158,7 +175,7 @@ mod tests {
         fs::write(vault.join("c.markdown"), b"# C").unwrap();
         fs::write(vault.join(".hidden.md"), b"# H").unwrap();
 
-        let outcome = walk_vault(vault, &empty_globset()).unwrap();
+        let outcome = walk_vault(vault, &empty_filter()).unwrap();
         let mut paths: Vec<_> = outcome.entries.iter().map(|e| e.rel_path.clone()).collect();
         paths.sort();
         assert_eq!(paths, vec![".hidden.md".to_string(), "a.md".to_string()]);
@@ -174,8 +191,12 @@ mod tests {
         fs::create_dir_all(vault.join("notes/dir")).unwrap();
         fs::write(vault.join("notes/dir/file.md.tmp"), b"x").unwrap();
 
-        let ignores = ignore_set(&[".git/**", "**/*.tmp"]);
-        let outcome = walk_vault(vault, &ignores).unwrap();
+        // .git/** is always excluded by InclusionFilter step 1; **/*.tmp is a
+        // config exclude pattern (note: file.md.tmp has no .md extension so
+        // the extension check would already drop it, but the config pattern is
+        // kept for API-equivalence with the old GlobSet test).
+        let filter = filter_with_patterns(&[".git/**", "**/*.tmp"]);
+        let outcome = walk_vault(vault, &filter).unwrap();
         let paths: Vec<_> = outcome.entries.iter().map(|e| e.rel_path.clone()).collect();
         assert_eq!(paths, vec!["kept.md".to_string()]);
     }
@@ -187,7 +208,7 @@ mod tests {
         fs::create_dir_all(vault.join("a/b")).unwrap();
         fs::write(vault.join("a/b/note.md"), b"# N").unwrap();
 
-        let outcome = walk_vault(vault, &empty_globset()).unwrap();
+        let outcome = walk_vault(vault, &empty_filter()).unwrap();
         let paths: Vec<_> = outcome.entries.iter().map(|e| e.rel_path.clone()).collect();
         assert_eq!(paths, vec!["a/b/note.md".to_string()]);
     }
@@ -199,7 +220,7 @@ mod tests {
         let payload = b"hello, walker";
         fs::write(vault.join("note.md"), payload).unwrap();
 
-        let outcome = walk_vault(vault, &empty_globset()).unwrap();
+        let outcome = walk_vault(vault, &empty_filter()).unwrap();
         assert_eq!(outcome.entries.len(), 1);
         let entry = &outcome.entries[0];
         assert_eq!(entry.size, payload.len() as i64);
@@ -217,7 +238,7 @@ mod tests {
         fs::write(vault.join("real.md"), b"# real").unwrap();
         symlink(vault.join("real.md"), vault.join("link.md")).unwrap();
 
-        let outcome = walk_vault(vault, &empty_globset()).unwrap();
+        let outcome = walk_vault(vault, &empty_filter()).unwrap();
         let mut paths: Vec<_> = outcome.entries.iter().map(|e| e.rel_path.clone()).collect();
         paths.sort();
         assert_eq!(paths, vec!["link.md".to_string(), "real.md".to_string()]);
@@ -235,7 +256,7 @@ mod tests {
         fs::write(vault.join("note.md"), b"# note").unwrap();
         symlink(outside.path().join("secret.md"), vault.join("link.md")).unwrap();
 
-        let outcome = walk_vault(vault, &empty_globset()).unwrap();
+        let outcome = walk_vault(vault, &empty_filter()).unwrap();
         let paths: Vec<_> = outcome.entries.iter().map(|e| e.rel_path.clone()).collect();
         assert_eq!(paths, vec!["note.md".to_string()]);
         assert!(outcome.skipped_outside_vault >= 1);

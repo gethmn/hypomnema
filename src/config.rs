@@ -252,6 +252,8 @@ pub struct WatcherConfig {
     pub debounce_ms: u64,
     #[serde(default = "default_ignore_patterns")]
     pub ignore_patterns: Vec<String>,
+    #[serde(default = "default_respect_gitignore")]
+    pub respect_gitignore: bool,
 }
 
 impl Default for WatcherConfig {
@@ -259,8 +261,20 @@ impl Default for WatcherConfig {
         Self {
             debounce_ms: default_debounce_ms(),
             ignore_patterns: default_ignore_patterns(),
+            respect_gitignore: default_respect_gitignore(),
         }
     }
+}
+
+fn default_respect_gitignore() -> bool {
+    true
+}
+
+/// Split ignore patterns: patterns starting with `!` are re-include overrides;
+/// all others are standard excludes.
+pub struct CompiledIgnores {
+    pub exclude: GlobSet,
+    pub reinclude: GlobSet,
 }
 
 fn default_debounce_ms() -> u64 {
@@ -278,17 +292,41 @@ fn default_ignore_patterns() -> Vec<String> {
 }
 
 impl WatcherConfig {
-    pub fn compiled_ignores(&self) -> Result<GlobSet> {
-        let mut builder = GlobSetBuilder::new();
+    /// Split ignore patterns into exclude and re-include tiers.
+    ///
+    /// Patterns starting with `!` are stripped of the leading `!` and placed
+    /// in the re-include set (operator override — beats .gitignore exclusions).
+    /// All other patterns form the exclude set.
+    pub fn compiled_ignores_split(&self) -> Result<CompiledIgnores> {
+        let mut exclude_builder = GlobSetBuilder::new();
+        let mut reinclude_builder = GlobSetBuilder::new();
         for pattern in &self.ignore_patterns {
-            let glob = Glob::new(pattern).with_context(|| {
-                format!("invalid ignore pattern in watcher.ignore_patterns: {pattern:?}")
-            })?;
-            builder.add(glob);
+            if let Some(rest) = pattern.strip_prefix('!') {
+                let glob = Glob::new(rest).with_context(|| {
+                    format!("invalid re-include pattern in watcher.ignore_patterns: {pattern:?}")
+                })?;
+                reinclude_builder.add(glob);
+            } else {
+                let glob = Glob::new(pattern).with_context(|| {
+                    format!("invalid ignore pattern in watcher.ignore_patterns: {pattern:?}")
+                })?;
+                exclude_builder.add(glob);
+            }
         }
-        builder
-            .build()
-            .context("compiling watcher.ignore_patterns into GlobSet")
+        Ok(CompiledIgnores {
+            exclude: exclude_builder
+                .build()
+                .context("compiling exclude patterns into GlobSet")?,
+            reinclude: reinclude_builder
+                .build()
+                .context("compiling re-include patterns into GlobSet")?,
+        })
+    }
+
+    /// Returns only the exclude tier. Existing callers use this shim until
+    /// Batch V2 migrates them to `InclusionFilter`.
+    pub fn compiled_ignores(&self) -> Result<GlobSet> {
+        Ok(self.compiled_ignores_split()?.exclude)
     }
 }
 
@@ -559,6 +597,42 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "mcp.http.path must be \"/mcp\" in this version of Hypomnema"
+        );
+    }
+
+    #[test]
+    fn respect_gitignore_defaults_to_true() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.watcher.respect_gitignore);
+    }
+
+    #[test]
+    fn respect_gitignore_explicit_false() {
+        let cfg: Config = toml::from_str("[watcher]\nrespect_gitignore = false\n").unwrap();
+        assert!(!cfg.watcher.respect_gitignore);
+    }
+
+    #[test]
+    fn compiled_ignores_split_separates_exclude_and_reinclude() {
+        let cfg: Config =
+            toml::from_str("[watcher]\nignore_patterns = [\"**/target/**\", \"!important.log\"]\n")
+                .unwrap();
+        let split = cfg.watcher.compiled_ignores_split().unwrap();
+        assert!(
+            split.exclude.is_match("target/foo"),
+            "exclude should match target/foo"
+        );
+        assert!(
+            !split.reinclude.is_match("target/foo"),
+            "reinclude should not match target/foo"
+        );
+        assert!(
+            split.reinclude.is_match("important.log"),
+            "reinclude should match important.log"
+        );
+        assert!(
+            !split.exclude.is_match("important.log"),
+            "exclude should not match important.log (it's in reinclude)"
         );
     }
 }

@@ -111,6 +111,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
 
@@ -171,7 +173,7 @@ async fn health_endpoint_reachable() {
         .await
         .expect("/health JSON");
 
-    assert_eq!(body, json!({ "status": "ok" }));
+    assert_eq!(body["status"], "healthy");
     daemon.shutdown().await;
 }
 

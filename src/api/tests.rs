@@ -7,6 +7,7 @@ use tokio::task;
 use tower::ServiceExt;
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use super::{ApiState, VaultEntry, router};
 use crate::config::{
@@ -67,6 +68,8 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
     Harness {
         _dir: dir,
@@ -119,7 +122,7 @@ async fn body_json(resp: axum::http::Response<Body>) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn health_returns_200_with_status_ok() {
+async fn health_returns_200_with_healthy_status() {
     let h = harness().await;
     let app = router(h.state.clone());
     let req = Request::builder()
@@ -130,7 +133,10 @@ async fn health_returns_200_with_status_ok() {
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "status": "ok" }));
+    assert_eq!(body["status"], "healthy");
+    assert_eq!(body["vaults_active"], 1);
+    assert_eq!(body["vaults_errored"], 0);
+    assert!(body["uptime_seconds"].is_number());
 }
 
 #[tokio::test]
@@ -770,6 +776,8 @@ async fn vault_harness() -> VaultHarness {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
     VaultHarness {
         _root: root,
@@ -1109,6 +1117,8 @@ async fn multi_vault_harness_with(
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
     MultiVaultHarness {
         _root: root,
@@ -1664,6 +1674,8 @@ async fn errored_vault_harness(
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
     (
         VaultHarness {
@@ -1965,6 +1977,8 @@ async fn watch_harness() -> WatchHarness {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
     WatchHarness {
         _dir: dir,
@@ -2130,6 +2144,8 @@ async fn watch_all_streams_events_from_all_active_vaults() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
 
     let app = router(state.clone());
@@ -2191,6 +2207,8 @@ async fn watch_all_filters_out_inactive_vault_events() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: Instant::now(),
+        embedding_endpoint: None,
     };
 
     let app = router(state.clone());

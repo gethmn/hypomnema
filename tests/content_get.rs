@@ -91,6 +91,8 @@ async fn spawn_daemon_with_entries(
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -337,6 +339,8 @@ async fn content_get_multi_vault_fanout() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -458,6 +462,8 @@ async fn content_get_explicit_vault_scoping() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -555,6 +561,8 @@ async fn content_get_paused_vault_behavior() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -666,6 +674,8 @@ async fn content_get_transport_parity_http_vs_mcp_backend() {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
     let listener = TcpListener::bind("127.0.0.1:0")

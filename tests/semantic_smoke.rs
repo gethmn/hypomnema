@@ -127,6 +127,8 @@ async fn spawn_smoke_daemon() -> SmokeDaemon {
     let api_state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
         Arc::new(InProcessBackend::new(manager.clone()));

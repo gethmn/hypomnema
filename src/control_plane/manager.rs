@@ -18,6 +18,8 @@ use crate::legacy_state_migration;
 use crate::store::Store;
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
 use crate::watcher;
+use crate::watcher::inclusion::InclusionFilter;
+use crate::watcher::vcs_ignore::VcsIgnore;
 
 use super::runner::{RunnerLifecycle, VaultRunner};
 
@@ -1073,6 +1075,29 @@ impl VaultManager {
         })
     }
 
+    /// Returns true if any active runner's consumer task has finished
+    /// unexpectedly. Skips test-only runners (lifecycle = None). A finished
+    /// consumer means the watcher loop has crashed.
+    pub async fn any_watcher_dead(&self) -> bool {
+        let runners: Vec<Arc<VaultRunner>> = {
+            let guard = self
+                .inner
+                .runners
+                .read()
+                .expect("vault manager runners RwLock poisoned");
+            guard.values().cloned().collect()
+        };
+        for runner in runners {
+            let lifecycle_guard = runner.lifecycle.lock().await;
+            if let Some(lc) = lifecycle_guard.as_ref() {
+                if lc.consumer_handle.is_finished() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn runner_for(&self, id: &VaultId) -> Option<Arc<VaultRunner>> {
         let guard = self
             .inner
@@ -1268,14 +1293,18 @@ async fn spawn_runner_parts(
         );
     }
 
-    let ignores = config
-        .watcher
-        .compiled_ignores()
-        .context("compiling watcher.ignore_patterns")?;
+    let filter = Arc::new(InclusionFilter {
+        config: config
+            .watcher
+            .compiled_ignores_split()
+            .context("compiling watcher.ignore_patterns")?,
+        vcs: VcsIgnore::build(&row.path).context("building VcsIgnore for watcher")?,
+        respect_gitignore: config.watcher.respect_gitignore,
+    });
     let (watcher_handle, rx) = watcher::spawn_watcher(
         &row.id,
         &row.path,
-        ignores,
+        filter,
         Duration::from_millis(config.watcher.debounce_ms),
         WATCHER_BUFFER,
     )

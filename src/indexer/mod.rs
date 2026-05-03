@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use globset::GlobSet;
 use rusqlite::{OptionalExtension, params};
 use tokio::task;
 use tracing::{debug, error, info};
@@ -19,6 +18,8 @@ use crate::config::Config;
 use crate::embedding::{Embedder, EmbeddingError};
 use crate::store::{SqlitePool, Store, rewrite_chunks_for_file};
 use crate::vault_registry::VaultId;
+use crate::watcher::inclusion::InclusionFilter;
+use crate::watcher::vcs_ignore::VcsIgnore;
 
 pub use hash::hash_file;
 
@@ -50,7 +51,7 @@ pub enum RemoveOutcome {
 pub struct Scanner {
     vault_id: VaultId,
     vault: PathBuf,
-    ignores: GlobSet,
+    filter: Arc<InclusionFilter>,
     pool: SqlitePool,
     embedder: Arc<dyn Embedder>,
 }
@@ -62,14 +63,18 @@ impl Scanner {
         store: &Store,
         embedder: Arc<dyn Embedder>,
     ) -> Result<Self> {
-        let ignores = config
-            .watcher
-            .compiled_ignores()
-            .context("compiling watcher.ignore_patterns for scanner")?;
+        let filter = Arc::new(InclusionFilter {
+            config: config
+                .watcher
+                .compiled_ignores_split()
+                .context("compiling watcher.ignore_patterns for scanner")?,
+            vcs: VcsIgnore::build(vault_path).context("building VcsIgnore for scanner")?,
+            respect_gitignore: config.watcher.respect_gitignore,
+        });
         Ok(Self {
             vault_id: store.vault_id().clone(),
             vault: vault_path.to_path_buf(),
-            ignores,
+            filter,
             pool: store.pool(),
             embedder,
         })
@@ -78,7 +83,7 @@ impl Scanner {
     pub async fn run(&self) -> Result<ScanReport> {
         let started = Instant::now();
         let vault = self.vault.clone();
-        let ignores = self.ignores.clone();
+        let filter = self.filter.clone();
         let pool = self.pool.clone();
 
         info!(
@@ -90,7 +95,7 @@ impl Scanner {
         // Phase 1 (sync): walk + load existing files into HashMap.
         let (walked, mut existing) = task::spawn_blocking(
             move || -> Result<(walk::WalkOutcome, HashMap<String, StoredFile>)> {
-                let walked = walk::walk_vault(&vault, &ignores)?;
+                let walked = walk::walk_vault(&vault, &filter)?;
                 let conn = pool
                     .get()
                     .context("acquiring connection from pool for scan preflight")?;
@@ -225,9 +230,9 @@ impl Scanner {
     /// for files whose content_hash drifted from the on-disk hash.
     pub async fn vault_paths(&self) -> Result<Vec<String>> {
         let vault = self.vault.clone();
-        let ignores = self.ignores.clone();
+        let filter = self.filter.clone();
         task::spawn_blocking(move || -> Result<Vec<String>> {
-            let walked = walk::walk_vault(&vault, &ignores)?;
+            let walked = walk::walk_vault(&vault, &filter)?;
             Ok(walked.entries.into_iter().map(|e| e.rel_path).collect())
         })
         .await

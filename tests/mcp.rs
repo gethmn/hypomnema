@@ -32,6 +32,8 @@ use hypomnema::indexer::Scanner;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::VaultStatus;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
+use hypomnema::watcher::inclusion::InclusionFilter;
+use hypomnema::watcher::vcs_ignore::VcsIgnore;
 use hypomnema::watcher::{self, Watcher};
 use rusqlite::Connection;
 use serde_json::{Value, json};
@@ -147,15 +149,19 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         Scanner::new(&fx.vault, &fx.config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let ignores = fx
-        .config
-        .watcher
-        .compiled_ignores()
-        .expect("compile ignores");
+    let filter = Arc::new(InclusionFilter {
+        config: fx
+            .config
+            .watcher
+            .compiled_ignores_split()
+            .expect("compile ignores"),
+        vcs: VcsIgnore::build(&fx.vault).expect("build vcs ignores"),
+        respect_gitignore: fx.config.watcher.respect_gitignore,
+    });
     let (watcher, rx) = watcher::spawn_watcher(
         &fx.vault_id,
         &fx.vault,
-        ignores,
+        filter,
         Duration::from_millis(fx.config.watcher.debounce_ms),
         256,
     )
@@ -188,6 +194,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
     let state = ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     };
     let app = api::router(state);
 

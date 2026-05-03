@@ -9,6 +9,7 @@ pub(crate) mod watch;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Router;
 use axum::routing::{get, post};
@@ -45,6 +46,12 @@ impl VaultEntry {
 pub struct ApiState {
     pub vault_manager: Arc<VaultManager>,
     pub event_bus: Arc<EventBus>,
+    /// Monotonic instant captured at daemon start; used to derive uptime_seconds.
+    pub started_at: Instant,
+    /// Embedding service endpoint to probe on /health. `None` disables the
+    /// embedding signal (used in test fixtures that don't run an embedding
+    /// service).
+    pub embedding_endpoint: Option<String>,
 }
 
 pub fn router(state: ApiState) -> Router {

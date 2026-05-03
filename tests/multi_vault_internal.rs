@@ -33,6 +33,8 @@ use hypomnema::indexer::Scanner;
 use hypomnema::legacy_state_migration;
 use hypomnema::store::Store;
 use hypomnema::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
+use hypomnema::watcher::inclusion::InclusionFilter;
+use hypomnema::watcher::vcs_ignore::VcsIgnore;
 use hypomnema::watcher::{self, Watcher};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -111,6 +113,8 @@ fn build_test_state(
     ApiState {
         vault_manager: manager.clone(),
         event_bus: manager.event_bus(),
+        started_at: std::time::Instant::now(),
+        embedding_endpoint: None,
     }
 }
 
@@ -187,11 +191,18 @@ async fn spawn_watcher_runtime(
         Scanner::new(&row.path, config, &store, embedder.clone()).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let ignores = config.watcher.compiled_ignores().expect("compile ignores");
+    let filter = Arc::new(InclusionFilter {
+        config: config
+            .watcher
+            .compiled_ignores_split()
+            .expect("compile ignores"),
+        vcs: VcsIgnore::build(&row.path).expect("build vcs ignores"),
+        respect_gitignore: config.watcher.respect_gitignore,
+    });
     let (watcher_handle, rx) = watcher::spawn_watcher(
         &row.id,
         &row.path,
-        ignores,
+        filter,
         Duration::from_millis(config.watcher.debounce_ms),
         256,
     )

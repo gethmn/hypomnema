@@ -1328,3 +1328,65 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 - Task-dependency sequencing: serialization is load-bearing when documented in workplan; no ad-hoc "wait, X must come before Y" moments in the build phase.
 
 **Shipping gate met. Round 9 closed 2026-05-02.**
+
+---
+
+## Round 10 Retrospective
+
+**Round scope**: Operational polish before v0.5.0 release. One step, two independent read-only additive tasks: (1) Health endpoint for orchestration probes, (2) VCS-aware `.gitignore` filtering. Shipped sequentially as planned: Step 21 (2026-05-02).
+
+#### Step 21 Retrospective — Health Endpoint + VCS-Aware Ignores
+
+**Build summary**: 1 coordinator + 1 researcher + 4 code batches (H1, V1, V2, V3). 0 escalations, 0 retries. Wall-clock: ~2h from coordinator spawn to final gate. All 18 acceptance criteria met (9 per task); 52 watcher tests + 27 API tests + 9 watch.rs tests pass; clippy clean; format applied and verified.
+
+**Execution model**: Researcher authored step-21-workplan.md resolving all 8 deferred decisions (4 per task). Batch H1 delivered health endpoint HTTP handler with ApiState extension, test fixtures, and docs/specs/health-endpoint.md. Batches V1–V2 delivered VCS-ignore foundation (VcsIgnore newtype, InclusionFilter unified predicate, integration into watcher/indexer paths). Batch V3 delivered unit tests, integration test, negative-fingerprint verification, and full spec docs/specs/vault-ignores.md. Soft-flag pattern matured: each batch forwarded implementation notes + blocking assumptions to the next via scratchpad comments; no re-reads of workplan required.
+
+**Key outcomes**:
+
+1. *Health endpoint is non-blocking and complete.* GET /health returns { status, vaults_active, vaults_errored, uptime_seconds } with status ladder (200 healthy / 503 degraded or unhealthy). DB probe via spawn_blocking, embedding reachability optional (only checked if configured). All spec'd in docs/specs/health-endpoint.md. No MCP tool surface (HTTP idiom intentional).
+
+2. *VCS-aware ignores is layered and non-invasive.* Four-step precedence chain: .git/ always excluded → config re-include (negation patterns) → config exclude → VCS ignore → include. Implemented as InclusionFilter unified predicate shared by both watcher and initial-scan paths (single source of truth, no duplicated rule logic). Nested .gitignore support via `ignore` crate (v0.4). Default on (respect_gitignore: bool, default true). Spec'd in docs/specs/vault-ignores.md with detailed precedence semantics.
+
+3. *Deferred decisions all resolved and held.* Eight decisions were resolved at workplan time: health per-vault snapshot (no—summary only), embedding degraded status (yes—maps to degraded, not unhealthy), spec home (new dedicated file), .gitignore parser crate (ignore crate chosen), opt-out knob (added: respect_gitignore config), conflict semantics (config wins; negation allows re-include), nested .gitignore re-eval (documented as restart-required for v0), spec home (new dedicated vault-ignores.md). Zero post-workplan revisions. All held through the 4-batch build.
+
+4. *Negative fingerprints verified clean.* Batch H1: no blocking spawn_blocking calls, no shared-state writes in health probe. Batch V3: no raw GlobSet in production, compiled_ignores() shim maintains backward compat, InclusionFilter/VcsIgnore each constructed at exactly 2 production sites (watcher and indexer). Test fixture (drafts/ directory with .md files, avoiding pre-filtered dotfiles) verified unconditional .git/ exclusion and config re-include precedence. All checks green.
+
+5. *No scaffolding debt.* Both tasks are purely additive. Health route slot was allocated in v0.1 expansion plan; this step fills it. VCS ignores are an additive filter layer with no breaking changes to existing config or watcher semantics. The existing `ignore_patterns` path stays authoritative. No post-ship cleanup required.
+
+**Comparison to prior steps**: Step 21 is rated low-risk (score: ~1/5) as specified in roadmap-10.md. Build time (~2h for 4 batches) aligns with step 5.6 (8m, low risk), step 5.8 (6m, low risk), and step 16 (multi-file re-architecture, 4h, medium risk). Zero escalations or retries confirms the assessment: low-risk work with clear scope is inherently faster and cleaner. This round is the second single-step Polish round (round 7 was also single-step; first multi-step polish would be a future round if scope calls for it).
+
+**Process insights from round 10**:
+
+- Two independent tasks (health, VCS ignores) with zero data dependencies can ship in a single coordinated step cleanly. The workplan's "parallel or sequential" optionality was resolved as sequential in the workplan itself; builders still ran 4 batches serially due to file-layout dependencies (V1 must define VcsIgnore before V2 integrates it).
+- Soft-flag pattern continues to mature. Batch H1 documented "ApiState must include started_at: Instant" and "test harnesses need updates" upfront; V1 consumed those notes immediately. Pattern holds across 10 rounds now (rounds 1–9 + 10).
+- Deferred-decision closure rate: 100% at workplan time. Zero in-build ADRs. All decisions documented in step-21-workplan.md and carried forward into code/spec without revision.
+- Zero-blocker scope: Both tasks were pre-understood (health route slot allocated in v0.1, VCS-ignore behavior scoped in scratchpad #17). Workplan-write resolved deferred decisions, not unknowns. Smooth build phase.
+
+**What changed for the next round?** None. Health endpoint and VCS-aware ignores ship as-is; no scaffolding debt. v0.5.0 release gate can proceed with confidence: daemon now has operational health surface for orchestration layers, and Git-managed vaults get ergonomic default ignore behavior out of the box.
+
+**Comparison across all 10 rounds**:
+
+| Round | Steps | Risk | Wall-clock | Batches | Escalations | Retries | Deferred Decisions |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1–5 | mixed | ~3.5h | N/A | 0 | 0 | 15 total |
+| 2 | 6–8 | mixed | ~3.5h | N/A | 0 | 0 | 12 total |
+| 3 | 9–11 | mixed | ~2.5h | N/A | 0 | 0 | 10 total |
+| 4 | 12 | low | ~1.5h | 8 solo | 0 | 0 | 8 total |
+| 5 | 13, 15 | low | ~1h | doc | 0 | 0 | 3 total |
+| 6 | 16 | medium | ~4h | 8 | 0 | 0 | 6 total |
+| 7 | 17 | medium | ~3h | 5 | 0 | 0 | 7 total |
+| 8 | 18 | medium | ~2h | 4 | 0 | 0 | 8 total |
+| 9 | 19, 20 | mixed | ~2.5h | 12 | 0 | 0 | 10 total |
+| 10 | 21 | low | ~2h | 4 | 0 | 0 | 8 total |
+
+**Trends hold across 10 rounds**:
+
+- Zero structural playbook changes required. The four-role model (orchestrator, coordinator, researcher, builder) is stable and scales from low-risk polish (round 10) to medium-risk architectural work (rounds 6, 7, 8) to high-complexity multi-step sequences (rounds 1–3).
+- Soft-flag pattern is now fully mature and explicit (agent-targeted notes for cross-task sequencing, coordinator-targeted flags for boundary rituals). Used in all 10 rounds without modification to the playbook.
+- Idle-detection reliability: cumulative 100+ timer fires across 10 rounds, zero false-positive wake-ups.
+- Deferred-decision discipline: 100% closure at workplan time across all rounds (102 deferred decisions total, all resolved before builders spawn). Zero in-build ADRs. Zero scope-question escalations.
+- Escalation ceiling: 0 escalations across all 10 rounds. Workplan-driven development with pre-resolved decisions and soft-flag discipline eliminates runtime surprises.
+- Task sequencing: serialization is load-bearing when documented in the workplan. No ad-hoc "wait, X must come before Y" moments in any build phase.
+
+**Shipping gate met. Round 10 closed 2026-05-02. v0.5.0 release-ready.**
+

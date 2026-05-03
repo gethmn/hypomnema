@@ -7,3 +7,4 @@ result-*
 !.config/
 !.config/nextest.toml
 /.claude/worktrees
+/.claude/*.lock

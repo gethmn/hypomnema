@@ -741,6 +741,8 @@ The error envelope shape `{"error": {"code": "<code>", "message": "<human text>"
 
 Per-vault instances. Lifecycle is driven by control-plane mutations: `create` constructs and starts; `pause` / `terminate` signal shutdown via `WatcherShutdownHandle`; `resume` / `reset` reconstruct. The watcher and indexer never communicate across vaults.
 
+File-scope filtering (`.gitignore` chain, `ignore_patterns`, `.git/` unconditional exclusion) is applied by `InclusionFilter` — see [vault-ignores.md](./vault-ignores.md) for the full precedence chain and configuration reference.
+
 ### With Change Events
 
 Per-vault and all-vault live subscriptions use the daemon's in-memory event bus. Each event carries the surrogate `vault` ID (never `vault_name`). See [change-events.md](./change-events.md).

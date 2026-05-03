@@ -9,6 +9,8 @@ use hypomnema::events::{EventBus, EventType, FileChangedEvent, StreamEvent};
 use hypomnema::indexer::{Scanner, hash_file};
 use hypomnema::store::Store;
 use hypomnema::vault_registry::VaultId;
+use hypomnema::watcher::inclusion::InclusionFilter;
+use hypomnema::watcher::vcs_ignore::VcsIgnore;
 use hypomnema::watcher::{self, Watcher};
 use tempfile::TempDir;
 use tokio::sync::{broadcast, watch};
@@ -95,15 +97,19 @@ async fn start(fx: &Fixture) -> Live {
     let scanner = Scanner::new(&fx.vault, &fx.config, &store, embedder).expect("construct scanner");
     let _ = scanner.run().await.expect("initial scan");
 
-    let ignores = fx
-        .config
-        .watcher
-        .compiled_ignores()
-        .expect("compile ignores");
+    let filter = Arc::new(InclusionFilter {
+        config: fx
+            .config
+            .watcher
+            .compiled_ignores_split()
+            .expect("compile ignores"),
+        vcs: VcsIgnore::build(&fx.vault).expect("build vcs ignores"),
+        respect_gitignore: fx.config.watcher.respect_gitignore,
+    });
     let (watcher, rx) = watcher::spawn_watcher(
         &fx.vault_id,
         &fx.vault,
-        ignores,
+        filter,
         Duration::from_millis(fx.debounce_ms),
         256,
     )

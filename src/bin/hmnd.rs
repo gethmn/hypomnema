@@ -128,9 +128,12 @@ async fn run_daemon(config: Config) -> Result<()> {
         );
     }
 
+    let started_at = std::time::Instant::now();
     let api_state = ApiState {
         vault_manager: vault_manager.clone(),
         event_bus: vault_manager.event_bus(),
+        started_at,
+        embedding_endpoint: Some(config.embedding.endpoint.clone()),
     };
     let mut app = api::router(api_state);
 

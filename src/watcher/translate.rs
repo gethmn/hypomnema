@@ -1,16 +1,17 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use globset::GlobSet;
 use notify::EventKind;
 use notify::event::{ModifyKind, RenameMode};
 use notify_debouncer_full::DebouncedEvent;
 
 use super::WatchEvent;
 use super::filter;
+use super::inclusion::InclusionFilter;
 
 pub(super) struct TranslateCtx {
     pub vault_roots: Vec<PathBuf>,
-    pub ignores: GlobSet,
+    pub filter: Arc<InclusionFilter>,
 }
 
 pub(super) fn translate(events: Vec<DebouncedEvent>, ctx: &TranslateCtx) -> Vec<WatchEvent> {
@@ -107,7 +108,7 @@ fn filter_pass(abs: &Path, ctx: &TranslateCtx) -> Option<String> {
     if !filter::is_relevant_path(rel_path) {
         return None;
     }
-    if ctx.ignores.is_match(&rel) {
+    if !ctx.filter.includes(&rel, false) {
         return None;
     }
     if filter::is_sync_conflict(rel_path) {
@@ -119,27 +120,43 @@ fn filter_pass(abs: &Path, ctx: &TranslateCtx) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use globset::{Glob, GlobSetBuilder};
     use notify::Event;
     use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, MetadataKind, RemoveKind};
     use std::time::Instant;
 
-    fn empty_ignores() -> GlobSet {
-        GlobSetBuilder::new().build().unwrap()
+    use crate::config::WatcherConfig;
+    use crate::watcher::vcs_ignore::VcsIgnore;
+
+    fn empty_filter() -> Arc<InclusionFilter> {
+        Arc::new(InclusionFilter {
+            config: WatcherConfig {
+                ignore_patterns: vec![],
+                ..WatcherConfig::default()
+            }
+            .compiled_ignores_split()
+            .unwrap(),
+            vcs: VcsIgnore::empty(),
+            respect_gitignore: false,
+        })
     }
 
-    fn ignores(patterns: &[&str]) -> GlobSet {
-        let mut b = GlobSetBuilder::new();
-        for p in patterns {
-            b.add(Glob::new(p).unwrap());
-        }
-        b.build().unwrap()
+    fn filter_with_patterns(patterns: &[&str]) -> Arc<InclusionFilter> {
+        Arc::new(InclusionFilter {
+            config: WatcherConfig {
+                ignore_patterns: patterns.iter().map(|s| s.to_string()).collect(),
+                ..WatcherConfig::default()
+            }
+            .compiled_ignores_split()
+            .unwrap(),
+            vcs: VcsIgnore::empty(),
+            respect_gitignore: false,
+        })
     }
 
-    fn ctx_with(vault: &str, ignores_set: GlobSet) -> TranslateCtx {
+    fn ctx_with(vault: &str, filter: Arc<InclusionFilter>) -> TranslateCtx {
         TranslateCtx {
             vault_roots: vec![PathBuf::from(vault)],
-            ignores: ignores_set,
+            filter,
         }
     }
 
@@ -151,7 +168,7 @@ mod tests {
 
     #[test]
     fn create_file_becomes_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Create(CreateKind::File),
             vec![PathBuf::from("/vault/notes/a.md")],
@@ -164,7 +181,7 @@ mod tests {
 
     #[test]
     fn modify_data_becomes_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             vec![PathBuf::from("/vault/note.md")],
@@ -177,7 +194,7 @@ mod tests {
 
     #[test]
     fn modify_any_becomes_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Any),
             vec![PathBuf::from("/vault/note.md")],
@@ -190,7 +207,7 @@ mod tests {
 
     #[test]
     fn remove_file_becomes_remove() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Remove(RemoveKind::File),
             vec![PathBuf::from("/vault/notes/old.md")],
@@ -203,7 +220,7 @@ mod tests {
 
     #[test]
     fn modify_metadata_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Metadata(MetadataKind::WriteTime)),
             vec![PathBuf::from("/vault/note.md")],
@@ -213,7 +230,7 @@ mod tests {
 
     #[test]
     fn access_events_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Access(AccessKind::Open(AccessMode::Read)),
             vec![PathBuf::from("/vault/note.md")],
@@ -223,14 +240,14 @@ mod tests {
 
     #[test]
     fn other_kind_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(EventKind::Other, vec![PathBuf::from("/vault/note.md")]);
         assert!(translate(vec![ev], &ctx).is_empty());
     }
 
     #[test]
     fn rename_both_decomposes_into_remove_then_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
             vec![
@@ -249,7 +266,7 @@ mod tests {
 
     #[test]
     fn rename_from_becomes_remove() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::From)),
             vec![PathBuf::from("/vault/notes/gone.md")],
@@ -262,7 +279,7 @@ mod tests {
 
     #[test]
     fn rename_to_becomes_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::To)),
             vec![PathBuf::from("/vault/notes/new.md")],
@@ -275,7 +292,7 @@ mod tests {
 
     #[test]
     fn rename_any_treated_as_upsert() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
             vec![PathBuf::from("/vault/notes/uncertain.md")],
@@ -288,7 +305,7 @@ mod tests {
 
     #[test]
     fn rename_both_with_wrong_path_count_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
             vec![PathBuf::from("/vault/only.md")],
@@ -298,7 +315,7 @@ mod tests {
 
     #[test]
     fn outside_vault_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Create(CreateKind::File),
             vec![PathBuf::from("/elsewhere/strange.md")],
@@ -313,7 +330,7 @@ mod tests {
                 PathBuf::from("/private/var/folders/example/vault"),
                 PathBuf::from("/var/folders/example/vault"),
             ],
-            ignores: empty_ignores(),
+            filter: empty_filter(),
         };
         let ev = event(
             EventKind::Create(CreateKind::File),
@@ -327,7 +344,7 @@ mod tests {
 
     #[test]
     fn non_md_extension_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Create(CreateKind::File),
             vec![PathBuf::from("/vault/note.txt")],
@@ -337,7 +354,7 @@ mod tests {
 
     #[test]
     fn dotfile_component_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Create(CreateKind::File),
             vec![PathBuf::from("/vault/.git/HEAD.md")],
@@ -347,7 +364,7 @@ mod tests {
 
     #[test]
     fn ignore_globset_filters_match() {
-        let ctx = ctx_with("/vault", ignores(&["**/*.tmp.md"]));
+        let ctx = ctx_with("/vault", filter_with_patterns(&["**/*.tmp.md"]));
         let ev = event(
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             vec![PathBuf::from("/vault/notes/draft.tmp.md")],
@@ -357,7 +374,7 @@ mod tests {
 
     #[test]
     fn sync_conflict_dropped() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Create(CreateKind::File),
             vec![PathBuf::from("/vault/Note (conflicted copy 2026-04-25).md")],
@@ -367,7 +384,7 @@ mod tests {
 
     #[test]
     fn rename_both_one_side_filtered_other_side_emitted() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let ev = event(
             EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
             vec![
@@ -383,7 +400,7 @@ mod tests {
 
     #[test]
     fn batch_preserves_order_across_events() {
-        let ctx = ctx_with("/vault", empty_ignores());
+        let ctx = ctx_with("/vault", empty_filter());
         let events = vec![
             event(
                 EventKind::Create(CreateKind::File),

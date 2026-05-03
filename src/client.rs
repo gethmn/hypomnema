@@ -317,6 +317,8 @@ mod tests {
         let state = ApiState {
             vault_manager: manager.clone(),
             event_bus: manager.event_bus(),
+            started_at: std::time::Instant::now(),
+            embedding_endpoint: None,
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -364,7 +366,7 @@ mod tests {
         let cfg = smoke_config("127.0.0.1:7777");
         let client = DaemonClient::from_config(&cfg, Some(&daemon.base_url)).unwrap();
         let health = client.health().await.expect("health succeeds");
-        assert_eq!(health.status, "ok");
+        assert_eq!(health.status, "healthy");
         daemon.shutdown().await;
     }
 
