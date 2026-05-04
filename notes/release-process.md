@@ -1,27 +1,40 @@
-# Release Process
+This is the release runbook for Hypomnema. The project ships two binaries — `hmn` (the CLI client) and `hmnd` (the daemon) — from a single crate. `cargo-release` drives the cut, with `git-cliff` generating the changelog as a pre-release hook.
 
-This file describes how releases are cut for this project. Fill it in once and edit as the process evolves. The orchestration playbook delegates all release/tag/version concerns here so the rest of the workflow can stay tool-agnostic.
+## Prerequisites
 
-**Tool**: cargo-release
-**Version scheme**: semver
-**Trigger**: per round
+- `cargo-release` — available via `nix develop`; non-nix install: `cargo install cargo-release`
+- `git-cliff` — available via `nix develop`
+- Active checkout on `main` with a clean working tree
 
-## Pre-cut checks
+## Pre-cut checklist
 
-- [ ] CI is green on the commit being released
-- [ ] CHANGELOG (or generated equivalent) reviewed
+- CI is green on the commit being released
+- Working tree is clean (`git status` shows nothing)
+- On `main` branch
+- Recent commits reviewed; release level (patch / minor / major) determined
 
 ## Cut command
 
 ```
-cargo release patch
-cargo release patch --execute
+cargo release <level>
 ```
+
+Where `<level>` is `patch`, `minor`, or `major`. `cargo-release` runs `contrib/changelog-hook` (which invokes `git cliff --unreleased --tag ...` and prepends to `CHANGELOG.md`), bumps the version in `Cargo.toml` and `Cargo.lock`, commits, and creates a tag. Note that `push = false` means nothing is pushed automatically.
 
 ## Push policy
 
-- open PR first then tag from main
+After reviewing the release commit and tag, the maintainer pushes manually:
+
+```
+git push --follow-tags
+```
+
+`push = false` and `publish = false` in `[package.metadata.release]` are intentional; publishing to crates.io is also manual.
 
 ## Versioning notes
 
-Versions are decided at cut time from the merged history (commit messages, manual judgment, or whatever the chosen tool consumes). **Do not pre-assign versions to rounds or steps in the roadmap** — a single late-arriving change can flip the resulting version, and tools like `cargo-release` / `git-cliff` infer the version themselves.
+Hypomnema follows Semver. Versions are decided at cut time from merged history. Do not pre-assign versions to rounds or steps in the roadmap. `cargo-release` handles `Cargo.toml` + `Cargo.lock` alignment; no other version-bearing files exist.
+
+## Two-binary note
+
+This crate ships two binaries (`hmnd` daemon and `hmn` CLI) from a single crate. A single `cargo release` command covers both. No per-binary release steps.
