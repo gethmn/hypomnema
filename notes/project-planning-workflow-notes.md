@@ -1458,3 +1458,42 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 
 **Shipping gate met. Round 11 closed 2026-05-03. v0 static sqlite-vec bundling shipped.****
 
+---
+
+## Round 12 Retrospective
+
+**Round scope**: Release process wiring (local-cut, `cargo-release`-driven). One step. No production-code surface — config + flake + docs only.
+
+#### Step 23 Retrospective — Release Process
+
+**Build summary**: 1 coordinator (haiku-4.5) + 1 researcher (sonnet-4.6) + 1 builder batch covering 3 parallelizable tasks. 0 escalations, 0 retries. Wall-clock: ~25 min from coordinator spawn to gate. Three commits landed: `f09978b` (cargo-release in flake.nix), `6dda7d4` (CHANGELOG.md bootstrap via `git cliff`), `e5a0052` (notes/release-process.md runbook). Test plan green: `cargo test` 9/9, `cargo clippy -- -D warnings` clean, `nix develop --command cargo release --help` confirms cargo-release 1.1.2 reachable, negative-fingerprint sweep zero matches.
+
+**Execution model**: Researcher independently re-verified parity of three round-5 artifacts (`[package.metadata.release]`, `cliff.toml`, `contrib/changelog-hook`) against the sibling `~/Code/hypomnema-app/` reference — confirmed verbatim, no drift. For Decision 2 (cliff.toml commit-parser tuning), researcher actually ran `git cliff --unreleased` against HEAD and pasted the full output into the workplan as evidence; concluded no tuning needed because keyword groupings produced sensible output across the project's actual commit history. Decisions 1 (cargo-release nixpkgs source) and 3 (runbook fallback) resolved without external inputs.
+
+**Key outcomes**:
+
+1. *Release process is operational.* Maintainer can now run `cargo release <patch|minor|major>` from a `nix develop` shell. The pre-release-hook auto-invokes `git-cliff --unreleased --tag "v${NEW_VERSION}" --prepend CHANGELOG.md`, bumps the Cargo.toml version, commits, and tags. `push=false` and `publish=false` keep all network actions manual. The round-5 artifacts that had reached file-presence are now wired into a working flow.
+
+2. *No version literals leak into docs.* `notes/release-process.md` uses `<level>` and `X.Y.Z` placeholders throughout. Negative-fingerprint check confirms zero `\bv[0-9]+\.[0-9]+\.[0-9]+\b` matches in roadmap-12.md or the runbook. The "versions are decided at cut time" rule is recorded verbatim in the runbook's versioning section.
+
+3. *CHANGELOG.md is a fresh `git cliff` snapshot.* Round-5 content was overwritten (not prepended). The committed file is exactly what `git cliff` produced from current history. No hand-curation, no merge with prior content. Future `cargo release` runs will `--prepend` to this baseline.
+
+**Process insight: workplan-review gate was skipped.** Per playbook the coordinator should surface the workplan as a `needs-human` todo and wait for orchestrator-routed go/no-go before spawning builders. In round 12, todo #270 (`[WORKPLAN REVIEW] Step 23`) was created at 03:07 and self-closed at 03:11, with builders firing in the same interval. Auto mode + an absence of explicit "halt-and-await-orchestrator" language in the bootstrap prompt was interpreted as license to proceed. Outcome was clean (3 small commits, all tests green), but the gate semantics need tightening for higher-risk rounds. Recommended playbook edit: coordinator bootstrap prompts should include an explicit "do not advance past the workplan-review todo without orchestrator confirmation" line whenever auto mode is active. Captured in §Round-12 carry-over for the next playbook edit.
+
+**Comparison to prior rounds**: Round 12 was the smallest and lowest-risk of all 12. No production code, three docs/config commits, single builder batch. ~25 min wall-clock from coordinator spawn to gate (down from round 11's ~8h). The round-12 shape — confirmed-present artifacts, tiny net-new delta, three parallel tasks — argues for compressing future low-risk rounds: the researcher pass produced value (parser verification with real evidence) but the workplan-review gate was de-facto skipped without harm. A "minimal round" playbook variant that allows roadmap → builder direct (no researcher, no workplan) might be appropriate when all decisions are pre-locked by the human and the artifact set is verifiably stable.
+
+**What changed for the next round?**
+
+- *Tighten coordinator bootstrap prompts under auto mode* to include an explicit halt instruction at the workplan-review checkpoint.
+- *Consider a "minimal round" playbook variant* for rounds where the human pre-locks all decisions and the artifact set is verifiably present. Round 12 would have shipped the same way without the researcher pass; researcher value was the parser verification with `git cliff --unreleased` output as evidence, which a builder could also have produced in-line.
+- *No structural playbook changes required.* Four-role model continues to scale across all risk levels (12 rounds now).
+
+**Comparison across all 12 rounds**:
+
+| Round | Steps | Risk | Wall-clock | Phases | Escalations | Retries | Deferred Decisions | Rate-limit Incident | Process notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 11 | 22 | medium | ~8h | 6 | 0 | 0 | 5 total | yes (handled cleanly) | — |
+| 12 | 23 | low | ~25 min | N/A | 0 | 0 | 3 total | no | workplan-review gate skipped under auto mode |
+
+**Shipping gate met. Round 12 closed 2026-05-04. Local-cut release process wired.**
+
