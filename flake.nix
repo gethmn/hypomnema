@@ -49,7 +49,8 @@
               just
               sqlite
 
-              python3
+              python312
+              uv
 
               pkg-config
 
@@ -62,10 +63,9 @@
           };
 
           shellHook = ''
-            echo "hypomnema dev shell — $(rustc --version)"
-            echo "  just          — task runner ('just' alone lists targets)"
-            echo "  cargo nextest — test runner"
-            echo "  bacon         — background cargo check/clippy"
+            export PROJECT_ROOT="$(pwd)"
+
+            . "${./.}/scripts/activate.sh"
           '';
         };
 

@@ -27,7 +27,7 @@ Use `sqlite-vec` as the vector store.
 
 The vector column dimension is baked into the schema at creation time (`768` for `nomic-embed-text-v1.5`). Model-switching is not a v0 concern; if it ever becomes real, the path is a re-index (drop + rebuild the vec table with a new dimension), not a runtime switch.
 
-Ship as: the Hypomnema binary, plus the sqlite-vec extension (`.so` / `.dylib` / `.dll`). Two files. No service architecture.
+Ship as: two binaries (`hmn` + `hmnd` per [ADR-0008](./0008-two-binary-daemon-plus-cli.md)); sqlite-vec is statically linked.
 
 ## Consequences
 
@@ -64,3 +64,11 @@ The original Decision pinned the *vector dimension* (`768` for `nomic-embed-text
 The motivation: sqlite-vec's vec0 default distance metric is L2. L2 distance and cosine similarity coincide *only* for unit-normalized vectors, and whether the embedding service returns unit-normalized vectors depends on its pooling/normalization configuration, which is outside the daemon's control. Schema-baking `cosine` makes the contract correct regardless of how the embedding service is configured. Score conversion at query time pins to `score = 1.0 - (vec0_distance / 2.0)`, clamped to `[0.0, 1.0]` (see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Response).
 
 The cost — re-indexing existing populated DBs at next daemon start — is covered by clearing `files.content_hash` in the same migration, which causes the watcher's existing rebuild path to re-read, re-chunk, and re-embed every file with no operator action. See [step-7 workplan § Resolution F](../roadmap/step-07-workplan.md#f-cosine-distance-metric-for-chunks_vec-migration-0004) for the full rationale and the alternative (query-time L2-to-cosine conversion) that was rejected.
+
+### 2026-05-03 — sqlite-vec is now statically linked (additive)
+
+The original Decision shipped sqlite-vec as a separate dynamic library (`.so` / `.dylib` / `.dll`) loaded at runtime via rusqlite's `load_extension` API. That model required operators to provision the extension file out-of-band (Nix flake, package install, CI step) and to point at it via the `extension_path` config setting (or the `HYPOMNEMA_VEC_EXT_PATH` env override).
+
+As of Round 11 / Step 22 the daemon links sqlite-vec statically via the [`sqlite-vec`](https://crates.io/crates/sqlite-vec) Rust crate (pinned to `=0.1.10-alpha.3`) and registers the extension with SQLite at process startup using `sqlite3_auto_extension`. The dynamic-loading path, the `extension_path` config field, and the `HYPOMNEMA_VEC_EXT_PATH` environment variable are gone. Operators no longer ship or locate a vec0 dylib.
+
+Trade-offs: build-time gains a C compile of the bundled sqlite-vec amalgamation (the platform C toolchain is enough; ubuntu-latest and macos-latest CI runners both already provide it). Deployment loses the "two files" framing — there is now exactly one binary per role, with sqlite-vec baked in.

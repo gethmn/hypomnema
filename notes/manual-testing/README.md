@@ -13,9 +13,9 @@ wiring in a new capability and you want to feel the surface.
 
 ## Reading order
 
-1. [`00-setup.md`](./00-setup.md) — build the binaries, install the
-   sqlite-vec extension, bring up TEI, write a config, register the
-   two fixture vaults via `hmn vault create`.
+1. [`00-setup.md`](./00-setup.md) — build the binaries, bring up TEI,
+   write a config, register the two fixture vaults via `hmn vault
+   create`.
 2. [`01-running-the-daemon.md`](./01-running-the-daemon.md) — start
    `hmnd` against a multi-vault registry, check `/health`,
    `hmn status`, `hmn vault list`, shut down cleanly.

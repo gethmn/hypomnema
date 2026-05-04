@@ -36,7 +36,7 @@ No workspace split. No feature flags. No transport abstraction. Both binaries li
 ### Positive
 
 - **Unix convention.** `sshd` / `ssh`, `dockerd` / `docker`, `systemd` / `systemctl`. A `d`-suffixed daemon and a short client is a shape admins and developers already know how to read in `ps aux`, in systemd units, and in documentation. Hypomnema is positioned as a proper long-running daemon with a systemd-style lifecycle; the conventional binary shape tells that story without a paragraph of prose.
-- **Binary weight.** `hmnd` pulls the heavy dependency graph (tokio full, axum, rmcp, sqlite-vec loading, embedding HTTP client, notify + debouncer). `hmn` pulls a small subgraph — `reqwest` + `serde` + `clap`. Users who run `hmn search` every day get a fast, small binary; the daemon can be as heavy as it needs to be.
+- **Binary weight.** `hmnd` pulls the heavy dependency graph (tokio full, axum, rmcp, sqlite-vec C build, embedding HTTP client, notify + debouncer). `hmn` pulls a small subgraph — `reqwest` + `serde` + `clap`. Users who run `hmn search` every day get a fast, small binary; the daemon can be as heavy as it needs to be.
 - **MCP clarity.** When an agent host (Claude Code, Iris, others) launches the MCP server, it wants a specific executable. `hmnd --mcp-stdio` reads as "the daemon, running over stdio instead of HTTP." Both modes are the daemon; that framing is cleaner as its own binary than as a subcommand of a conflated CLI.
 - **Name question moot.** With two binaries, neither matches the crate name — the crate carries the project name, the binaries carry functional names. The "should the binary match the crate name?" question that dogs single-binary projects doesn't arise.
 
@@ -55,7 +55,7 @@ No workspace split. No feature flags. No transport abstraction. Both binaries li
 
 ## Notes
 
-- Extends [ADR-0002: Rust over Python](./0002-rust-over-python.md). The single-binary-deployment appeal of Rust was a tipping factor there. That still holds: "single binary" in the Rust sense means "statically linked, no runtime install, ship the file" — not "only one binary in total." Hypomnema now ships two files (plus the sqlite-vec extension), each of which is still a single self-contained executable.
+- Extends [ADR-0002: Rust over Python](./0002-rust-over-python.md). The single-binary-deployment appeal of Rust was a tipping factor there. That still holds: "single binary" in the Rust sense means "statically linked, no runtime install, ship the file" — not "only one binary in total." Hypomnema now ships two files; sqlite-vec is statically linked into both, so each binary is still a single self-contained executable.
 - Extends [ADR-0003: Indexing in the Daemon, Not in the Consumer](./0003-indexing-in-the-daemon.md). That ADR established that Hypomnema is a daemon with an HTTP / MCP surface, not a library consumers link against. This ADR names the executable that *is* the daemon (`hmnd`) and the executable that *reaches* the daemon (`hmn`).
 - No abstract "transport" trait in v0. The CLI's HTTP client and the daemon's HTTP server can both reach for `reqwest` and `axum` respectively, talk over localhost, and be done. When a second real consumer demands a more formal boundary, that's when abstraction earns its keep.
 - Extended by [ADR-0011: Vault Management Lives on `hmn`](./0011-vault-management-on-hmn.md) — `hmn`'s subcommand surface grows to include vault-management operations (`hmn vault …`); the two-binary shape is preserved.
@@ -74,8 +74,8 @@ Step 8's workplan resolved the TBD ("final flag shape TBD" on line 29)
 as a clap subcommand on `hmn`: **`hmn mcp`**. Rationale:
 
 1. The stdio MCP process under step 8's Resolution D is a thin HTTP
-   shim — it opens no SQLite, loads no sqlite-vec extension, runs no
-   watcher, holds no embedding client. It is not "the daemon"; it is
+   shim — it opens no SQLite, links sqlite-vec but never opens a
+   store, runs no watcher, holds no embedding client. It is not "the daemon"; it is
    a CLI client of the daemon, just with stdio MCP transport instead
    of human-stdout transport. Line 40's "both modes are the daemon"
    framing was based on an alternative implementation (Model Y:

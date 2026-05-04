@@ -1,10 +1,3 @@
 name: Hypomnema
 icon: art/Hypomnema Bold.png
-processes:
-  bacon:
-    command: direnv exec . just watch
-    working_dir: null
-    auto_start: false
-    auto_restart: false
-    restart_when_changed: []
-    env: {}
+processes: {}

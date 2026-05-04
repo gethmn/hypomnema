@@ -48,7 +48,7 @@ Hypomnema is a local daemon process. It reads one or more user-owned directories
 | System | Purpose | Protocol |
 |--------|---------|----------|
 | Embedding service (TEI / vLLM / anything OpenAI-API-shaped) | Produce 768-dim vectors for chunks and queries | HTTP (OpenAI-compatible) |
-| sqlite-vec extension | Vector similarity search via SQLite | Dynamic library loaded in-process |
+| sqlite-vec extension | Vector similarity search via SQLite | Statically linked into hmnd; registered with SQLite at startup |
 | Watched vault directories | Source of indexed content; one or more per daemon | Filesystem (read-only) |
 
 ### Consumers
@@ -287,7 +287,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Crash safety | Restart must re-reconcile the index without corruption | Content-hash-based reconciliation on startup; SQLite's built-in durability |
 | Sync-tool resilience | Running on a Syncthing / Dropbox / Obsidian Sync vault must not cause spurious reindexes or sync loops | Content-hash check before any reindex; all state outside the watched dir ([ADR-0006](../decisions/0006-outbox-outside-watched-directory.md)); conflict-filename filter |
 | Local-only | No required outbound network traffic beyond the (possibly-local) embedding service | All components local-first ([ADR-0005](../decisions/0005-local-everything.md)) |
-| Deployability | Two self-contained binaries plus one extension file | Rust statically-linked build ([ADR-0002](../decisions/0002-rust-over-python.md)); daemon (`hmnd`) and CLI client (`hmn`) ship together ([ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)); sqlite-vec as a `.so`/`.dylib`/`.dll` ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
+| Deployability | Two self-contained binaries (sqlite-vec is statically linked into both) | Rust statically-linked build ([ADR-0002](../decisions/0002-rust-over-python.md)); daemon (`hmnd`) and CLI client (`hmn`) ship together ([ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md)); sqlite-vec via the [`sqlite-vec`](https://crates.io/crates/sqlite-vec) Rust crate registered at startup ([ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md) § Amendments) |
 | Agent ergonomics | An agent can compose filesystem → content → semantic searches naturally | All three as peer MCP operations ([ADR-0004](../decisions/0004-three-search-modes-as-peers.md)) |
 | Vault isolation | Cross-vault state leakage prevented; per-vault terminate is safe | Per-vault data subdirectory (`<data_dir>/vaults/<id>/`); vault-id-keyed schema; control-plane operations serialized per-vault ([ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
 | CI quality gate | Every push to `main` and every PR runs format, lint, and test (Ubuntu + macOS) before merge | GitHub Actions CI pipeline; see [`docs/specs/ci-pipeline.md`](../specs/ci-pipeline.md) |

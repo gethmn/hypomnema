@@ -1,0 +1,9 @@
+api
+bin
+control_plane
+indexer
+mcp
+search
+store
+vault_registry
+watcher

@@ -284,3 +284,27 @@ fn rejects_vault_that_is_a_file() {
     let msg = format!("{err:#}");
     assert!(msg.contains("directory"), "{msg}");
 }
+
+#[test]
+fn extension_path_is_rejected_as_unknown_field() {
+    // Decision 2: extension_path is immediately removed, not deferred or warned.
+    // This test documents the expected behavior and prevents accidental re-introduction.
+    // See notes/roadmap/step-22-workplan.md § Phase 3 § Task 3.3.
+    let root = ScopedTmp(unique_tmp("extension-path-reject"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n[embedding]\nextension_path = \"/tmp/x.dylib\"\n",
+            vault.display()
+        ),
+    );
+
+    let err = Config::load(Some(&cfg_path)).expect_err("extension_path must be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("extension_path"),
+        "error must name extension_path as unknown: {msg}"
+    );
+}

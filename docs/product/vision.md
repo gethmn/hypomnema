@@ -1,7 +1,7 @@
 # Hypomnema: Vision Document
 
-**Version**: 0.2.0
-**Date**: 2026-04-26
+**Version**: 0.3.0
+**Date**: 2026-05-03
 **Status**: Draft
 
 ---
@@ -25,13 +25,13 @@ Building this retrieval layer separately inside every consumer — every agent, 
 
 ### The Gap
 
-There is no small, generic, local daemon that indexes a directory of Markdown and exposes three search shapes (filesystem / content / semantic) over both HTTP and MCP, emits live change notifications for active subscribers, and never writes back into the watched directory.
+There is no small, generic, local service that makes a directory of notes searchable through three shapes (filesystem / content / semantic) over both HTTP and MCP, emits live change notifications for active subscribers, and never writes back into the watched directory. (v0 indexes Markdown; the gap is independent of file format — see Non-Goals.)
 
 ---
 
 ## Product Vision
 
-Hypomnema is a local daemon that watches a directory of Markdown files and indexes them so that any consumer — most commonly an AI agent connected via MCP — can search the contents three ways:
+Hypomnema makes a directory of notes searchable and reachable to any consumer — most commonly an AI agent connected via MCP — running locally on the user's machine. Internally it is a long-running local service (a daemon, `hmnd`) that watches the directory and maintains live indexes; the user-facing framing is the searchable substrate, not the process model. v0 watches a directory of Markdown files; broader text-format coverage is a deferred decision (see Non-Goals). Consumers can search the contents three ways:
 
 1. **Filesystem search**: what files exist, what's in this directory, glob patterns
 2. **Content search**: grep-shaped, which files contain this exact string
@@ -92,6 +92,7 @@ What Hypomnema explicitly does NOT do. These are real, planned, and preserved as
 - **Multi-instance coordination**: Each daemon is independent.
 - **Obsidian-specific behavior**: Obsidian is the vault format that motivated this project, but the design assumes nothing about Obsidian. Wikilinks aren't parsed. Tags aren't indexed specially. Frontmatter isn't interpreted.
 - **Bidirectional sync** (the original full vault-bridge scope): Belongs to a CRDT-based system (Hexist, AFFiNE, Anytype, Logseq in transition). Hypomnema is the smaller generic thing that fell out of asking "what would still be useful even without the bidirectional half?" — the answer was: probably enough to live as its own project.
+- **Text-format coverage beyond Markdown**: v0's semantic-search chunking is Markdown-specific (pulldown-cmark heading-aware boundaries; see [ADR-0003](../decisions/0003-indexing-in-the-daemon.md)). Filesystem search and content search are format-agnostic by construction; semantic search over non-Markdown text would require a new chunking strategy and is out of v0 scope. The watcher's `.md` filter and the chunker are the load-bearing implementation locks; positioning the project around "directories of notes" rather than "Markdown only" is intentional forward-compat — it does not commit v0 to anything beyond Markdown.
 
 ---
 

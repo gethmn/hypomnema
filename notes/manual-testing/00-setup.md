@@ -1,14 +1,16 @@
 # 00 · Setup
 
 > Applies to: round 4 / step 12 (multi-vault registry + HTTP-MCP).
-> Prereqs: a clone of the repo, Docker (or equivalent) for TEI,
-> internet access for the sqlite-vec download.
+> Prereqs: a clone of the repo, Docker (or equivalent) for TEI.
 
 This doc gets you to a state where `hmnd` and `hmn` exist as binaries,
-the sqlite-vec extension is on disk where the daemon expects it, an
-embedding service is reachable on `localhost:8080`, and a config file
+an embedding service is reachable on `localhost:8080`, and a config file
 points at an empty `<data_dir>` ready for the runbook's two fixture
 vaults to be registered. Subsequent docs assume this is done.
+
+sqlite-vec is statically linked into `hmnd` via the `sqlite-vec` Rust
+crate — there is no separate extension file to download or place on
+disk.
 
 All commands assume the working directory is the repository root unless
 noted.
@@ -48,41 +50,11 @@ just lint          # cargo clippy --all-targets -- -D warnings
 cargo nextest run  # full test suite
 ```
 
-## 3. sqlite-vec extension
-
-The daemon loads `sqlite-vec` as a dynamic library at runtime. It is
-**not bundled** and **not provisioned by the development shell** —
-the operator places it on disk before first start. Download a prebuilt
-artifact for the platform from
-<https://github.com/asg017/sqlite-vec/releases>.
-
-Place the file at the default path:
-
-```bash
-mkdir -p ~/.local/share/hypomnema
-# macOS:
-mv ~/Downloads/vec0.dylib ~/.local/share/hypomnema/sqlite-vec.dylib
-# Linux:
-mv ~/Downloads/vec0.so    ~/.local/share/hypomnema/sqlite-vec.so
-# Windows:
-mv ~/Downloads/vec0.dll   ~/.local/share/hypomnema/sqlite-vec.dll
-```
-
-Or override with an env var (takes precedence over the config path):
-
-```bash
-export HYPOMNEMA_VEC_EXT_PATH=/some/other/path/sqlite-vec.dylib
-```
-
-If the file is missing at startup, the daemon exits with a structured
-error naming both the configured path and the env-var override
-(exit code 1).
-
-## 4. Embedding service (TEI)
+## 3. Embedding service (TEI)
 
 Required for the indexing path that produces `chunks` rows and for
 `/search/semantic`. The daemon does **not** require it to start — see
-step 6 below for the boot path with TEI down — but search results that
+step 5 below for the boot path with TEI down — but search results that
 depend on embeddings will be empty or 503 until it's up.
 
 ### Bring TEI up
@@ -112,7 +84,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/embeddings \
 Expect `768`. If you see `404`, the model isn't loaded; if connection
 refused, the container isn't up.
 
-## 5. Minimal config
+## 4. Minimal config
 
 Default location: `~/.config/hypomnema/config.toml` (override with
 `-c` / `--config` or `HYPOMNEMA_CONFIG`).
@@ -163,7 +135,7 @@ and also serves as the toggle point for the disabling exercise in
 > The runbook below assumes you start from an empty `vaults.sqlite` and
 > register the two fixture vaults explicitly.
 
-## 6. Validate the config
+## 5. Validate the config
 
 ```bash
 hmnd config-validate
@@ -178,7 +150,7 @@ Expect exit 0 and no errors. Common failures:
   startup with the message `mcp.http.path must be "/mcp" in this
   version of Hypomnema`.
 
-## 7. Stale state from prior runs and registering the fixture vaults
+## 6. Stale state from prior runs and registering the fixture vaults
 
 If you've run an older `hmnd` against a different vault or with a
 different embedding dimension, the existing data dir will conflict.
@@ -199,8 +171,7 @@ rm -rf ~/.local/share/hypomnema/vaults.sqlite \
 The first three lines drop the registry; the fourth wipes any
 per-vault subdirectories; the last three lines clean up legacy v0
 state if it was ever present (so the auto-migration doesn't re-engage
-on the next start). Do **not** delete `sqlite-vec.<ext>` — that's the
-extension you installed in step 3.
+on the next start).
 
 Start the daemon (it will idle with zero registered vaults):
 

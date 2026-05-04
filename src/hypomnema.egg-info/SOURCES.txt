@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+src/hypomnema.egg-info/PKG-INFO
+src/hypomnema.egg-info/SOURCES.txt
+src/hypomnema.egg-info/dependency_links.txt
+src/hypomnema.egg-info/requires.txt
+src/hypomnema.egg-info/top_level.txt

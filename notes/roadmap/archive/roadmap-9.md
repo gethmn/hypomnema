@@ -2,7 +2,7 @@
 
 **Scope**: Ship two independent but complementary features: (1) content retrieval after search, and (2) ranked lexical content search. Both extend read-only search/discovery surfaces. Two focused steps.
 
-**Status**: In progress. Intake complete for both. Coordinator synthesis underway.
+**Status**: Shipped. Steps 19 and 20 both archived (`notes/roadmap/archive/step-19-workplan.md`, `notes/roadmap/archive/step-20-workplan.md`). Round-close archival of this file was missed at the time and applied during round-11 cleanup (2026-05-03).
 
 **Process**: Two parallel steps. Coordinator + researcher + ephemeral builders per step. Same playbook as rounds 1–8. See [`notes/playbook/`](../playbook/) for the orchestration contract.
 

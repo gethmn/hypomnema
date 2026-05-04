@@ -55,4 +55,12 @@ Consumers consume the search API; they don't rebuild any of this themselves.
 
 ## Amendments
 
-<!-- None yet -->
+### 2026-05-03 — Chunking strategy is v0's choice, not a forever architectural commitment
+
+When this ADR was written, "pulldown-cmark heading-aware chunks" was named as the concrete chunking strategy without explicitly distinguishing *v0's chosen strategy* from *the only strategy this ADR permits*. To keep future scope conversations honest:
+
+- The decision to do indexing **inside the daemon** (rather than push it to consumers) is format-agnostic and remains in force as written.
+- The decision to ship **pulldown-cmark heading-aware chunking** is v0's chunking strategy. It is load-bearing for v0 (semantic-search.md, the watcher's `.md` filter, the `markdown-chunking` skill all depend on it) but it does not preclude additional chunking strategies for non-Markdown text in a later phase.
+- Adding a second chunking strategy later is an *extension* of this ADR, not a supersession — analogous to "Alternative embedding providers can be added later behind an abstraction" already noted above. A future ADR (or an extension) would specify the strategy and the trigger condition (e.g., a configurable per-vault `index_extensions` plus a chunker selected by file type).
+
+This amendment changes no v0 behavior; it clarifies the boundary so the project's positioning ("a directory of notes" rather than "Markdown only", per `docs/product/vision.md` § Non-Goals → "Text-format coverage beyond Markdown") doesn't silently contradict the ADR.

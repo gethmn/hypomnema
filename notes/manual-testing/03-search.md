@@ -441,7 +441,6 @@ Expect:
 - `vaults.sqlite` (+ `-wal`, `-shm`) — the registry.
 - One subdirectory per registered vault, each containing
   `index.sqlite` (+ `-wal`, `-shm`), `outbox.jsonl`, and `meta.toml`.
-- `sqlite-vec.<ext>` — the extension you installed in `00`.
 
 In terminal A, Ctrl+C `hmnd`. Clean exit, code 0.
 

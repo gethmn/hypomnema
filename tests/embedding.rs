@@ -27,7 +27,7 @@ use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{EmbedFuture, Embedder, EmbeddingClient};
 use hypomnema::events::EventBus;
 use hypomnema::indexer::Scanner;
-use hypomnema::store::Store;
+use hypomnema::store::{Store, register_sqlite_vec};
 use hypomnema::vault_registry::VaultStatus;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::inclusion::InclusionFilter;
@@ -355,18 +355,10 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
 // ===== Read-only query helpers =====
 
 fn open_index(data_dir: &Path) -> Connection {
+    register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
     let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .expect("open index.sqlite read-only");
-    let ext = EmbeddingConfig::default().resolved_extension_path();
-    unsafe {
-        conn.load_extension_enable()
-            .expect("enable load_extension on read-only conn");
-        conn.load_extension(&ext, Some("sqlite3_vec_init"))
-            .expect("load sqlite-vec on read-only conn");
-        conn.load_extension_disable()
-            .expect("disable load_extension on read-only conn");
-    }
     conn
 }
 
@@ -703,17 +695,9 @@ impl Embedder for DeterministicHashEmbedder {
 }
 
 fn open_index_rw(data_dir: &Path) -> Connection {
+    register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
     let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
-    let ext = EmbeddingConfig::default().resolved_extension_path();
-    unsafe {
-        conn.load_extension_enable()
-            .expect("enable load_extension on rw conn");
-        conn.load_extension(&ext, Some("sqlite3_vec_init"))
-            .expect("load sqlite-vec on rw conn");
-        conn.load_extension_disable()
-            .expect("disable load_extension on rw conn");
-    }
     conn
 }
 

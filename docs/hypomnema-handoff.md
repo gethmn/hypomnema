@@ -127,7 +127,7 @@ If a step is hard, ship the previous one and keep using it. Step 5 is genuinely 
 - `tokio` — async runtime
 - `axum` — HTTP server
 - `rmcp` — MCP protocol (official Rust SDK)
-- `rusqlite` (`bundled` + `load_extension`) — SQLite access
+- `rusqlite` (`bundled`, sqlite-vec statically linked) — SQLite access
 - `r2d2` + `r2d2_sqlite` — blocking connection pool
 - `notify` + `notify-debouncer-full` — filesystem watching
 - `pulldown-cmark` — Markdown parsing

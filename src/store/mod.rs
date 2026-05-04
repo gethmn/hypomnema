@@ -1,6 +1,7 @@
 mod chunks;
 mod pool;
 mod schema;
+mod sqlite_vec_init;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,12 +13,13 @@ use rusqlite::Connection;
 use tokio::task;
 use tracing::info;
 
-use crate::config::{EmbeddingConfig, VEC_EXT_PATH_ENV};
+use crate::config::EmbeddingConfig;
 use crate::vault_registry::{VaultId, vault_data_dir};
 
 pub use chunks::rewrite_chunks_for_file;
 pub use pool::SqlitePool;
 pub use schema::MIGRATIONS;
+pub use sqlite_vec_init::register_sqlite_vec;
 
 #[derive(Clone)]
 pub struct Store {
@@ -45,13 +47,10 @@ impl Store {
         let vault_id = vault_id.clone();
         let data_dir = data_dir.to_path_buf();
         let index_file = index_file.to_string();
-        let extension_path = embedding.resolved_extension_path();
         let expected_dim = embedding.dimension;
-        task::spawn_blocking(move || {
-            open_blocking(vault_id, data_dir, index_file, extension_path, expected_dim)
-        })
-        .await
-        .context("spawn_blocking join error in Store::open")?
+        task::spawn_blocking(move || open_blocking(vault_id, data_dir, index_file, expected_dim))
+            .await
+            .context("spawn_blocking join error in Store::open")?
     }
 
     pub fn pool(&self) -> SqlitePool {
@@ -71,29 +70,15 @@ fn open_blocking(
     vault_id: VaultId,
     data_dir: PathBuf,
     index_file: String,
-    extension_path: PathBuf,
     expected_dim: u32,
 ) -> Result<Store> {
     let per_vault_dir = vault_data_dir(&data_dir, &vault_id);
     fs::create_dir_all(&per_vault_dir)
         .with_context(|| format!("creating per-vault data dir {}", per_vault_dir.display()))?;
-    if !extension_path.exists() {
-        return Err(anyhow!(
-            "sqlite-vec extension binary not found at {}. Set the {} env var to override the path, \
-             or place the dylib at the configured location (see docs/reference/configuration.md \
-             § embedding.extension_path).",
-            extension_path.display(),
-            VEC_EXT_PATH_ENV,
-        ));
-    }
     let db_path = per_vault_dir.join(&index_file);
-    let pool = pool::build_pool(&db_path, &extension_path).with_context(|| {
-        format!(
-            "building connection pool for {} (sqlite-vec extension at {})",
-            db_path.display(),
-            extension_path.display()
-        )
-    })?;
+    register_sqlite_vec();
+    let pool = pool::build_pool(&db_path)
+        .with_context(|| format!("building connection pool for {}", db_path.display()))?;
     let mut conn = pool.get().with_context(|| {
         format!(
             "acquiring initial connection from pool for {}",
@@ -107,9 +92,8 @@ fn open_blocking(
     drop(conn);
     info!(
         vault_id = %vault_id,
-        "store: opened {} (migrations applied; sqlite-vec extension at {})",
+        "store: opened {} (migrations applied)",
         db_path.display(),
-        extension_path.display()
     );
     Ok(Store {
         inner: Arc::new(StoreInner {

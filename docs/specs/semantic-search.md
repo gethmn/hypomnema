@@ -1,7 +1,7 @@
 # Semantic Search Specification
 
-**Version**: 0.3.0
-**Date**: 2026-05-01
+**Version**: 0.3.1
+**Date**: 2026-05-03
 **Status**: Draft
 
 ---
@@ -36,7 +36,7 @@ The data substrate this spec reads from — the `chunks` metadata table and the 
 
 ### Chunking
 
-Chunks are produced by the indexer (not at query time) using pulldown-cmark to parse Markdown events and split on heading boundaries. See the `markdown-chunking` skill in `.claude/skills/` for the current boundary rules.
+Chunks are produced by the indexer (not at query time) using pulldown-cmark to parse Markdown events and split on heading boundaries. See the `markdown-chunking` skill in `.claude/skills/` for the current boundary rules. This describes v0's Markdown chunking strategy; alternative strategies for non-Markdown text are out of v0 scope (see [ADR-0003 § Amendments](../decisions/0003-indexing-in-the-daemon.md#amendments) and [vision.md § Non-Goals](../product/vision.md#non-goals) → "Text-format coverage beyond Markdown").
 
 Each chunk carries:
 - `chunk_id` (the `chunks.id` column from the schema baked in step 6)
@@ -321,4 +321,5 @@ The chunker does not strip fenced code blocks, Dataview queries, or other genera
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
 | 0.2.0 | 2026-04-27 | Multi-vault adoption (round 3 / step 10): `vault` semantics flipped from "always absent" to "populated when multi-vault active"; added `vault_name`, request-side `vaults` filter, response-envelope `partial_results`, global score-desc cross-vault ordering with `vault_id` tie-break. Same-embedding-model assumption documented. Cross-vault execution semantics cross-referenced from [vault-management.md](./vault-management.md). |
+| 0.3.1 | 2026-05-03 | Clarification (no behavior change): § Chunking notes that the pulldown-cmark heading-aware strategy is v0's chunking strategy; alternative strategies for non-Markdown text are out of v0 scope. Cross-references ADR-0003 § Amendments and vision.md § Non-Goals → "Text-format coverage beyond Markdown" added by the same canon-positioning sweep. |
 | 0.3.0 | 2026-05-01 | Round 8 / Step 17: payload budgeting added. Request: `include_text` (`preview` \| `full` \| `none`, default `preview`) and `preview_bytes` (default 600, server max 2000, silently clamped). Response: `text` changed from required to conditional; added `text_kind`, `text_truncated` (both conditional, present alongside `text`); added `content_hash` (required, `sha256:`-prefixed, projected from chunk metadata). `limit` default re-pinned as 10. Validation Rules section added; Examples section added (default preview, full-text, metadata-only); Edge Cases: added "Preview boundary in multibyte UTF-8" and "Boilerplate-heavy chunks". Resolved proposal questions (text-field strategy → `text` + `text_kind` + `text_truncated`; `preview_bytes` max → 2000, clamped; `content_hash` inclusion → yes; content-search `include_matches` default drift → corrected in step 17.6). Chunk/section-retrieval question deferred to content-retrieval proposal. |

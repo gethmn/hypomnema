@@ -2,8 +2,7 @@
 
 > Applies to: round 4 / step 12 (multi-vault registry).
 > Prereqs: [`00-setup.md`](./00-setup.md) complete; config validated;
-> sqlite-vec on disk; both fixture vaults registered via
-> `hmn vault create`.
+> both fixture vaults registered via `hmn vault create`.
 
 This doc verifies that `hmnd` comes up cleanly against a multi-vault
 registry, that the HTTP surface answers, and that the per-vault
@@ -32,11 +31,12 @@ Expected log lines, in order (timestamps elided):
 - `vault_registry: opened …` — `vaults.sqlite` opens (created on first
   run if absent).
 - per-vault startup sequence for each registered vault: store opened,
-  sqlite-vec extension loaded, migrations applied (first run only),
-  initial scan summary (`inserted=N updated=0 hash_unchanged=0
-  deleted=0 duration=…ms`).
+  migrations applied (first run only), initial scan summary
+  (`inserted=N updated=0 hash_unchanged=0 deleted=0 duration=…ms`).
+  sqlite-vec is statically linked, so no separate "extension loaded"
+  log line appears.
 - embedding health probe — `INFO` if TEI is up, `WARN` if down (the
-  daemon proceeds either way; see [`00-setup.md`](./00-setup.md) §4).
+  daemon proceeds either way; see [`00-setup.md`](./00-setup.md) §3).
 - `hmnd: mcp http transport mounted path=/mcp enabled=true` — the
   round-4 HTTP-MCP route is mounted (default-on per
   [`06-mcp-http.md`](./06-mcp-http.md)).

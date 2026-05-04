@@ -33,7 +33,8 @@ r2d2_sqlite = "0.24"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "stream"] }
 rmcp = { version = "1.5", features = ["server", "transport-io", "transport-streamable-http-server", "macros", "schemars"] }
-rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "=0.1.10-alpha.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.11"
@@ -47,6 +48,11 @@ walkdir = "2.5"
 [dev-dependencies]
 tempfile = "3.10"
 tower = "0.5"
+
+[patch.crates-io]
+# sqlite-vec 0.1.10-alpha.3 published without sqlite-vec-diskann.c; this local
+# copy adds SQLITE_VEC_ENABLE_DISKANN=0 to the build script as a workaround.
+sqlite-vec = { path = "vendor/sqlite-vec" }
 
 [package.metadata.release]
 pre-release-hook = ["./contrib/changelog-hook"]

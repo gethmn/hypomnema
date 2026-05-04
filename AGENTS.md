@@ -7,7 +7,7 @@ Agent guide for the Hypomnema project. Read this before touching code.
 > *“a material memory of things read, heard, or thought”*
 > — Foucault, on the hypomnemata of the ancient Greeks
 
-Hypomnema is a local daemon that indexes a Markdown directory and exposes search (filesystem, content, semantic) and change events to any consumer — most commonly an AI agent connected via MCP. It’s deliberately agnostic: the vault it watches doesn’t have to be Obsidian, and the consumer doesn’t have to be any specific agent.
+Hypomnema makes a directory of notes searchable and reachable programmatically — from the command line (`hmn`) and from AI agents over MCP — running locally on the user's machine. It exposes three search shapes (filesystem, content, semantic) and a live change-event stream to any consumer. Internally it's a long-running local service (`hmnd`); the user-facing framing is the searchable substrate, not the process model. v0 indexes Markdown; broader text-format coverage is a deferred decision (vision.md § Non-Goals). It's deliberately agnostic: the vault it watches doesn't have to be Obsidian, and the consumer doesn't have to be any specific agent.
 
 The name comes from the ancient Greek *hypomnema* — a personal notebook of gathered external material kept for rereading. The fit is near-literal: this daemon makes a directory of notes reachable as an accumulated substrate you return to. The crate is `hypomnema`; it ships two binaries — `hmnd` (the daemon) and `hmn` (a thin CLI client that speaks to a running `hmnd`). See [ADR-0008](docs/decisions/0008-two-binary-daemon-plus-cli.md). During early design the project was carried under the working name `mdkb`, which may still appear in older notes.
 

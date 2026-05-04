@@ -105,36 +105,19 @@ pub fn apply_migrations(conn: &mut Connection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EmbeddingConfig;
+    use crate::store::register_sqlite_vec;
 
     fn user_version(conn: &Connection) -> i64 {
         conn.query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap()
     }
 
-    /// In-memory SQLite connection with the sqlite-vec extension loaded.
+    /// In-memory SQLite connection with sqlite-vec statically registered.
     /// Migration 0003 uses `vec0` virtual-table syntax that requires the
-    /// extension; tests must mirror the production `with_init` shape.
+    /// extension; tests must mirror the production registration path.
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        let path = EmbeddingConfig::default().resolved_extension_path();
-        // SAFETY: same constraints as the production load in `pool::build_pool`.
-        // The path resolves from default config (or the HYPOMNEMA_VEC_EXT_PATH
-        // env-var override when set by the test runner).
-        unsafe {
-            conn.load_extension_enable()
-                .expect("rusqlite load_extension feature not enabled");
-            conn.load_extension(&path, Some("sqlite3_vec_init"))
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "loading sqlite-vec extension at {} failed: {e}\n\
-                     hint: place the dylib at the default path or set HYPOMNEMA_VEC_EXT_PATH",
-                        path.display()
-                    )
-                });
-            conn.load_extension_disable().unwrap();
-        }
-        conn
+        register_sqlite_vec();
+        Connection::open_in_memory().unwrap()
     }
 
     #[test]

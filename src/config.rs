@@ -166,8 +166,6 @@ pub struct EmbeddingConfig {
     pub dimension: u32,
     #[serde(default)]
     pub api_key: String,
-    #[serde(default = "default_embedding_extension_path")]
-    pub extension_path: ConfigPath,
     #[serde(default = "default_embedding_timeout_ms")]
     pub timeout_ms: u64,
     #[serde(default = "default_embedding_max_retries")]
@@ -183,26 +181,12 @@ impl Default for EmbeddingConfig {
             model: default_embedding_model(),
             dimension: default_embedding_dimension(),
             api_key: String::new(),
-            extension_path: default_embedding_extension_path(),
             timeout_ms: default_embedding_timeout_ms(),
             max_retries: default_embedding_max_retries(),
             batch_size: default_embedding_batch_size(),
         }
     }
 }
-
-impl EmbeddingConfig {
-    /// Returns the sqlite-vec extension path with the `HYPOMNEMA_VEC_EXT_PATH`
-    /// env-var override applied. The override wins over the configured path.
-    pub fn resolved_extension_path(&self) -> PathBuf {
-        if let Ok(p) = env::var(VEC_EXT_PATH_ENV) {
-            return PathBuf::from(p);
-        }
-        self.extension_path.0.clone()
-    }
-}
-
-pub const VEC_EXT_PATH_ENV: &str = "HYPOMNEMA_VEC_EXT_PATH";
 
 fn default_embedding_endpoint() -> String {
     "http://127.0.0.1:8080/v1/embeddings".to_string()
@@ -216,13 +200,6 @@ fn default_embedding_dimension() -> u32 {
     768
 }
 
-fn default_embedding_extension_path() -> ConfigPath {
-    let filename = format!("sqlite-vec.{}", platform_extension_suffix());
-    ConfigPath(expand_tilde(
-        &Path::new("~/.local/share/hypomnema").join(filename),
-    ))
-}
-
 fn default_embedding_timeout_ms() -> u64 {
     30_000
 }
@@ -233,16 +210,6 @@ fn default_embedding_max_retries() -> u8 {
 
 fn default_embedding_batch_size() -> u8 {
     1
-}
-
-fn platform_extension_suffix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "dylib"
-    } else if cfg!(target_os = "windows") {
-        "dll"
-    } else {
-        "so"
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

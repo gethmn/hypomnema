@@ -18,7 +18,7 @@ This document defines the technology stack for Hypomnema and orders the v0 imple
 
 ## Stack Overview
 
-Hypomnema is a Rust project that ships two binaries from one crate: `hmnd` (the long-running daemon) and `hmn` (a thin CLI client that talks to a running `hmnd`). Both are built from the single `hypomnema` crate with shared code in `src/lib.rs`. The runtime is Tokio; the HTTP server is Axum; the MCP transport is the official `rmcp` crate; persistence is `rusqlite` with the `sqlite-vec` extension loaded at runtime. Filesystem watching is `notify` + `notify-debouncer-full`. Markdown parsing is `pulldown-cmark`.
+Hypomnema is a Rust project that ships two binaries from one crate: `hmnd` (the long-running daemon) and `hmn` (a thin CLI client that talks to a running `hmnd`). Both are built from the single `hypomnema` crate with shared code in `src/lib.rs`. The runtime is Tokio; the HTTP server is Axum; the MCP transport is the official `rmcp` crate; persistence is `rusqlite` with sqlite-vec statically linked into the daemon and registered at startup. Filesystem watching is `notify` + `notify-debouncer-full`. Markdown parsing is `pulldown-cmark`.
 
 See [ADR-0002: Rust over Python](../decisions/0002-rust-over-python.md) for the language choice, [ADR-0008: Two Binaries (hmnd + hmn) in One Crate](../decisions/0008-two-binary-daemon-plus-cli.md) for the binary shape, and the ADRs they reference for the major library choices.
 
@@ -53,8 +53,9 @@ axum = "0.7"
 # MCP (official Rust SDK)
 rmcp = "*"   # pin at step 8
 
-# SQLite + sqlite-vec extension loading
-rusqlite = { version = "0.31", features = ["bundled", "load_extension"] }
+# SQLite + sqlite-vec (statically linked)
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "=0.1.10-alpha.3"
 r2d2 = "0.8"
 r2d2_sqlite = "0.24"
 
@@ -110,9 +111,9 @@ clap = { version = "4", features = ["derive"] }
 
 | Package | Purpose |
 |---------|---------|
-| **rusqlite** (`bundled` + `load_extension`) | Blocking SQLite access. `bundled` ships SQLite inside the binary; `load_extension` loads sqlite-vec. |
+| **rusqlite** (`bundled`) | Blocking SQLite access. `bundled` ships SQLite inside the binary. |
+| **sqlite-vec** (Rust crate, static extension build) | Vector store. The crate compiles the sqlite-vec C amalgamation into the binary and exposes `sqlite3_vec_init`; the daemon registers it via `sqlite3_auto_extension` at process startup so every connection in the pool sees the extension automatically. See [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md) (and its 2026-05-03 Amendment) and `.claude/skills/sqlite-vec-extension/`. |
 | **r2d2** + **r2d2_sqlite** | Blocking connection pool. Connections are checked out inside `spawn_blocking` so the async runtime never blocks on SQL. See `.claude/skills/rusqlite-in-async/`. |
-| **sqlite-vec** (runtime extension, not a crate) | Vector store. Loaded as `.so`/`.dylib`/`.dll` at daemon startup into each connection. See [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md) and `.claude/skills/sqlite-vec-extension/`. |
 
 ### Watching and Parsing
 
@@ -183,7 +184,7 @@ hypomnema/
 │   ├── store/           # rusqlite + sqlite-vec (hmnd only)
 │   │   ├── mod.rs
 │   │   ├── schema.rs    # migrations; vec0 dimension baked in
-│   │   └── pool.rs      # r2d2 pool, load_extension hook
+│   │   └── pool.rs      # r2d2 pool, WAL + synchronous=NORMAL pragmas
 │   ├── vault_registry/  # vaults.sqlite + reconciliation (hmnd only; round 3+)
 │   ├── control_plane/   # vault lifecycle handlers — HTTP + CLI + MCP (round 3+)
 │   ├── watcher/         # notify + debouncer + conflict filter (hmnd only)

@@ -24,12 +24,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hypomnema::api::{self, ApiState, VaultEntry};
-use hypomnema::config::{Config, EmbeddingConfig};
+use hypomnema::config::{Config};
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::events::EventBus;
 use hypomnema::indexer::Scanner;
-use hypomnema::store::Store;
+use hypomnema::store::{Store, register_sqlite_vec};
 use hypomnema::vault_registry::VaultStatus;
 use hypomnema::vault_registry::{VaultId, vault_data_dir};
 use hypomnema::watcher::inclusion::InclusionFilter;
@@ -356,17 +356,9 @@ impl McpClient {
 // ===== Helpers for the semantic-hint test =====
 
 fn open_index_rw(data_dir: &Path) -> Connection {
+    register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
     let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
-    let ext = EmbeddingConfig::default().resolved_extension_path();
-    unsafe {
-        conn.load_extension_enable()
-            .expect("enable load_extension on rw conn");
-        conn.load_extension(&ext, Some("sqlite3_vec_init"))
-            .expect("load sqlite-vec on rw conn");
-        conn.load_extension_disable()
-            .expect("disable load_extension on rw conn");
-    }
     conn
 }
 
