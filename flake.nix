@@ -44,6 +44,7 @@
               cargo-watch
               cargo-nextest
               cargo-edit
+              cargo-release
               bacon
 
               just
