@@ -9,3 +9,5 @@ These files are **not canonical**. They preserve:
 - A clean summary of "what we thought we were buying" if the feature is later revisited or rolled back
 
 If an archived proposal disagrees with the LDS docs, the LDS docs win. The archive is read-only by convention.
+
+Files land here at round close, archived by the coordinator that ships the round's last step. See `notes/playbook/coordinator.md` § "Step Boundary" item 3a, and `scripts/check-proposal-hygiene.sh` for the orphan check.

@@ -126,6 +126,7 @@ When a step ships:
 5. Expand the **next** step into a workplan
 6. User reviews the new workplan before I (Claude) start coding
 7. Push `HEAD` and any new tag(s) to `origin` when the round closes (or per-round policy for intermediate steps)
+8. If the step closes a round, archive `roadmap-N.md` and every proposal/intake file named in its `**Intakes**:` block (move `<slug>.md`, `<slug>-stories.md`, and `intake-<slug>.md` to `notes/proposals/archive/`). Run `scripts/check-proposal-hygiene.sh` to confirm no orphans.
 
 ---
 
