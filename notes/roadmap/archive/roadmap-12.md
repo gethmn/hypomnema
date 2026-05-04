@@ -5,6 +5,9 @@
 **Steps**: 23  
 **Scope**: Single-step round dedicated to wiring up a local-cut release process using `cargo-release` with `git-cliff`-driven changelog generation.
 
+**Intakes**:
+- [`notes/proposals/intake-release-process-and-changelog.md`](../../proposals/archive/intake-release-process-and-changelog.md) — Complete
+
 ---
 
 ## Overview
