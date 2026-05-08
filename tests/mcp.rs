@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hypomnema::api::{self, ApiState, VaultEntry};
-use hypomnema::config::{Config};
+use hypomnema::config::Config;
 use hypomnema::control_plane::VaultManager;
 use hypomnema::embedding::{Embedder, StubEmbedder};
 use hypomnema::events::EventBus;
@@ -185,6 +185,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         vault_path: fx.vault.clone(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],
@@ -358,8 +359,7 @@ impl McpClient {
 fn open_index_rw(data_dir: &Path) -> Connection {
     register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
-    let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
-    conn
+    Connection::open(&db_path).expect("open index.sqlite read-write")
 }
 
 /// Wipe `chunks_vec` and `chunks` while leaving `files` populated. Mirrors

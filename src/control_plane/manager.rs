@@ -9,11 +9,11 @@ use tokio::sync::watch;
 use tokio::task;
 use tracing::{info, warn};
 
-use crate::api::VaultEntry;
+use crate::api::{BootstrapState, VaultEntry};
 use crate::config::Config;
 use crate::embedding::Embedder;
 use crate::events::EventBus;
-use crate::indexer::Scanner;
+use crate::indexer::{ScanProgress, Scanner};
 use crate::legacy_state_migration;
 use crate::store::Store;
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
@@ -21,7 +21,7 @@ use crate::watcher;
 use crate::watcher::inclusion::InclusionFilter;
 use crate::watcher::vcs_ignore::VcsIgnore;
 
-use super::runner::{RunnerLifecycle, VaultRunner};
+use super::runner::{BootstrapLifecycle, RunnerLifecycle, VaultRunner};
 
 /// One vault's view from the perspective of cross-vault search. Combines a
 /// registry row's identity + lifecycle status + (when active) the live
@@ -216,7 +216,7 @@ impl VaultManager {
         for row in &active_rows {
             let runner = spawn_runner_for_row(
                 row,
-                config.as_ref(),
+                config.clone(),
                 embedder.clone(),
                 event_bus.clone(),
                 shutdown_rx.clone(),
@@ -535,7 +535,7 @@ impl VaultManager {
 
         let runner = spawn_runner_for_row(
             &row,
-            spawn.config.as_ref(),
+            spawn.config.clone(),
             self.inner.embedder.clone(),
             self.inner.event_bus.clone(),
             spawn.shutdown_rx.clone(),
@@ -683,18 +683,20 @@ impl VaultManager {
                 });
             }
 
-            let (entry, lifecycle) = spawn_runner_parts(
+            let (entry, bootstrap) = spawn_runner_parts(
                 &row,
-                spawn.config.as_ref(),
+                spawn.config.clone(),
                 self.inner.embedder.clone(),
                 self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 false,
+                runner.lifecycle.clone(),
+                runner.bootstrap_done_tx.clone(),
             )
             .await
             .map_err(|e| ControlPlaneError::Internal(e.context("spawning lifecycle for resume")))?;
 
-            *runner.lifecycle.lock().await = Some(lifecycle);
+            *runner.bootstrap.lock().await = Some(bootstrap);
 
             spawn
                 .registry
@@ -742,7 +744,7 @@ impl VaultManager {
 
             let runner = spawn_runner_for_row(
                 &updated,
-                spawn.config.as_ref(),
+                spawn.config.clone(),
                 self.inner.embedder.clone(),
                 self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
@@ -928,18 +930,20 @@ impl VaultManager {
             // skip_initial_scan = rebuild: the rebuild SQL just zeroed
             // content_hash; running the initial scan would re-populate it
             // and defeat the "rebuild then rescan" cold-start workflow.
-            let (entry, lifecycle) = spawn_runner_parts(
+            let (entry, bootstrap) = spawn_runner_parts(
                 &updated,
-                spawn.config.as_ref(),
+                spawn.config.clone(),
                 self.inner.embedder.clone(),
                 self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 rebuild,
+                runner.lifecycle.clone(),
+                runner.bootstrap_done_tx.clone(),
             )
             .await
             .map_err(|e| ControlPlaneError::Internal(e.context("spawning lifecycle for reset")))?;
 
-            *runner.lifecycle.lock().await = Some(lifecycle);
+            *runner.bootstrap.lock().await = Some(bootstrap);
             runner.replace_entry(Arc::new(entry));
 
             info!(
@@ -999,18 +1003,23 @@ impl VaultManager {
                     hint: None,
                 })?;
 
-            let (entry, lifecycle) = spawn_runner_parts(
+            let lifecycle_slot = Arc::new(tokio::sync::Mutex::new(None));
+            let (bootstrap_done_tx, _) = watch::channel(false);
+            let (entry, bootstrap) = spawn_runner_parts(
                 &updated,
-                spawn.config.as_ref(),
+                spawn.config.clone(),
                 self.inner.embedder.clone(),
                 self.inner.event_bus.clone(),
                 spawn.shutdown_rx.clone(),
                 rebuild,
+                lifecycle_slot.clone(),
+                bootstrap_done_tx.clone(),
             )
             .await
             .map_err(|e| ControlPlaneError::Internal(e.context("spawning runner for reset")))?;
 
-            let runner = VaultRunner::new(entry, lifecycle);
+            let runner =
+                VaultRunner::new_bootstrapping(entry, lifecycle_slot, bootstrap, bootstrap_done_tx);
             {
                 let mut guard = self
                     .inner
@@ -1233,20 +1242,38 @@ fn reconcile_orphan_subdirs(data_dir: &Path, active_ids: &[VaultId]) {
 
 async fn spawn_runner_for_row(
     row: &VaultRow,
-    config: &Config,
+    config: Arc<Config>,
     embedder: Arc<dyn Embedder>,
     event_bus: Arc<EventBus>,
     parent_shutdown_rx: watch::Receiver<bool>,
 ) -> Result<VaultRunner> {
-    let (entry, lifecycle) =
-        spawn_runner_parts(row, config, embedder, event_bus, parent_shutdown_rx, false).await?;
-    Ok(VaultRunner::new(entry, lifecycle))
+    let lifecycle_slot = Arc::new(tokio::sync::Mutex::new(None));
+    let (bootstrap_done_tx, _) = watch::channel(false);
+    let (entry, bootstrap) = spawn_runner_parts(
+        row,
+        config,
+        embedder,
+        event_bus,
+        parent_shutdown_rx,
+        false,
+        lifecycle_slot.clone(),
+        bootstrap_done_tx.clone(),
+    )
+    .await?;
+    Ok(VaultRunner::new_bootstrapping(
+        entry,
+        lifecycle_slot,
+        bootstrap,
+        bootstrap_done_tx,
+    ))
 }
 
-/// Open the per-vault store, run the initial scan, and spawn the watcher +
-/// consumer. Returns the entry/lifecycle pair separately so step-11 ops
-/// (resume / reset) can install a fresh lifecycle into an existing
-/// `Arc<VaultRunner>` without minting a new runner.
+/// Sync phase of bootstrap. Opens the per-vault store, builds the
+/// `VaultEntry` with an `Indexing` bootstrap state, and spawns the
+/// background bootstrap task that runs the initial scan and (on success)
+/// installs the watcher + consumer into `lifecycle_slot`. Returns
+/// immediately — the listener can bind / the create-call can return as soon
+/// as this function completes.
 ///
 /// `skip_initial_scan` is true on the `reset --rebuild` path: rebuild has
 /// just zeroed `files.content_hash` in the per-vault store, and the operator
@@ -1254,16 +1281,22 @@ async fn spawn_runner_for_row(
 /// every file. Running the initial scan here would silently re-populate
 /// `content_hash` (matching the on-disk hash again), defeating the rescan's
 /// re-emit and contradicting the `reset_with_rebuild_clears_*` test
-/// assertion that `content_hash = ''` after reset --rebuild. All other call
-/// sites (open/create/resume) keep the initial scan.
+/// assertion that `content_hash = ''` after reset --rebuild.
+///
+/// `lifecycle_slot` is the runner's shared `Arc<Mutex<Option<RunnerLifecycle>>>`.
+/// The bootstrap task installs into the same slot the runner exposes, so
+/// readers see the lifecycle appear once the scan completes.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_runner_parts(
     row: &VaultRow,
-    config: &Config,
+    config: Arc<Config>,
     embedder: Arc<dyn Embedder>,
     event_bus: Arc<EventBus>,
     parent_shutdown_rx: watch::Receiver<bool>,
     skip_initial_scan: bool,
-) -> Result<(VaultEntry, RunnerLifecycle)> {
+    lifecycle_slot: Arc<tokio::sync::Mutex<Option<RunnerLifecycle>>>,
+    bootstrap_done_tx: watch::Sender<bool>,
+) -> Result<(VaultEntry, BootstrapLifecycle)> {
     let store = Store::open(
         &row.id,
         &config.storage.data_dir.0,
@@ -1274,11 +1307,121 @@ async fn spawn_runner_parts(
     .with_context(|| format!("opening store for {}", row.id))?;
     let store = Arc::new(store);
 
+    // Per-vault shutdown signal shared between the bootstrap task and the
+    // consumer (the lifecycle the bootstrap task installs holds a clone of
+    // this same sender). One send fires both paths.
+    let (per_vault_tx, per_vault_rx) = watch::channel(false);
+    let mut parent_rx_for_join = parent_shutdown_rx.clone();
+    let per_vault_tx_for_join = per_vault_tx.clone();
+    tokio::spawn(async move {
+        let _ = parent_rx_for_join.wait_for(|v| *v).await;
+        let _ = per_vault_tx_for_join.send(true);
+    });
+
+    // Re-arm the bootstrap-done latch. On initial spawn the channel is
+    // already `false`; on resume / reset the runner's existing `Sender` may
+    // be at `true` from a prior bootstrap, so reset it before spawning the
+    // task so a fresh `wait_for_bootstrap` call observes the new run.
+    let _ = bootstrap_done_tx.send(false);
+
+    let (bootstrap_state, files_seen, files_indexed) = BootstrapState::indexing(Utc::now());
+
+    let entry = VaultEntry {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        vault_path: row.path.clone(),
+        store: store.clone(),
+        status: row.status,
+        bootstrap_state: bootstrap_state.clone(),
+    };
+
+    let row_owned = row.clone();
+    let config_for_task = config.clone();
+    let embedder_for_task = embedder.clone();
+    let event_bus_for_task = event_bus.clone();
+    let per_vault_tx_for_lifecycle = per_vault_tx.clone();
+    let mut per_vault_rx_for_task = per_vault_rx.clone();
+    let lifecycle_slot_for_task = lifecycle_slot.clone();
+    let bootstrap_state_for_task = bootstrap_state.clone();
+    let store_for_task = store.clone();
+
+    let handle = tokio::spawn(async move {
+        // Cancellation: the bootstrap task observes the per-vault shutdown
+        // signal alongside the scan/install future. If shutdown wins, the
+        // pending scan future drops without installing a lifecycle; in-flight
+        // per-file `spawn_blocking` transactions complete and discard their
+        // results. We mirror the scan-complete error-path by flipping
+        // `bootstrap_state` to `Errored` so `/status` does not stick on
+        // `indexing`.
+        let progress = ScanProgress {
+            files_seen: files_seen.clone(),
+            files_indexed: files_indexed.clone(),
+        };
+        let scan_and_install = run_bootstrap(
+            row_owned,
+            config_for_task,
+            embedder_for_task,
+            event_bus_for_task,
+            store_for_task,
+            per_vault_tx_for_lifecycle,
+            per_vault_rx,
+            skip_initial_scan,
+            progress,
+            lifecycle_slot_for_task,
+        );
+
+        let result: Result<()> = tokio::select! {
+            biased;
+            _ = per_vault_rx_for_task.wait_for(|v| *v) => {
+                Err(anyhow::anyhow!("bootstrap cancelled by shutdown"))
+            }
+            res = scan_and_install => res,
+        };
+
+        let new_state = match result {
+            Ok(()) => BootstrapState::Ready,
+            Err(e) => BootstrapState::Errored(format!("{e:#}")),
+        };
+        if let Ok(mut guard) = bootstrap_state_for_task.write() {
+            *guard = new_state;
+        }
+        // Latch the bootstrap-done signal so test code waiting via
+        // `wait_for_bootstrap` resumes. The signal is "terminal reached",
+        // not "scan succeeded": both `Ready` and `Errored` flip it.
+        let _ = bootstrap_done_tx.send(true);
+    });
+
+    Ok((
+        entry,
+        BootstrapLifecycle {
+            shutdown_tx: per_vault_tx,
+            handle,
+        },
+    ))
+}
+
+/// Run the initial scan (unless skipped), spawn the watcher + consumer, and
+/// install the resulting `RunnerLifecycle` into the runner's shared slot.
+/// Errors propagate up to the bootstrap task, which translates them into a
+/// `BootstrapState::Errored`.
+#[allow(clippy::too_many_arguments)]
+async fn run_bootstrap(
+    row: VaultRow,
+    config: Arc<Config>,
+    embedder: Arc<dyn Embedder>,
+    event_bus: Arc<EventBus>,
+    store: Arc<Store>,
+    per_vault_tx: watch::Sender<bool>,
+    per_vault_rx: watch::Receiver<bool>,
+    skip_initial_scan: bool,
+    progress: ScanProgress,
+    lifecycle_slot: Arc<tokio::sync::Mutex<Option<RunnerLifecycle>>>,
+) -> Result<()> {
     if !skip_initial_scan {
-        let scanner = Scanner::new(&row.path, config, &store, embedder.clone())
+        let scanner = Scanner::new(&row.path, config.as_ref(), &store, embedder.clone())
             .with_context(|| format!("constructing scanner for {}", row.id))?;
         let report = scanner
-            .run()
+            .run_with_progress(progress)
             .await
             .with_context(|| format!("running initial scan for {}", row.id))?;
         info!(
@@ -1310,20 +1453,8 @@ async fn spawn_runner_parts(
     )
     .with_context(|| format!("spawning watcher for {}", row.id))?;
 
-    let scanner_for_consumer = Scanner::new(&row.path, config, &store, embedder)
+    let scanner_for_consumer = Scanner::new(&row.path, config.as_ref(), &store, embedder)
         .with_context(|| format!("constructing scanner (consumer) for {}", row.id))?;
-
-    // Per-vault shutdown signal. The consumer exits when *either* this
-    // per-vault sender fires OR the parent (daemon-wide) sender fires —
-    // achieved by spawning a small joiner task that mirrors the parent into
-    // the per-vault channel.
-    let (per_vault_tx, per_vault_rx) = watch::channel(false);
-    let mut parent_rx_for_join = parent_shutdown_rx.clone();
-    let per_vault_tx_for_join = per_vault_tx.clone();
-    tokio::spawn(async move {
-        let _ = parent_rx_for_join.wait_for(|v| *v).await;
-        let _ = per_vault_tx_for_join.send(true);
-    });
 
     // Per-vault rescan signal. Manager.rescan() bumps this counter; the
     // consumer's `select!` covers both shutdown and rescan.
@@ -1338,23 +1469,46 @@ async fn spawn_runner_parts(
         rescan_rx,
     ));
 
-    let entry = VaultEntry {
-        id: row.id.clone(),
-        name: row.name.clone(),
-        vault_path: row.path.clone(),
-        store,
-        status: row.status,
-    };
+    *lifecycle_slot.lock().await = Some(RunnerLifecycle {
+        shutdown_tx: per_vault_tx,
+        rescan_tx,
+        consumer_handle,
+        watcher: watcher_handle,
+    });
 
-    Ok((
-        entry,
-        RunnerLifecycle {
-            shutdown_tx: per_vault_tx,
-            rescan_tx,
-            consumer_handle,
-            watcher: watcher_handle,
-        },
-    ))
+    Ok(())
+}
+
+/// Test-only helper that resolves a vault by name (or id) and awaits its
+/// in-flight bootstrap (initial-scan) to reach a terminal state — `Ready` or
+/// `Errored`. Returns immediately if the vault has already finished
+/// bootstrapping. Implemented over the per-runner `watch::Sender<bool>` that
+/// the bootstrap task latches on completion, so existing tests that assumed
+/// "indexed when `open()` returns" can be migrated by sprinkling a single
+/// `.await`-suffixed call after the manager is constructed.
+///
+/// Pre-step-24 the initial scan ran inline in `spawn_runner_parts`, so
+/// `VaultManager::open` / `create` / `resume` / `reset` returned only after
+/// the index was fully populated. Step 24 splits that into a sync open + a
+/// background task; tests that read post-scan invariants need an explicit
+/// rendezvous, and this helper is it.
+#[cfg(test)]
+pub(crate) async fn wait_for_bootstrap(
+    manager: &VaultManager,
+    name_or_id: &str,
+) -> Result<(), ControlPlaneError> {
+    let id = manager.resolve(name_or_id)?;
+    let runner = manager
+        .runner_for(&id)
+        .ok_or_else(|| ControlPlaneError::VaultNotFound {
+            name_or_id: name_or_id.to_string(),
+            hint: None,
+        })?;
+    let mut rx = runner.bootstrap_done_rx();
+    rx.wait_for(|done| *done)
+        .await
+        .map_err(|e| ControlPlaneError::Internal(anyhow::anyhow!(e)))?;
+    Ok(())
 }
 
 /// Run the `--rebuild` SQL on a per-vault store: drop every chunk row,

@@ -145,6 +145,7 @@ mod tests {
             vault_path: vault.path().to_path_buf(),
             store: Arc::new(store),
             status: VaultStatus::Active,
+            bootstrap_state: crate::api::BootstrapState::ready_state(),
         };
         let manager = Arc::new(VaultManager::for_tests(
             vec![entry],
@@ -205,6 +206,7 @@ mod tests {
             vault_path: vault.path().to_path_buf(),
             store: Arc::new(store),
             status: VaultStatus::Active,
+            bootstrap_state: crate::api::BootstrapState::ready_state(),
         };
         let errored_row = VaultRow {
             id: VaultId::new(),
