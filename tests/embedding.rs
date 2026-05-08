@@ -42,7 +42,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
-const SETTLE: Duration = Duration::from_millis(4 * DEBOUNCE_MS);
+const SETTLE: Duration = Duration::from_millis(6 * DEBOUNCE_MS);
 const SCHEMA_DIM: usize = 768;
 
 // ===== Stub embedding service =====
