@@ -25,7 +25,9 @@ async fn register_sqlite_vec_works_across_two_independent_connections() {
             .expect("build pool A");
 
         let c1 = pool_a.get().expect("pool A conn 1");
-        let c2 = pool_a.get().expect("pool A conn 2 (must be a distinct connection)");
+        let c2 = pool_a
+            .get()
+            .expect("pool A conn 2 (must be a distinct connection)");
 
         let v_a1: String = c1
             .query_row("SELECT vec_version()", [], |r| r.get(0))

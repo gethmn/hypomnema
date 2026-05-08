@@ -68,6 +68,85 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default = "default_default_vault_name")]
     pub default_vault_name: String,
+    #[serde(default)]
+    pub search: SearchConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchConfig {
+    #[serde(default)]
+    pub semantic: SemanticSearchConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticSearchConfig {
+    #[serde(default = "default_semantic_granularity")]
+    pub default_granularity: String,
+    #[serde(default = "default_semantic_chunks_per_document")]
+    pub default_chunks_per_document: u32,
+    #[serde(default = "default_semantic_candidate_multiplier")]
+    pub document_candidate_multiplier: u32,
+    #[serde(default = "default_semantic_candidate_limit")]
+    pub document_candidate_limit: u32,
+}
+
+impl Default for SemanticSearchConfig {
+    fn default() -> Self {
+        Self {
+            default_granularity: default_semantic_granularity(),
+            default_chunks_per_document: default_semantic_chunks_per_document(),
+            document_candidate_multiplier: default_semantic_candidate_multiplier(),
+            document_candidate_limit: default_semantic_candidate_limit(),
+        }
+    }
+}
+
+fn default_semantic_granularity() -> String {
+    "document".to_string()
+}
+
+fn default_semantic_chunks_per_document() -> u32 {
+    3
+}
+
+fn default_semantic_candidate_multiplier() -> u32 {
+    10
+}
+
+fn default_semantic_candidate_limit() -> u32 {
+    1000
+}
+
+impl SemanticSearchConfig {
+    pub fn validate(&self) -> Result<()> {
+        if !matches!(self.default_granularity.as_str(), "document" | "chunk") {
+            bail!(
+                "search.semantic.default_granularity must be \"document\" or \"chunk\", got {:?}",
+                self.default_granularity
+            );
+        }
+        if !(1..=100).contains(&self.default_chunks_per_document) {
+            bail!(
+                "search.semantic.default_chunks_per_document must be in 1..=100, got {}",
+                self.default_chunks_per_document
+            );
+        }
+        if !(1..=100).contains(&self.document_candidate_multiplier) {
+            bail!(
+                "search.semantic.document_candidate_multiplier must be in 1..=100, got {}",
+                self.document_candidate_multiplier
+            );
+        }
+        if !(1..=10000).contains(&self.document_candidate_limit) {
+            bail!(
+                "search.semantic.document_candidate_limit must be in 1..=10000, got {}",
+                self.document_candidate_limit
+            );
+        }
+        Ok(())
+    }
 }
 
 fn default_default_vault_name() -> String {
@@ -420,6 +499,8 @@ impl Config {
         parse_level(&self.logging.notify_level, "logging.notify_level")?;
         parse_level(&self.logging.tokio_level, "logging.tokio_level")?;
 
+        self.search.semantic.validate()?;
+
         Ok(())
     }
 
@@ -434,6 +515,7 @@ impl Config {
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
             default_vault_name: default_default_vault_name(),
+            search: SearchConfig::default(),
         }
     }
 }

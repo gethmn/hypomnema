@@ -324,6 +324,8 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -357,9 +359,8 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
 fn open_index(data_dir: &Path) -> Connection {
     register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
-    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .expect("open index.sqlite read-only");
-    conn
+    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("open index.sqlite read-only")
 }
 
 fn count_chunks_for(data_dir: &Path, rel: &str) -> i64 {
@@ -697,8 +698,7 @@ impl Embedder for DeterministicHashEmbedder {
 fn open_index_rw(data_dir: &Path) -> Connection {
     register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
-    let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
-    conn
+    Connection::open(&db_path).expect("open index.sqlite read-write")
 }
 
 /// Wipe `chunks_vec` and `chunks` while leaving `files` populated. Reaches the

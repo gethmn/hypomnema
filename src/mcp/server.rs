@@ -66,9 +66,14 @@ impl HypomnemaMcpServer {
     }
 
     #[tool(
-        description = "Semantic search via cosine similarity over indexed chunk \
-                       embeddings. Answers \"what in this vault is conceptually \
-                       similar to this idea?\". See docs/specs/semantic-search.md."
+        description = "Semantic search via cosine similarity over indexed chunk embeddings. \
+                       Use `granularity: \"document\"` (default) to answer \"which notes are \
+                       relevant to this topic?\" — results are grouped by parent document with \
+                       bounded evidence chunks showing why each document matched. \
+                       Use `granularity: \"chunk\"` to answer \"which passages are relevant?\" — \
+                       returns flat chunk results as in pre-Step-25 behavior. \
+                       `chunks_per_document` (1..=100, default 3) controls evidence depth in \
+                       document mode. See docs/specs/semantic-search.md."
     )]
     async fn search_semantic(
         &self,
@@ -357,8 +362,8 @@ mod tests {
     use super::*;
     use crate::api::types::{
         ContentMatchJson, ContentResultJson, ContentSearchResponse, FilesystemResultJson,
-        FilesystemSearchResponse, RescanResponseJson, SemanticResultJson, SemanticSearchResponse,
-        TerminateVaultResponse, VaultListResponse, VaultRowJson,
+        FilesystemSearchResponse, RescanResponseJson, SemanticResultItem, SemanticResultJson,
+        SemanticSearchResponse, TerminateVaultResponse, VaultListResponse, VaultRowJson,
     };
     use crate::client::DaemonClient;
     use crate::config::Config;
@@ -532,7 +537,7 @@ mod tests {
             "/search/semantic",
             post(|| async {
                 axum::Json(SemanticSearchResponse {
-                    results: vec![SemanticResultJson {
+                    results: vec![SemanticResultItem::Chunk(SemanticResultJson {
                         score: 0.75,
                         file_path: "notes/baz.md".into(),
                         chunk_index: 2,
@@ -543,7 +548,7 @@ mod tests {
                         content_hash: "sha256:baz".into(),
                         vault: None,
                         vault_name: None,
-                    }],
+                    })],
                     truncated: false,
                     hint: None,
                     partial_results: None,

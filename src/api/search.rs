@@ -10,10 +10,12 @@ use super::types::{
     ContentGetError, ContentGetErrorDetail, ContentGetRequest, ContentGetResponse,
     ContentGetResultItem, ContentGetSuccess, ContentMatchJson, ContentQueryJson, ContentResultJson,
     ContentSearchResponse, FailedVault, FilesystemQueryJson, FilesystemResultJson,
-    FilesystemSearchResponse, PartialResults, SemanticQueryJson, SemanticResultJson,
+    FilesystemSearchResponse, PartialResults, SemanticDocumentResultJson,
+    SemanticEvidenceChunkJson, SemanticQueryJson, SemanticResultItem, SemanticResultJson,
     SemanticSearchResponse, SkippedVault,
 };
 use crate::api::VaultEntry;
+use crate::config::SemanticSearchConfig;
 use crate::control_plane::{VaultManager, VaultScopeRow};
 use crate::search::{
     ContentMode, ContentQuery, ContentResult, FilesystemQuery, FilesystemResult, SemanticQuery,
@@ -296,23 +298,50 @@ pub(crate) async fn semantic(
     State(s): State<ApiState>,
     ApiJson(req): ApiJson<SemanticQueryJson>,
 ) -> Result<Json<SemanticSearchResponse>, ApiError> {
-    run_semantic_search(&s.vault_manager, &req).await.map(Json)
+    run_semantic_search(&s.vault_manager, &req, &s.semantic_config)
+        .await
+        .map(Json)
 }
 
 pub(crate) async fn run_semantic_search(
     manager: &VaultManager,
     req: &SemanticQueryJson,
+    semantic_cfg: &SemanticSearchConfig,
 ) -> Result<SemanticSearchResponse, ApiError> {
     if let Some(filter) = req.vaults.as_deref() {
         validate_filter_non_empty(filter)?;
     }
+
+    // Validate and resolve granularity: request -> config -> built-in default.
+    let effective_granularity =
+        resolve_effective_granularity(req.granularity.as_deref(), semantic_cfg)?;
+
+    // Validate chunks_per_document; resolve effective value for document mode.
+    // Accepted but ignored in chunk mode (workplan decision 2).
+    let effective_chunks_per_document =
+        resolve_effective_chunks_per_document(req.chunks_per_document, semantic_cfg)?;
+
     let include_text = parse_include_text(req.include_text.as_deref())?;
     let preview_bytes = resolve_preview_bytes(req.preview_bytes)?;
     let limit = req.limit.unwrap_or(DEFAULT_SEMANTIC_LIMIT);
+    let is_document_mode = effective_granularity == "document";
+
+    // Chunk mode uses the user's `limit` directly as candidate depth.
+    // Document mode requests a deeper per-vault candidate set so grouping has
+    // enough chunks to draw from:
+    //   min(limit * document_candidate_multiplier, document_candidate_limit)
+    let candidate_limit = if is_document_mode {
+        (limit as u64)
+            .saturating_mul(semantic_cfg.document_candidate_multiplier as u64)
+            .min(semantic_cfg.document_candidate_limit as u64)
+            .max(1) as usize
+    } else {
+        limit
+    };
     let q_template = SemanticQuery {
         query: req.query.clone(),
         prefix: req.prefix.clone(),
-        limit,
+        candidate_limit,
         min_similarity: req.min_similarity.unwrap_or(0.0).clamp(0.0, 1.0),
     };
 
@@ -322,7 +351,10 @@ pub(crate) async fn run_semantic_search(
     let scope = manager.search_scope().await?;
     let plan = filter_scope(scope, req.vaults.as_deref());
 
-    let mut all_results: Vec<SemanticResultJson> = Vec::new();
+    // Collected per-vault candidate rows. We hold onto the originating vault
+    // entry for each row so the document-mode grouping below can populate
+    // `vault` / `vault_name` and use the vault id as part of the grouping key.
+    let mut per_vault_rows: Vec<(Arc<VaultEntry>, Vec<SemanticResult>)> = Vec::new();
     let mut any_hint: Option<String> = None;
     let mut any_truncated = false;
     let mut skipped: Vec<SkippedVault> = Vec::new();
@@ -344,14 +376,7 @@ pub(crate) async fn run_semantic_search(
                         if any_hint.is_none() && hint.is_some() {
                             any_hint = hint;
                         }
-                        for r in rows {
-                            all_results.push(semantic_to_json(
-                                r,
-                                &entry,
-                                &include_text,
-                                preview_bytes,
-                            ));
-                        }
+                        per_vault_rows.push((entry, rows));
                     }
                     Err(e) => match e {
                         SemanticSearchError::EmbeddingUnavailable { .. }
@@ -377,18 +402,18 @@ pub(crate) async fn run_semantic_search(
         }
     }
 
-    // Score-desc with vault-id tie-break, per spec § Cross-Vault Search
-    // Semantics § Result ordering — semantic-search.
-    all_results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.vault.as_deref().cmp(&b.vault.as_deref()))
-    });
-    let was_capped = all_results.len() > limit;
-    if was_capped {
-        all_results.truncate(limit);
-    }
+    let (all_results, was_capped) = if is_document_mode {
+        build_document_results(
+            per_vault_rows,
+            limit,
+            effective_chunks_per_document as usize,
+            &include_text,
+            preview_bytes,
+        )
+    } else {
+        build_chunk_results(per_vault_rows, limit, &include_text, preview_bytes)
+    };
+
     let hint = if all_results.is_empty() {
         any_hint
     } else {
@@ -401,6 +426,156 @@ pub(crate) async fn run_semantic_search(
         hint,
         partial_results: build_partial_results(skipped, failed),
     })
+}
+
+/// Flatten per-vault candidate rows into chunk-mode results, sorted by score
+/// desc then vault id, capped at `limit`. Returns `(results, was_capped)`.
+fn build_chunk_results(
+    per_vault_rows: Vec<(Arc<VaultEntry>, Vec<SemanticResult>)>,
+    limit: usize,
+    include_text: &IncludeText,
+    preview_bytes: usize,
+) -> (Vec<SemanticResultItem>, bool) {
+    let mut all_results: Vec<SemanticResultItem> = Vec::new();
+    for (entry, rows) in per_vault_rows {
+        for r in rows {
+            all_results.push(SemanticResultItem::Chunk(semantic_to_json(
+                r,
+                &entry,
+                include_text,
+                preview_bytes,
+            )));
+        }
+    }
+    // Score-desc with vault-id tie-break, per spec § Cross-Vault Search
+    // Semantics § Result ordering — semantic-search.
+    all_results.sort_by(|a, b| {
+        let sa = semantic_result_item_score(a);
+        let sb = semantic_result_item_score(b);
+        sb.partial_cmp(&sa)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| semantic_result_item_vault(a).cmp(&semantic_result_item_vault(b)))
+    });
+    let was_capped = all_results.len() > limit;
+    if was_capped {
+        all_results.truncate(limit);
+    }
+    (all_results, was_capped)
+}
+
+/// Group per-vault candidate rows into documents keyed by
+/// `(vault_id, file_path, content_hash)`, sort/cap evidence chunks within
+/// each document, then sort and cap documents across vaults. Returns
+/// `(results, was_capped)`.
+fn build_document_results(
+    per_vault_rows: Vec<(Arc<VaultEntry>, Vec<SemanticResult>)>,
+    limit: usize,
+    chunks_per_document: usize,
+    include_text: &IncludeText,
+    preview_bytes: usize,
+) -> (Vec<SemanticResultItem>, bool) {
+    use std::collections::BTreeMap;
+
+    // Use a BTreeMap so iteration order is deterministic in the unlikely event
+    // that multiple documents tie on (score, vault_id, file_path) — though the
+    // explicit sort below is the load-bearing source of order.
+    type DocKey = (String, String, String); // (vault_id, file_path, content_hash)
+    struct DocAcc {
+        entry: Arc<VaultEntry>,
+        rows: Vec<SemanticResult>,
+    }
+    let mut docs: BTreeMap<DocKey, DocAcc> = BTreeMap::new();
+
+    for (entry, rows) in per_vault_rows {
+        for r in rows {
+            let key = (
+                entry.id.to_string(),
+                r.file_path.clone(),
+                r.content_hash.clone(),
+            );
+            docs.entry(key)
+                .or_insert_with(|| DocAcc {
+                    entry: entry.clone(),
+                    rows: Vec::new(),
+                })
+                .rows
+                .push(r);
+        }
+    }
+
+    let mut docs_out: Vec<SemanticDocumentResultJson> = Vec::with_capacity(docs.len());
+    for (_key, mut acc) in docs {
+        // Score desc, then chunk_index asc, deterministic ties.
+        acc.rows.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.chunk_index.cmp(&b.chunk_index))
+        });
+        let best_score = acc.rows.first().map(|r| r.score).unwrap_or(0.0);
+        let file_path = acc.rows[0].file_path.clone();
+        let content_hash = acc.rows[0].content_hash.clone();
+        acc.rows.truncate(chunks_per_document);
+        let chunks: Vec<SemanticEvidenceChunkJson> = acc
+            .rows
+            .into_iter()
+            .map(|r| evidence_chunk_to_json(r, include_text, preview_bytes))
+            .collect();
+        docs_out.push(SemanticDocumentResultJson {
+            score: best_score,
+            file_path,
+            content_hash,
+            chunks,
+            vault: Some(acc.entry.id.to_string()),
+            vault_name: Some(acc.entry.name.clone()),
+        });
+    }
+
+    // Cross-vault document merge: score desc, then vault id asc, then file
+    // path asc — workplan Task 3 shipping criterion.
+    docs_out.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.vault.as_deref().cmp(&b.vault.as_deref()))
+            .then_with(|| a.file_path.cmp(&b.file_path))
+    });
+    let was_capped = docs_out.len() > limit;
+    if was_capped {
+        docs_out.truncate(limit);
+    }
+    let results = docs_out
+        .into_iter()
+        .map(SemanticResultItem::Document)
+        .collect();
+    (results, was_capped)
+}
+
+fn evidence_chunk_to_json(
+    r: SemanticResult,
+    include_text: &IncludeText,
+    preview_bytes: usize,
+) -> SemanticEvidenceChunkJson {
+    let (text, text_kind, text_truncated) = match include_text {
+        IncludeText::None => (None, None, None),
+        IncludeText::Full => (Some(r.text), Some("full".to_string()), Some(false)),
+        IncludeText::Preview => {
+            let (preview, was_truncated) = make_preview(&r.text, preview_bytes);
+            (
+                Some(preview),
+                Some("preview".to_string()),
+                Some(was_truncated),
+            )
+        }
+    };
+    SemanticEvidenceChunkJson {
+        score: r.score,
+        chunk_index: r.chunk_index,
+        heading_path: r.heading_path.split('/').map(String::from).collect(),
+        text,
+        text_kind,
+        text_truncated,
+    }
 }
 
 pub(crate) async fn content_get(
@@ -633,6 +808,47 @@ fn semantic_to_json(
     }
 }
 
+fn semantic_result_item_score(item: &SemanticResultItem) -> f32 {
+    match item {
+        SemanticResultItem::Chunk(c) => c.score,
+        SemanticResultItem::Document(d) => d.score,
+    }
+}
+
+fn semantic_result_item_vault(item: &SemanticResultItem) -> Option<&str> {
+    match item {
+        SemanticResultItem::Chunk(c) => c.vault.as_deref(),
+        SemanticResultItem::Document(d) => d.vault.as_deref(),
+    }
+}
+
+fn resolve_effective_granularity(
+    req_granularity: Option<&str>,
+    cfg: &SemanticSearchConfig,
+) -> Result<String, ApiError> {
+    match req_granularity {
+        Some("document") => Ok("document".to_string()),
+        Some("chunk") => Ok("chunk".to_string()),
+        Some(other) => Err(ApiError::invalid_request(format!(
+            "granularity must be \"document\" or \"chunk\", got \"{other}\""
+        ))),
+        None => Ok(cfg.default_granularity.clone()),
+    }
+}
+
+fn resolve_effective_chunks_per_document(
+    req_value: Option<u32>,
+    cfg: &SemanticSearchConfig,
+) -> Result<u32, ApiError> {
+    match req_value {
+        Some(n) if !(1..=100).contains(&n) => Err(ApiError::invalid_request(format!(
+            "chunks_per_document must be in 1..=100, got {n}"
+        ))),
+        Some(n) => Ok(n),
+        None => Ok(cfg.default_chunks_per_document),
+    }
+}
+
 fn validate_filter_non_empty(filter: &[String]) -> Result<(), ApiError> {
     if filter.is_empty() {
         return Err(ApiError::invalid_request("vaults filter must be non-empty"));
@@ -765,6 +981,100 @@ fn anyhow_is_request_validation(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SemanticSearchConfig;
+
+    // ===== Step 25 Task 1: granularity and chunks_per_document validation =====
+
+    fn default_cfg() -> SemanticSearchConfig {
+        SemanticSearchConfig::default()
+    }
+
+    #[test]
+    fn resolve_granularity_request_document() {
+        let g = resolve_effective_granularity(Some("document"), &default_cfg())
+            .map_err(anyhow::Error::from)
+            .unwrap();
+        assert_eq!(g, "document");
+    }
+
+    #[test]
+    fn resolve_granularity_request_chunk() {
+        let g = resolve_effective_granularity(Some("chunk"), &default_cfg())
+            .map_err(anyhow::Error::from)
+            .unwrap();
+        assert_eq!(g, "chunk");
+    }
+
+    #[test]
+    fn resolve_granularity_falls_back_to_config() {
+        let mut cfg = default_cfg();
+        cfg.default_granularity = "chunk".to_string();
+        let g = resolve_effective_granularity(None, &cfg)
+            .map_err(anyhow::Error::from)
+            .unwrap();
+        assert_eq!(g, "chunk");
+    }
+
+    #[test]
+    fn resolve_granularity_rejects_invalid() {
+        let err = resolve_effective_granularity(Some("paragraph"), &default_cfg())
+            .expect_err("should reject unknown granularity");
+        let msg = anyhow::Error::from(err).to_string();
+        assert!(
+            msg.contains("paragraph"),
+            "error should mention the bad value: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_chunks_per_document_uses_request() {
+        let n = resolve_effective_chunks_per_document(Some(5), &default_cfg())
+            .map_err(anyhow::Error::from)
+            .unwrap();
+        assert_eq!(n, 5);
+    }
+
+    #[test]
+    fn resolve_chunks_per_document_falls_back_to_config() {
+        let mut cfg = default_cfg();
+        cfg.default_chunks_per_document = 7;
+        let n = resolve_effective_chunks_per_document(None, &cfg)
+            .map_err(anyhow::Error::from)
+            .unwrap();
+        assert_eq!(n, 7);
+    }
+
+    #[test]
+    fn resolve_chunks_per_document_rejects_zero() {
+        let err = resolve_effective_chunks_per_document(Some(0), &default_cfg())
+            .expect_err("0 is out of range");
+        let msg = anyhow::Error::from(err).to_string();
+        assert!(msg.contains("chunks_per_document"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_chunks_per_document_rejects_over_100() {
+        let err = resolve_effective_chunks_per_document(Some(101), &default_cfg())
+            .expect_err("101 is out of range");
+        let msg = anyhow::Error::from(err).to_string();
+        assert!(msg.contains("chunks_per_document"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_chunks_per_document_accepts_boundary_values() {
+        assert_eq!(
+            resolve_effective_chunks_per_document(Some(1), &default_cfg())
+                .map_err(anyhow::Error::from)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_effective_chunks_per_document(Some(100), &default_cfg())
+                .map_err(anyhow::Error::from)
+                .unwrap(),
+            100
+        );
+    }
 
     // ===== Task 8.1: Unit tests for validate_retrieval_path =====
 

@@ -133,6 +133,8 @@ async fn spawn_seeded_daemon_with_embedder(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let mut app = api::router(api_state);
 
@@ -242,6 +244,8 @@ async fn spawn_live_daemon() -> LiveHttpMcpDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
         Arc::new(InProcessBackend::new(manager.clone()));
@@ -288,6 +292,8 @@ fn make_live_config(data_dir: PathBuf) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+
+        search: hypomnema::config::SearchConfig::default(),
     }
 }
 
@@ -1262,6 +1268,121 @@ async fn concurrent_calls_dont_block_each_other() {
     assert_eq!(
         completed, 10,
         "expected 10 parallel calls to complete within 20s, got {completed}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_http_search_semantic_chunk_granularity_returns_success() {
+    let daemon =
+        spawn_seeded_daemon_with_embedder(vec!["alpha"], FixedEmbedder::new(&[(0, 1.0)]), true)
+            .await;
+    seed_files(
+        daemon.pools[0].clone(),
+        vec![("note.md", "body text\n", "2026-01-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        daemon.pools[0].clone(),
+        "note.md",
+        0,
+        "## Section",
+        "indexed body text",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let mut client = HttpMcpClient::new(&daemon.base_url);
+    client.initialize().await;
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": { "query": "anything", "granularity": "chunk" }
+            }),
+        )
+        .await;
+    assert!(
+        !resp["result"]["isError"].as_bool().unwrap_or(false),
+        "chunk granularity returned isError=true: {resp}"
+    );
+    assert!(
+        resp["result"]["structuredContent"]["results"].is_array(),
+        "expected results array: {resp}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_http_search_semantic_document_granularity_returns_success() {
+    let daemon =
+        spawn_seeded_daemon_with_embedder(vec!["alpha"], FixedEmbedder::new(&[(0, 1.0)]), true)
+            .await;
+    seed_files(
+        daemon.pools[0].clone(),
+        vec![("note.md", "body text\n", "2026-01-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk(
+        daemon.pools[0].clone(),
+        "note.md",
+        0,
+        "## Section",
+        "indexed body text",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let mut client = HttpMcpClient::new(&daemon.base_url);
+    client.initialize().await;
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": {
+                    "query": "anything",
+                    "granularity": "document",
+                    "chunks_per_document": 2
+                }
+            }),
+        )
+        .await;
+    assert!(
+        !resp["result"]["isError"].as_bool().unwrap_or(false),
+        "document granularity returned isError=true: {resp}"
+    );
+    assert!(
+        resp["result"]["structuredContent"]["results"].is_array(),
+        "expected results array: {resp}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_http_search_semantic_invalid_granularity_returns_error() {
+    let daemon = spawn_seeded_daemon(vec!["alpha"]).await;
+
+    let mut client = HttpMcpClient::new(&daemon.base_url);
+    client.initialize().await;
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": { "query": "anything", "granularity": "bogus" }
+            }),
+        )
+        .await;
+    let content = &resp["result"]["content"];
+    let text = content[0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("invalid_request"),
+        "expected invalid_request in error content, got: {resp}"
     );
 
     daemon.shutdown().await;

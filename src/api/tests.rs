@@ -70,6 +70,7 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
     Harness {
         _dir: dir,
@@ -446,7 +447,12 @@ async fn semantic_handler_returns_200_with_results_for_seeded_chunks() {
     .await;
 
     let app = router(h.state.clone());
-    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "chunk" }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
@@ -758,6 +764,7 @@ fn vault_test_config(data_dir: &std::path::Path) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+        search: crate::config::SearchConfig::default(),
     }
 }
 
@@ -778,6 +785,7 @@ async fn vault_harness() -> VaultHarness {
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
     VaultHarness {
         _root: root,
@@ -1119,6 +1127,7 @@ async fn multi_vault_harness_with(
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
     MultiVaultHarness {
         _root: root,
@@ -1618,7 +1627,12 @@ async fn semantic_search_assumes_same_dimension_across_vaults() {
     .unwrap();
 
     let app = router(h.state.clone());
-    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "chunk" }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK, "should not crash; got {body}");
@@ -1676,6 +1690,7 @@ async fn errored_vault_harness(
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
     (
         VaultHarness {
@@ -1979,6 +1994,7 @@ async fn watch_harness() -> WatchHarness {
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
     WatchHarness {
         _dir: dir,
@@ -2146,6 +2162,7 @@ async fn watch_all_streams_events_from_all_active_vaults() {
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
 
     let app = router(state.clone());
@@ -2209,6 +2226,7 @@ async fn watch_all_filters_out_inactive_vault_events() {
         event_bus: manager.event_bus(),
         started_at: Instant::now(),
         embedding_endpoint: None,
+        semantic_config: crate::config::SemanticSearchConfig::default(),
     };
 
     let app = router(state.clone());
@@ -2437,7 +2455,12 @@ async fn semantic_default_include_text_returns_preview_kind_long_chunk_truncated
     .await;
 
     let app = router(h.state.clone());
-    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "chunk" }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
@@ -2472,7 +2495,12 @@ async fn semantic_default_include_text_short_chunk_not_truncated() {
     .await;
 
     let app = router(h.state.clone());
-    let req = json_request("POST", "/search/semantic", json!({ "query": "alpha" })).await;
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "chunk" }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
@@ -2505,7 +2533,7 @@ async fn semantic_include_text_full_returns_complete_content() {
     let req = json_request(
         "POST",
         "/search/semantic",
-        json!({ "query": "alpha", "include_text": "full", "limit": 3 }),
+        json!({ "query": "alpha", "include_text": "full", "limit": 3, "granularity": "chunk" }),
     )
     .await;
     let resp = app.oneshot(req).await.unwrap();
@@ -2541,7 +2569,12 @@ async fn semantic_preview_truncation_produces_valid_utf8() {
     .await;
 
     let app = router(h.state.clone());
-    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "chunk" }),
+    )
+    .await;
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
@@ -2582,7 +2615,7 @@ async fn semantic_oversized_preview_bytes_clamped_to_2000() {
     let req = json_request(
         "POST",
         "/search/semantic",
-        json!({ "query": "x", "preview_bytes": 100000 }),
+        json!({ "query": "x", "preview_bytes": 100000, "granularity": "chunk" }),
     )
     .await;
     let resp = app.oneshot(req).await.unwrap();
@@ -2596,4 +2629,922 @@ async fn semantic_oversized_preview_bytes_clamped_to_2000() {
         text.len()
     );
     assert_eq!(result["text_truncated"], true);
+}
+
+// ===== Step 25 Task 3: document grouping =====
+
+#[tokio::test]
+async fn semantic_document_mode_groups_chunks_into_one_doc() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(
+        h.pool(),
+        vec![("a.md", "alpha body", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    // Two chunks in the same file → must group into one document.
+    // Score 1.0 (parallel) and 0.5 (orthogonal).
+    seed_chunk(h.pool(), "a.md", 0, "Intro", "high", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 1, "Body", "low", unit_vec(&[(1, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "two chunks of one file → one document");
+    let doc = &results[0];
+    assert_eq!(doc["file_path"], "a.md");
+    assert_eq!(doc["content_hash"], "sha256:00");
+    let doc_score = doc["score"].as_f64().unwrap() as f32;
+    assert!(
+        (doc_score - 1.0).abs() < 1e-6,
+        "doc score must equal best chunk score (1.0), got {doc_score}"
+    );
+    let chunks = doc["chunks"].as_array().unwrap();
+    assert_eq!(chunks.len(), 2);
+    // Sorted by score desc → chunk_index 0 first, chunk_index 1 second.
+    assert_eq!(chunks[0]["chunk_index"], 0);
+    assert_eq!(chunks[1]["chunk_index"], 1);
+    assert!(
+        chunks[0]["score"].as_f64().unwrap() >= chunks[1]["score"].as_f64().unwrap(),
+        "evidence chunks must be sorted by score desc"
+    );
+}
+
+#[tokio::test]
+async fn semantic_document_mode_evidence_sorted_by_score_then_chunk_index() {
+    // Three chunks with two tied at score 1.0 and one at 0.5. Tied scores
+    // must break by chunk_index ascending.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 5, "", "c5", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 2, "", "c2", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 9, "", "c9", unit_vec(&[(1, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunks = body["results"][0]["chunks"].as_array().unwrap();
+    let order: Vec<u64> = chunks
+        .iter()
+        .map(|c| c["chunk_index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(order, vec![2, 5, 9]);
+}
+
+#[tokio::test]
+async fn semantic_document_mode_caps_evidence_at_chunks_per_document() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    for i in 0..5u32 {
+        seed_chunk(h.pool(), "a.md", i, "", "c", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document", "chunks_per_document": 2 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunks = body["results"][0]["chunks"].as_array().unwrap();
+    assert_eq!(chunks.len(), 2, "evidence cap must apply");
+}
+
+#[tokio::test]
+async fn semantic_document_mode_limit_caps_documents_not_chunks() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    // 3 files, each with 2 chunks. limit=2 → 2 documents (with all evidence
+    // up to chunks_per_document), not 2 individual chunks.
+    for path in ["a.md", "b.md", "c.md"] {
+        seed_files(h.pool(), vec![(path, "x", "2026-04-01T00:00:00Z")]).await;
+        seed_chunk(h.pool(), path, 0, "", "x0", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(h.pool(), path, 1, "", "x1", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document", "limit": 2 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "limit=2 must cap to 2 documents");
+    assert_eq!(body["truncated"], true, "3 docs > limit=2 → truncated");
+    // Each document still has both nested chunks (under default
+    // chunks_per_document=3).
+    for doc in results {
+        let chunks = doc["chunks"].as_array().unwrap();
+        assert_eq!(chunks.len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn semantic_document_mode_include_text_full_applies_to_nested_chunks() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let body_text = "complete chunk body".to_string();
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk_owned(
+        h.pool(),
+        "a.md".to_string(),
+        0,
+        "".to_string(),
+        body_text.clone(),
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({
+            "query": "alpha",
+            "granularity": "document",
+            "include_text": "full"
+        }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunk = &body["results"][0]["chunks"][0];
+    assert_eq!(chunk["text"], body_text);
+    assert_eq!(chunk["text_kind"], "full");
+    assert_eq!(chunk["text_truncated"], false);
+}
+
+#[tokio::test]
+async fn semantic_document_mode_include_text_none_omits_nested_text_fields() {
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 0, "", "body", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({
+            "query": "alpha",
+            "granularity": "document",
+            "include_text": "none"
+        }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunk = &body["results"][0]["chunks"][0];
+    assert!(chunk.get("text").is_none() || chunk["text"].is_null());
+    assert!(chunk.get("text_kind").is_none() || chunk["text_kind"].is_null());
+    assert!(chunk.get("text_truncated").is_none() || chunk["text_truncated"].is_null());
+    // Metadata still present.
+    assert!(chunk["score"].is_number());
+    assert!(chunk["chunk_index"].is_number());
+}
+
+#[tokio::test]
+async fn semantic_document_mode_preserves_hint_when_index_empty() {
+    // Files exist but no chunks → hint should fire even in document mode.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (_status, body) = body_json(resp).await;
+    assert_eq!(body["results"].as_array().unwrap().len(), 0);
+    assert_eq!(body["hint"], "semantic index is building");
+}
+
+#[tokio::test]
+async fn semantic_document_mode_truncated_when_per_vault_candidate_cap_reached() {
+    // Force candidate cap by setting document_candidate_limit small via a
+    // tweaked config. document_candidate_multiplier * limit > limit_cap →
+    // saturated. Seeding more chunks than the cap forces vault-level
+    // truncation even though final document count <= limit.
+    let mut h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    h.state.semantic_config = crate::config::SemanticSearchConfig {
+        default_granularity: "document".to_string(),
+        default_chunks_per_document: 3,
+        document_candidate_multiplier: 1,
+        document_candidate_limit: 2,
+    };
+    for path in ["a.md", "b.md", "c.md"] {
+        seed_files(h.pool(), vec![(path, "x", "2026-04-01T00:00:00Z")]).await;
+        seed_chunk(h.pool(), path, 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "document", "limit": 5 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (_status, body) = body_json(resp).await;
+    assert_eq!(
+        body["truncated"], true,
+        "candidate cap should set truncated"
+    );
+}
+
+#[tokio::test]
+async fn semantic_chunk_mode_limit_still_caps_flat_chunks() {
+    // Confirm chunk mode is unaffected by document grouping changes.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    for path in ["a.md", "b.md", "c.md"] {
+        seed_files(h.pool(), vec![(path, "x", "2026-04-01T00:00:00Z")]).await;
+        seed_chunk(h.pool(), path, 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "chunk", "limit": 2 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (_status, body) = body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    // Flat chunks: first-level field is chunk_index (no nested chunks array).
+    assert!(results[0].get("chunks").is_none());
+    assert!(results[0]["chunk_index"].is_number());
+}
+
+#[tokio::test]
+async fn semantic_document_mode_chunks_per_document_ignored_in_chunk_mode() {
+    // chunks_per_document is accepted but ignored when granularity=chunk.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 1, "", "y", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({
+            "query": "alpha",
+            "granularity": "chunk",
+            "chunks_per_document": 1
+        }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    // chunks_per_document=1 must not cap flat chunks; both should appear.
+    assert_eq!(body["results"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn cross_vault_document_mode_groups_per_vault_separately() {
+    // Same file_path in two vaults must produce two distinct documents
+    // (group key includes vault_id).
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    seed_chunk(
+        h.pools[0].clone(),
+        "shared.md",
+        0,
+        "",
+        "a",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    seed_chunk(
+        h.pools[1].clone(),
+        "shared.md",
+        0,
+        "",
+        "b",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "same path in two vaults must produce two documents"
+    );
+    let vaults: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["vault"].as_str().unwrap())
+        .collect();
+    assert_eq!(vaults.len(), 2, "both vaults represented");
+    for r in results {
+        assert_eq!(r["file_path"], "shared.md");
+        assert_eq!(r["chunks"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn cross_vault_document_mode_score_then_vault_then_path_ordering() {
+    // Two vaults, two files each with identical scores 1.0. Tie order:
+    // score desc, then vault id asc, then file path asc.
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    seed_chunk(
+        h.pools[0].clone(),
+        "z.md",
+        0,
+        "",
+        "z",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    seed_chunk(
+        h.pools[0].clone(),
+        "a.md",
+        0,
+        "",
+        "a",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    seed_chunk(
+        h.pools[1].clone(),
+        "m.md",
+        0,
+        "",
+        "m",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (_status, body) = body_json(resp).await;
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3);
+    // Determine order: vault ids are random UUIDs; sort the expected results
+    // by (vault_id asc, file_path asc) to compute the canonical ordering.
+    let v0 = h.ids[0].to_string();
+    let v1 = h.ids[1].to_string();
+    let mut expected: Vec<(String, &'static str)> = vec![
+        (v0.clone(), "a.md"),
+        (v0.clone(), "z.md"),
+        (v1.clone(), "m.md"),
+    ];
+    expected.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    let actual: Vec<(String, String)> = results
+        .iter()
+        .map(|r| {
+            (
+                r["vault"].as_str().unwrap().to_string(),
+                r["file_path"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let expected_str: Vec<(String, String)> = expected
+        .into_iter()
+        .map(|(v, p)| (v, p.to_string()))
+        .collect();
+    assert_eq!(actual, expected_str);
+}
+
+// ===== Step 25 Task 5: Verification and Regression Coverage =====
+
+// --- Invalid request validation (granularity and chunks_per_document) ---
+
+#[tokio::test]
+async fn semantic_request_invalid_granularity_returns_400() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "granularity": "paragraph" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("paragraph") || msg.contains("granularity"),
+        "error must mention the bad value: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn semantic_request_chunks_per_document_zero_returns_400() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "chunks_per_document": 0 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("chunks_per_document"),
+        "error must mention chunks_per_document: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn semantic_request_chunks_per_document_over_100_returns_400() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "chunks_per_document": 101 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("chunks_per_document"),
+        "error must mention chunks_per_document: {msg}"
+    );
+}
+
+// --- Config default / request override behavior ---
+
+#[tokio::test]
+async fn semantic_omitted_granularity_uses_config_default_document() {
+    // Config default_granularity="document" (the built-in default). Omitting
+    // granularity in the request must yield document-mode results (nested
+    // chunks array present, no top-level chunk_index).
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert!(
+        result.get("chunks").is_some(),
+        "omitted granularity → document mode → nested chunks must be present"
+    );
+    assert!(
+        result.get("chunk_index").is_none(),
+        "document mode must not have top-level chunk_index"
+    );
+}
+
+#[tokio::test]
+async fn semantic_request_granularity_overrides_config_default() {
+    // Config default_granularity="document"; request granularity="chunk" must
+    // override it and return flat chunk results.
+    let mut h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    h.state.semantic_config = crate::config::SemanticSearchConfig {
+        default_granularity: "document".to_string(),
+        default_chunks_per_document: 3,
+        document_candidate_multiplier: 10,
+        document_candidate_limit: 1000,
+    };
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 0, "", "x", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "chunk" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let result = &body["results"][0];
+    assert!(
+        result.get("chunk_index").is_some(),
+        "request granularity=chunk must override config document default → flat chunk"
+    );
+    assert!(
+        result.get("chunks").is_none(),
+        "chunk mode must not have nested chunks array"
+    );
+}
+
+#[tokio::test]
+async fn semantic_omitted_cpd_uses_config_default() {
+    // Config default_chunks_per_document=3 (built-in). Seed one doc with 5
+    // chunks. Omit chunks_per_document → cap at 3 from config default.
+    let mut h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    h.state.semantic_config = crate::config::SemanticSearchConfig {
+        default_granularity: "document".to_string(),
+        default_chunks_per_document: 3,
+        document_candidate_multiplier: 10,
+        document_candidate_limit: 1000,
+    };
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    for i in 0..5u32 {
+        seed_chunk(h.pool(), "a.md", i, "", "x", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunks = body["results"][0]["chunks"].as_array().unwrap();
+    assert_eq!(
+        chunks.len(),
+        3,
+        "omitted cpd must use config default of 3, not all 5 chunks"
+    );
+}
+
+#[tokio::test]
+async fn semantic_request_cpd_overrides_config_default() {
+    // Config default_chunks_per_document=3; request chunks_per_document=1 must
+    // cap evidence at 1, not 3.
+    let mut h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    h.state.semantic_config = crate::config::SemanticSearchConfig {
+        default_granularity: "document".to_string(),
+        default_chunks_per_document: 3,
+        document_candidate_multiplier: 10,
+        document_candidate_limit: 1000,
+    };
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    for i in 0..5u32 {
+        seed_chunk(h.pool(), "a.md", i, "", "x", unit_vec(&[(0, 1.0)])).await;
+    }
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document", "chunks_per_document": 1 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunks = body["results"][0]["chunks"].as_array().unwrap();
+    assert_eq!(
+        chunks.len(),
+        1,
+        "request cpd=1 must override config default of 3"
+    );
+}
+
+// --- Document diversity regression ---
+
+#[tokio::test]
+async fn semantic_document_diversity_regression_one_doc_many_chunks() {
+    // One document with 15 chunks plus 9 other documents with 1 chunk each.
+    // Default document mode, default limit=10. The single heavy document must
+    // not consume all 10 result slots; all 10 documents must appear (each once).
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let pool = h.pool();
+    task::spawn_blocking(move || {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        // Heavy doc: 15 chunks in heavy.md
+        tx.execute(
+            "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
+             VALUES ('heavy.md', 1, '2026-01-01T00:00:00Z', 'sha256:hv', '2026-01-01T00:00:00Z', '')",
+            [],
+        )
+        .unwrap();
+        for chunk_idx in 0u32..15 {
+            tx.execute(
+                "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, \
+                 start_byte, end_byte, created_at) \
+                 VALUES ('heavy.md', ?1, '', 'hc', 'sha256:hv', 0, 1, '2026-01-01T00:00:00Z')",
+                rusqlite::params![chunk_idx],
+            )
+            .unwrap();
+            let chunk_id = tx.last_insert_rowid();
+            let v = {
+                let mut v = vec![0.0f32; DIM];
+                v[0] = 1.0;
+                v
+            };
+            tx.execute(
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![chunk_id, bytemuck::cast_slice::<f32, u8>(&v)],
+            )
+            .unwrap();
+        }
+        // 9 other documents, 1 chunk each
+        for i in 0u32..9 {
+            let path = format!("other_{i:02}.md");
+            let hash = format!("sha256:{i:02}");
+            tx.execute(
+                "INSERT INTO files (path, size, mtime, content_hash, indexed_at, content) \
+                 VALUES (?1, 1, '2026-01-01T00:00:00Z', ?2, '2026-01-01T00:00:00Z', '')",
+                rusqlite::params![path, hash],
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO chunks (file_path, chunk_index, heading_path, content, content_hash, \
+                 start_byte, end_byte, created_at) \
+                 VALUES (?1, 0, '', 'oc', ?2, 0, 1, '2026-01-01T00:00:00Z')",
+                rusqlite::params![path, hash],
+            )
+            .unwrap();
+            let chunk_id = tx.last_insert_rowid();
+            let v = {
+                let mut v = vec![0.0f32; DIM];
+                v[0] = 1.0;
+                v
+            };
+            tx.execute(
+                "INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?1, ?2)",
+                rusqlite::params![chunk_id, bytemuck::cast_slice::<f32, u8>(&v)],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    })
+    .await
+    .unwrap();
+
+    // With document_candidate_multiplier=10 and limit=10, candidate_limit=100.
+    // All 24 chunks (15 + 9) are within 100 candidates → all 10 documents appear.
+    let app = router(h.state.clone());
+    let req = json_request("POST", "/search/semantic", json!({ "query": "x" })).await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        10,
+        "10 distinct documents expected (heavy doc counts as 1), got {}",
+        results.len()
+    );
+    let paths: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["file_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths.len(),
+        10,
+        "all 10 result slots must be distinct documents"
+    );
+    assert!(
+        paths.contains("heavy.md"),
+        "heavy.md must appear exactly once"
+    );
+}
+
+// --- Chunk mode regression: multiple flat chunks from same document ---
+
+#[tokio::test]
+async fn semantic_chunk_mode_multiple_flat_chunks_from_same_document() {
+    // Explicit granularity=chunk must return all matching chunks from one file
+    // as individual flat results (no grouping).
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    seed_files(h.pool(), vec![("a.md", "x", "2026-04-01T00:00:00Z")]).await;
+    seed_chunk(h.pool(), "a.md", 0, "S1", "body0", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 1, "S2", "body1", unit_vec(&[(0, 1.0)])).await;
+    seed_chunk(h.pool(), "a.md", 2, "S3", "body2", unit_vec(&[(0, 1.0)])).await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "chunk" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3, "all 3 chunks from a.md must appear flat");
+    let paths: Vec<&str> = results
+        .iter()
+        .map(|r| r["file_path"].as_str().unwrap())
+        .collect();
+    assert!(paths.iter().all(|p| *p == "a.md"), "all results from a.md");
+    let chunk_indexes: Vec<u64> = results
+        .iter()
+        .map(|r| r["chunk_index"].as_u64().unwrap())
+        .collect();
+    assert!(
+        chunk_indexes.contains(&0) && chunk_indexes.contains(&1) && chunk_indexes.contains(&2),
+        "all three chunk indexes present"
+    );
+    for result in results {
+        assert!(
+            result.get("chunks").is_none(),
+            "chunk mode must not have nested chunks array"
+        );
+    }
+}
+
+// --- UTF-8 preview in nested document-mode chunks ---
+
+#[tokio::test]
+async fn semantic_document_mode_preview_utf8_in_nested_chunks() {
+    // Chunk filled with 3-byte '€' chars (205 × 3 = 615 bytes > 600). The
+    // preview truncation inside nested evidence must land on a char boundary.
+    let h = harness_with_embedder(OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]))).await;
+    let content: String = "€".repeat(205); // 615 bytes
+    assert!(content.len() > 600, "fixture must exceed 600 bytes");
+    seed_files(
+        h.pool(),
+        vec![("utf8doc.md", "placeholder", "2026-04-01T00:00:00Z")],
+    )
+    .await;
+    seed_chunk_owned(
+        h.pool(),
+        "utf8doc.md".to_string(),
+        0,
+        "".to_string(),
+        content,
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let chunk = &body["results"][0]["chunks"][0];
+    let text = chunk["text"]
+        .as_str()
+        .expect("text present in nested chunk");
+    assert!(
+        std::str::from_utf8(text.as_bytes()).is_ok(),
+        "nested chunk preview must be valid UTF-8"
+    );
+    assert!(
+        text.len() <= 600,
+        "nested chunk preview must be ≤ 600 bytes, got {}",
+        text.len()
+    );
+    assert_eq!(chunk["text_truncated"], true);
+}
+
+// --- Multi-vault document results include vault and vault_name ---
+
+#[tokio::test]
+async fn cross_vault_document_mode_includes_vault_and_vault_name() {
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    seed_chunk(
+        h.pools[0].clone(),
+        "a.md",
+        0,
+        "",
+        "a",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    seed_chunk(
+        h.pools[1].clone(),
+        "b.md",
+        0,
+        "",
+        "b",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::OK);
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    let vault_ids: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["vault"].as_str().unwrap())
+        .collect();
+    assert_eq!(vault_ids.len(), 2, "both vault ids present");
+    let vault_names: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["vault_name"].as_str().unwrap())
+        .collect();
+    assert!(
+        vault_names.contains("alpha") && vault_names.contains("bravo"),
+        "both vault_names must be present in document results"
+    );
+}
+
+// --- Partial results preserved in semantic document mode ---
+
+#[tokio::test]
+async fn semantic_document_mode_partial_results_on_vault_failure() {
+    // Drop chunks_vec on vault 1 to force a storage-layer failure. Vault 0
+    // results still returned; vault 1 appears in partial_results.failed. This
+    // mirrors the existing chunk-mode test but exercises the document grouping
+    // path specifically.
+    let embedder = FixedEmbedder::new(&[(0, 1.0)]);
+    let h = multi_vault_harness_with(vec!["alpha", "bravo"], vec![], embedder).await;
+    seed_chunk(
+        h.pools[0].clone(),
+        "ok.md",
+        0,
+        "",
+        "ok body",
+        unit_vec(&[(0, 1.0)]),
+    )
+    .await;
+    let pool1 = h.pools[1].clone();
+    task::spawn_blocking(move || {
+        let conn = pool1.get().unwrap();
+        conn.execute("DROP TABLE chunks_vec", []).unwrap();
+    })
+    .await
+    .unwrap();
+
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "x", "granularity": "document" }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "partial failure must not crash; got {body}"
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "vault 0's document must still appear");
+    assert_eq!(results[0]["file_path"], "ok.md");
+    assert!(
+        results[0].get("chunks").is_some(),
+        "document mode: nested chunks must be present"
+    );
+    let failed = body["partial_results"]["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["vault_name"], "bravo");
+    assert_eq!(failed[0]["code"], "vault_search_failed");
 }

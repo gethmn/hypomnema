@@ -254,6 +254,7 @@ mod tests {
             },
             logging: LoggingConfig::default(),
             default_vault_name: "default".to_string(),
+            search: crate::config::SearchConfig::default(),
         }
     }
 

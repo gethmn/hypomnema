@@ -1,14 +1,21 @@
 # Semantic Search Specification
 
-**Version**: 0.3.1
-**Date**: 2026-05-03
+**Version**: 0.4.0
+**Date**: 2026-05-08
 **Status**: Draft
 
 ---
 
 ## Overview
 
-Semantic search answers conceptual-similarity questions: *what in this vault is similar to this idea?* The query is embedded into a vector via the same model used for indexing, and compared against the stored chunk vectors by cosine similarity. Results are chunks (heading-aware slices of files), with metadata identifying the file and section they came from.
+Semantic search answers conceptual-similarity questions: *what in this vault is similar to this idea?* The query is embedded into a vector via the same model used for indexing, and compared against the stored chunk vectors by cosine similarity.
+
+**Result granularity** (Step 25): responses can be delivered at two levels:
+
+- **`chunk`** — flat list of individual chunks ranked by cosine similarity. Pre-Step-25 behavior; answers *"which passages are relevant?"*
+- **`document`** (default) — chunks are grouped by parent file; each document result includes representative evidence chunks and a composite document score. Answers *"which notes are relevant?"* and reduces redundancy when many top-scoring chunks come from the same file.
+
+The `granularity` request field controls which shape is returned.
 
 The data substrate this spec reads from — the `chunks` metadata table and the `chunks_vec` virtual table — ships in step 6. The query handler (`POST /search/semantic` / `hmn search semantic`) ships in step 7.
 
@@ -71,6 +78,8 @@ prefix: "notes/"                # optional; restrict to a subdirectory
 min_similarity: 0.3             # optional; default 0.0
 include_text: "preview"         # optional; preview | full | none; default preview
 preview_bytes: 600              # optional; default 600, server max 2000
+granularity: "document"        # optional; document | chunk; default document
+chunks_per_document: 3          # optional; 1..=100; default 3; document mode only
 vaults:                         # optional; multi-vault scoping
   - "personal"
   - "work"
@@ -84,13 +93,21 @@ vaults:                         # optional; multi-vault scoping
 | `min_similarity` | float | no | 0.0 | Clamped to `[0.0, 1.0]`. Filtering happens *after* the kNN match per vault and *before* the cross-vault merge. |
 | `include_text` | enum string | no | `preview` | Controls chunk text payload: `preview`, `full`, or `none`. `preview` returns up to `preview_bytes` bytes of the chunk text; `full` returns the complete stored chunk; `none` omits the `text` field entirely. |
 | `preview_bytes` | integer | no | `600` | Maximum UTF-8 byte length for preview text. Applied only when `include_text: "preview"`; values above the server maximum (2000) are silently clamped. Validation: must be `> 0` when supplied. |
+| `granularity` | enum string | no | `document` | Result granularity: `document` groups results by parent file with representative evidence chunks; `chunk` returns a flat list of individual chunk results. Invalid values return `invalid_request`. |
+| `chunks_per_document` | integer | no | `3` | Maximum evidence chunks included per document result in `document` mode. Valid range: `1..=100`. Ignored in `chunk` mode. Values outside the range return `invalid_request`. |
 | `vaults` | array of strings | no | none → all active | Subset of vaults to query, by name or surrogate ID. Empty array is rejected as `invalid_request`. |
 
 **Request validation**:
 
 - `min_similarity`: clamped to `[0.0, 1.0]` after deserialization. Negative values are clamped to `0.0`; values greater than `1.0` to `1.0`. Filtering happens *after* the kNN match — consumers see at most `limit` results, possibly fewer if `min_similarity` removes some.
+- `granularity`: must be `document` or `chunk` when supplied. Any other string value returns `invalid_request`.
+- `chunks_per_document`: must be in `1..=100` when supplied. Out-of-range values return `invalid_request`.
 
 ### Response
+
+The response shape varies by `granularity`. The top-level envelope is the same; `results` contains either chunk items or document items.
+
+#### Chunk granularity (`granularity: "chunk"`)
 
 ```yaml
 results:
@@ -118,16 +135,53 @@ results:
 # `partial_results` omitted in the all-success / all-active case
 ```
 
-**Top-level envelope**:
+#### Document granularity (`granularity: "document"`, default)
+
+```yaml
+results:
+  - score: 0.82
+    file_path: "notes/tools/hypomnema.md"
+    content_hash: "sha256:abc123…"
+    vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
+    vault_name: "personal"
+    chunks:
+      - chunk_index: 4
+        heading_path: ["Pitfalls", "Sync conflicts"]
+        score: 0.82
+        text: "Syncthing and Dropbox write files in bursts…"
+        text_kind: "preview"
+        text_truncated: true
+      - chunk_index: 2
+        heading_path: ["Background"]
+        score: 0.71
+        text: "The daemon debounces events from notify…"
+        text_kind: "preview"
+        text_truncated: false
+  - score: 0.68
+    file_path: "notes/design/watchers.md"
+    content_hash: "sha256:def456…"
+    vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
+    vault_name: "personal"
+    chunks:
+      - chunk_index: 1
+        heading_path: ["Change detection"]
+        score: 0.68
+        text: "mtime alone is not enough…"
+        text_kind: "preview"
+        text_truncated: false
+truncated: false
+```
+
+**Top-level envelope** (both granularities):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `results` | array | yes | Per-result objects (shape below). Empty array if no matches or if no in-scope vault has chunks yet. |
+| `results` | array | yes | Per-result objects. Shape depends on `granularity` (see below). Empty array if no matches. |
 | `hint` | string | no | Diagnostic hint about index state. Present as `"semantic index is building"` when **every** in-scope vault has zero `chunks_vec` rows but at least one of them has indexed files (`files` row count ≥ 1) — see [§ Edge Cases — Empty index](#empty-index). Omitted in every other case. |
 | `truncated` | boolean | yes | True if any per-vault search reported truncation OR the merged list exceeded `limit`. |
 | `partial_results` | object | no | Cross-vault diagnostic; present only when at least one vault was skipped or failed. See § Cross-Vault Partial Results. |
 
-**Per-result fields**:
+**Chunk result fields** (`granularity: "chunk"`):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -135,14 +189,49 @@ results:
 | `file_path` | string | yes | Vault-relative path of the file the chunk came from |
 | `chunk_index` | integer | yes | Ordinal of the chunk within the file |
 | `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
-| `text` | string | conditional | Present unless `include_text: "none"`. Omitted when `include_text` is `none`. |
-| `text_kind` | enum string | conditional | `preview` or `full`, matching what was returned in `text`. Present alongside `text`. |
-| `text_truncated` | boolean | conditional | `true` when preview text omits part of the stored chunk; `false` for full text or short chunks that fit within the preview budget. Present alongside `text`. |
-| `content_hash` | string | yes | `sha256:`-prefixed parent file content hash, projected from the chunk's indexed row. Used for cache validation and follow-up retrieval consistency. |
-| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
-| `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
+| `text` | string | conditional | Present unless `include_text: "none"`. |
+| `text_kind` | enum string | conditional | `preview` or `full`. Present alongside `text`. |
+| `text_truncated` | boolean | conditional | `true` when preview text omits part of the chunk. Present alongside `text`. |
+| `content_hash` | string | yes | `sha256:`-prefixed parent file content hash. |
+| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated in multi-vault deployments. |
+| `vault_name` | string | no | Point-in-time vault display name. Populated alongside `vault`. |
+
+**Document result fields** (`granularity: "document"`):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `score` | float | yes | Document score: the maximum chunk score among all chunks of this file that appeared in the kNN candidate pool. |
+| `file_path` | string | yes | Vault-relative path of the document |
+| `content_hash` | string | yes | `sha256:`-prefixed file content hash |
+| `vault` | string | no | Surrogate vault ID. Populated in multi-vault deployments. |
+| `vault_name` | string | no | Point-in-time vault display name. Populated alongside `vault`. |
+| `chunks` | array | yes | Top-scoring evidence chunks, up to `chunks_per_document` items, sorted by `score` descending. |
+
+**Evidence chunk fields** (within `chunks` array of a document result):
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `chunk_index` | integer | yes | Ordinal within the file |
+| `heading_path` | array of strings | yes | Heading hierarchy |
+| `score` | float | yes | Individual chunk cosine similarity |
+| `text` | string | conditional | Present unless `include_text: "none"` |
+| `text_kind` | enum string | conditional | `preview` or `full`. Present alongside `text`. |
+| `text_truncated` | boolean | conditional | Present alongside `text`. |
 
 **Score conversion**: `score = 1.0 - (vec0_distance / 2.0)`, clamped to `[0.0, 1.0]`. The `chunks_vec` virtual table is created with `distance_metric=cosine` (schema-baked at migration 0004; see [ADR-0007 § Amendments](../decisions/0007-sqlite-vec-over-alternatives.md#amendments)), so `vec0_distance` is `1 − cos_sim` and ranges over `[0, 2]`. Identical vectors yield `score = 1.0` (distance `0`); orthogonal vectors yield `0.5` (distance `1`, `cos_sim = 0`); opposite vectors yield `0.0` (distance `2`, `cos_sim = −1`). The clamp is a defensive guard against floating-point edge cases at the endpoints.
+
+**Document scoring**: in document mode the document-level `score` is the maximum of all evidence chunk scores in the kNN candidate pool. The candidate pool size is controlled by `[search.semantic] document_candidate_multiplier` and `document_candidate_limit` (see [§ Configuration](#configuration-knobs)). Increasing the candidate depth improves coverage at the cost of more candidate chunks to group.
+
+### Configuration Knobs
+
+The `[search.semantic]` config section in `hmnd.toml` controls defaults and candidate depth for document mode:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `default_granularity` | string | `"document"` | Default value for `granularity` when the field is absent from the request. Valid values: `document`, `chunk`. |
+| `default_chunks_per_document` | integer | `3` | Default value for `chunks_per_document` when absent. Range: `1..=100`. |
+| `document_candidate_multiplier` | integer | `10` | Multiplied by the request `limit` to compute candidate chunk count fed to the document grouper. |
+| `document_candidate_limit` | integer | `1000` | Hard cap on candidate count regardless of `limit × multiplier`. Prevents runaway memory use on very large `limit` values. |
 
 ### Cross-Vault Partial Results
 
@@ -175,6 +264,8 @@ partial_results:
 | `preview_bytes` exceeds server maximum (2000) | — | Values above 2000 are silently clamped to 2000; no error is returned. Callers can detect truncation via `text_truncated`. |
 | `vaults` is an empty array | `invalid_request` | `vaults filter must be non-empty` |
 | `limit` is outside `1..=1000` | `invalid_request` | existing range-validation message |
+| `granularity` is not `document` or `chunk` | `invalid_request` | `granularity must be one of document, chunk` |
+| `chunks_per_document` is outside `1..=100` | `invalid_request` | `chunks_per_document must be between 1 and 100` |
 
 ---
 
@@ -321,5 +412,6 @@ The chunker does not strip fenced code blocks, Dataview queries, or other genera
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
 | 0.2.0 | 2026-04-27 | Multi-vault adoption (round 3 / step 10): `vault` semantics flipped from "always absent" to "populated when multi-vault active"; added `vault_name`, request-side `vaults` filter, response-envelope `partial_results`, global score-desc cross-vault ordering with `vault_id` tie-break. Same-embedding-model assumption documented. Cross-vault execution semantics cross-referenced from [vault-management.md](./vault-management.md). |
+| 0.4.0 | 2026-05-08 | Round 14 / Step 25: document granularity. Request: `granularity` (`document` \| `chunk`, default `document`) and `chunks_per_document` (1..=100, default 3). Response: new document-result shape with `chunks` evidence array and document-level `score` (max chunk score); chunk-result shape unchanged. Configuration knobs: `[search.semantic]` `default_granularity`, `default_chunks_per_document`, `document_candidate_multiplier`, `document_candidate_limit`. Validation: `invalid_request` on unrecognized `granularity` or out-of-range `chunks_per_document`. |
 | 0.3.1 | 2026-05-03 | Clarification (no behavior change): § Chunking notes that the pulldown-cmark heading-aware strategy is v0's chunking strategy; alternative strategies for non-Markdown text are out of v0 scope. Cross-references ADR-0003 § Amendments and vision.md § Non-Goals → "Text-format coverage beyond Markdown" added by the same canon-positioning sweep. |
 | 0.3.0 | 2026-05-01 | Round 8 / Step 17: payload budgeting added. Request: `include_text` (`preview` \| `full` \| `none`, default `preview`) and `preview_bytes` (default 600, server max 2000, silently clamped). Response: `text` changed from required to conditional; added `text_kind`, `text_truncated` (both conditional, present alongside `text`); added `content_hash` (required, `sha256:`-prefixed, projected from chunk metadata). `limit` default re-pinned as 10. Validation Rules section added; Examples section added (default preview, full-text, metadata-only); Edge Cases: added "Preview boundary in multibyte UTF-8" and "Boilerplate-heavy chunks". Resolved proposal questions (text-field strategy → `text` + `text_kind` + `text_truncated`; `preview_bytes` max → 2000, clamped; `content_hash` inclusion → yes; content-search `include_matches` default drift → corrected in step 17.6). Chunk/section-retrieval question deferred to content-retrieval proposal. |

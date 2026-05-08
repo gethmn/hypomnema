@@ -119,6 +119,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -353,6 +355,8 @@ async fn spawn_vault_cli_daemon() -> VaultCliDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -676,6 +680,8 @@ async fn spawn_vault_cli_daemon_with_errored_row(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -1026,6 +1032,8 @@ async fn spawn_watch_daemon() -> VaultCliDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 

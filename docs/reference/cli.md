@@ -143,6 +143,8 @@ hmn search <mode> <query> [options]
 | `--prefix PATH` | Restrict results to a vault subdirectory | — |
 | `--vaults LIST` | Comma-separated names or IDs to restrict the search to | — (search all active vaults) |
 | `--limit N` | Max results | 10 (semantic), 100 (filesystem, content) |
+| `--granularity GRANULARITY` | Result granularity for `semantic` mode: `document` or `chunk` | `document` (daemon default; configurable via `[search.semantic]`) |
+| `--chunks-per-document N` | Max evidence chunks per document result in `document` mode (1..=100) | 3 (daemon default; configurable via `[search.semantic]`) |
 
 **Examples**:
 
@@ -150,6 +152,8 @@ hmn search <mode> <query> [options]
 hmn search filesystem "notes/databases/*.md"
 hmn search content "pgvector"
 hmn search semantic "how do we prevent spurious reindexes"
+hmn search semantic "sync conflicts" --granularity document --chunks-per-document 5
+hmn search semantic "exact passage about debouncing" --granularity chunk
 hmn search content "pgvector" --vaults personal,work
 hmn search content "pgvector" --vaults personal --vaults work   # repeating works too
 ```
@@ -158,7 +162,21 @@ As of step 7, all three modes — `hmn search filesystem`, `hmn search content`,
 
 **`--vaults` semantics** (step 10): values are matched against vault names first, then surrogate IDs. Unknown values do **not** fail the request — they appear in the response's `partial_results.failed` array with `code: "vault_not_found"` and the search proceeds against the recognized subset. Passing `--vaults` with an empty value list (e.g. `--vaults ""`) is rejected as `invalid_request`. Omitting `--vaults` queries every active vault. Paused or errored vaults that fall in scope are reported in `partial_results.skipped` with their current `status` and `reason` (the registry's `last_error` for `errored`); see [`docs/specs/vault-management.md` § Cross-Vault Search Semantics](../specs/vault-management.md#cross-vault-search-semantics).
 
-`hmn search semantic` text-mode output renders one block per result: a leading `<file_path>  (score: N.NN)` line (cosine similarity in `[0.0, 1.0]`, two decimals), the slash-joined heading path on its own indented `> …` line (omitted when every heading segment is empty), and the chunk text on a final indented line. Example:
+**`hmn search semantic` — document granularity (default, step 25)**: results are grouped by parent file. Text mode renders one block per document: a leading `<file_path>  (score: N.NN)` line, then each evidence chunk indented below it with its own heading path and text. Example:
+
+```
+notes/tools/hypomnema.md  (score: 0.82)
+  > Pitfalls / Sync conflicts
+  Syncthing and Dropbox write files in bursts…
+  > Background
+  The daemon debounces events from notify…
+
+notes/design/watchers.md  (score: 0.68)
+  > Change detection
+  mtime alone is not enough; compare content hashes…
+```
+
+**`hmn search semantic` — chunk granularity**: text mode renders one block per chunk (pre-step-25 behavior): a leading `<file_path>  (score: N.NN)` line, the heading path, and the chunk text. Example:
 
 ```
 notes/tools/hypomnema.md  (score: 0.82)

@@ -10,7 +10,8 @@ pub use crate::api::types::{
     ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentMatchJson,
     ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, ErrorEnvelope,
     FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, HealthResponse,
-    RenameRequest, RescanResponseJson, ResetRequest, SemanticQueryJson, SemanticResultJson,
+    RenameRequest, RescanResponseJson, ResetRequest, SemanticDocumentResultJson,
+    SemanticEvidenceChunkJson, SemanticQueryJson, SemanticResultItem, SemanticResultJson,
     SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
     VaultRowJson,
 };
@@ -319,6 +320,7 @@ mod tests {
             event_bus: manager.event_bus(),
             started_at: std::time::Instant::now(),
             embedding_endpoint: None,
+            semantic_config: crate::config::SemanticSearchConfig::default(),
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
