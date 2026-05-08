@@ -223,6 +223,7 @@ mod tests {
             vault_path: vault.path().to_path_buf(),
             store: Arc::new(store),
             status: VaultStatus::Active,
+            bootstrap_state: crate::api::BootstrapState::ready_state(),
         };
         let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(768));
         let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));

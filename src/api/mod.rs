@@ -8,11 +8,13 @@ pub(crate) mod vaults;
 pub(crate) mod watch;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use axum::Router;
 use axum::routing::{get, post};
+use chrono::{DateTime, Utc};
 
 pub use types::*;
 
@@ -20,6 +22,49 @@ use crate::control_plane::VaultManager;
 use crate::events::EventBus;
 use crate::store::Store;
 use crate::vault_registry::{VaultId, VaultStatus};
+
+/// In-memory per-vault bootstrap (initial-scan) state. Orthogonal to the
+/// persisted `VaultStatus` enum: this is the lifecycle the daemon reports
+/// while building the index for the first time after a process start (or
+/// after a resume / reset that re-runs the initial scan). Surfaced via the
+/// `/status` `bootstrap` block.
+///
+/// Counter fields are atomic so the scan loop can update them without
+/// taking the outer `RwLock` write-lock on every file.
+#[derive(Debug)]
+pub enum BootstrapState {
+    Indexing {
+        started_at: DateTime<Utc>,
+        files_seen: Arc<AtomicU64>,
+        files_indexed: Arc<AtomicU64>,
+    },
+    Ready,
+    Errored(String),
+}
+
+impl BootstrapState {
+    /// Default state for fixtures and test-only `VaultEntry` construction —
+    /// signals "no bootstrap in flight; queryable now".
+    pub fn ready_state() -> Arc<RwLock<BootstrapState>> {
+        Arc::new(RwLock::new(BootstrapState::Ready))
+    }
+
+    /// Build a fresh `Indexing` state with zeroed atomics. Returns the state
+    /// plus a clone of each counter so the scanner can update them without
+    /// re-reading the lock.
+    pub fn indexing(
+        started_at: DateTime<Utc>,
+    ) -> (Arc<RwLock<BootstrapState>>, Arc<AtomicU64>, Arc<AtomicU64>) {
+        let files_seen = Arc::new(AtomicU64::new(0));
+        let files_indexed = Arc::new(AtomicU64::new(0));
+        let state = Arc::new(RwLock::new(BootstrapState::Indexing {
+            started_at,
+            files_seen: files_seen.clone(),
+            files_indexed: files_indexed.clone(),
+        }));
+        (state, files_seen, files_indexed)
+    }
+}
 
 /// One active-vault entry exposed to the HTTP API. Constructed by the
 /// `control_plane::VaultManager` (one per active runner) and surfaced to
@@ -34,6 +79,10 @@ pub struct VaultEntry {
     pub vault_path: PathBuf,
     pub store: Arc<Store>,
     pub status: VaultStatus,
+    /// In-memory bootstrap state. Shared between the runner, the background
+    /// bootstrap task that updates it, and `/status` readers. See
+    /// `BootstrapState`.
+    pub bootstrap_state: Arc<RwLock<BootstrapState>>,
 }
 
 impl VaultEntry {

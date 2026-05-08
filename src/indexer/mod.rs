@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -22,6 +23,16 @@ use crate::watcher::inclusion::InclusionFilter;
 use crate::watcher::vcs_ignore::VcsIgnore;
 
 pub use hash::hash_file;
+
+/// Live progress signals injected into a long-running scan. The control
+/// plane's async-bootstrap path passes its `BootstrapState::Indexing`
+/// counters here so `/status` can report scan progress without taking the
+/// state's outer `RwLock` write-lock per file.
+#[derive(Debug, Clone, Default)]
+pub struct ScanProgress {
+    pub files_seen: Arc<AtomicU64>,
+    pub files_indexed: Arc<AtomicU64>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanReport {
@@ -81,6 +92,14 @@ impl Scanner {
     }
 
     pub async fn run(&self) -> Result<ScanReport> {
+        self.run_with_progress(ScanProgress::default()).await
+    }
+
+    /// Run the initial scan, reporting progress through atomic counters.
+    /// `files_seen` is set once, after the vault walk completes; `files_indexed`
+    /// is incremented once per processed file. Used by the control plane's
+    /// async bootstrap path; default callers pass zeroed atomics they discard.
+    pub async fn run_with_progress(&self, progress: ScanProgress) -> Result<ScanReport> {
         let started = Instant::now();
         let vault = self.vault.clone();
         let filter = self.filter.clone();
@@ -133,6 +152,7 @@ impl Scanner {
         let mut found: HashSet<String> = HashSet::with_capacity(walked.entries.len());
 
         let total = walked.entries.len() as u64;
+        progress.files_seen.store(total, Ordering::Relaxed);
         info!(
             vault_id = %self.vault_id,
             total,
@@ -171,6 +191,7 @@ impl Scanner {
             }
 
             processed += 1;
+            progress.files_indexed.store(processed, Ordering::Relaxed);
             if processed % PROGRESS_EVERY_FILES == 0 || last_log_at.elapsed() >= PROGRESS_EVERY {
                 info!(
                     vault_id = %self.vault_id,

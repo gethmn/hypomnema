@@ -42,7 +42,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
-const SETTLE: Duration = Duration::from_millis(4 * DEBOUNCE_MS);
+const SETTLE: Duration = Duration::from_millis(6 * DEBOUNCE_MS);
 const SCHEMA_DIM: usize = 768;
 
 // ===== Stub embedding service =====
@@ -313,6 +313,7 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
         vault_path: fx.vault.clone(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],
@@ -357,9 +358,8 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
 fn open_index(data_dir: &Path) -> Connection {
     register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
-    let conn = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .expect("open index.sqlite read-only");
-    conn
+    Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("open index.sqlite read-only")
 }
 
 fn count_chunks_for(data_dir: &Path, rel: &str) -> i64 {
@@ -697,8 +697,7 @@ impl Embedder for DeterministicHashEmbedder {
 fn open_index_rw(data_dir: &Path) -> Connection {
     register_sqlite_vec();
     let db_path = data_dir.join("index.sqlite");
-    let conn = Connection::open(&db_path).expect("open index.sqlite read-write");
-    conn
+    Connection::open(&db_path).expect("open index.sqlite read-write")
 }
 
 /// Wipe `chunks_vec` and `chunks` while leaving `files` populated. Reaches the

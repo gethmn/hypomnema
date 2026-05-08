@@ -34,3 +34,6 @@ pub use manager::{
     ControlPlaneError, CreateVaultRequest, RescanResponse, VaultManager, VaultScopeRow,
 };
 pub use runner::VaultRunner;
+
+#[cfg(test)]
+pub(crate) use manager::wait_for_bootstrap;

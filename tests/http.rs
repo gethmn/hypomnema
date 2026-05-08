@@ -102,6 +102,7 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         vault_path: fx.vault.clone(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],

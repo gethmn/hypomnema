@@ -15,7 +15,7 @@ use crate::config::{
 use crate::embedding::{Embedder, StubEmbedder};
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus, vault_data_dir};
 
-use super::manager::{ControlPlaneError, CreateVaultRequest, VaultManager};
+use super::manager::{ControlPlaneError, CreateVaultRequest, VaultManager, wait_for_bootstrap};
 use crate::store::Store;
 
 const DIM: u32 = 768;
@@ -915,6 +915,7 @@ async fn reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
         })
         .await
         .unwrap();
+    wait_for_bootstrap(&manager, "alpha").await.unwrap();
 
     let store_before = manager.active_vaults()[0].store.clone();
     assert_eq!(count_files(&store_before).await, 2);
@@ -934,6 +935,7 @@ async fn reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
         .await
         .expect("reset --rebuild succeeds");
     assert_eq!(updated.id, row.id);
+    wait_for_bootstrap(&manager, "alpha").await.unwrap();
 
     let store_after = manager.active_vaults()[0].store.clone();
     assert_eq!(
