@@ -440,7 +440,8 @@ pub(crate) async fn run_semantic_search(
 }
 
 /// Flatten per-vault candidate rows into chunk-mode results, sorted by score
-/// desc then vault id, capped at `limit`. Returns `(results, was_capped)`.
+/// desc then deterministic source tie-breakers, capped at `limit`.
+/// Returns `(results, was_capped)`.
 fn build_chunk_results(
     per_vault_rows: Vec<(Arc<VaultEntry>, Vec<SemanticResult>)>,
     limit: usize,
@@ -458,14 +459,21 @@ fn build_chunk_results(
             )));
         }
     }
-    // Score-desc with vault-id tie-break, per spec § Cross-Vault Search
-    // Semantics § Result ordering — semantic-search.
+    // Score-desc with deterministic tie-breakers, per spec § Cross-Vault
+    // Search Semantics § Result ordering — semantic-search.
     all_results.sort_by(|a, b| {
         let sa = semantic_result_item_score(a);
         let sb = semantic_result_item_score(b);
         sb.partial_cmp(&sa)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| semantic_result_item_vault(a).cmp(&semantic_result_item_vault(b)))
+            .then_with(|| match (a, b) {
+                (SemanticResultItem::Chunk(a), SemanticResultItem::Chunk(b)) => a
+                    .file_path
+                    .cmp(&b.file_path)
+                    .then_with(|| a.chunk_index.cmp(&b.chunk_index)),
+                _ => std::cmp::Ordering::Equal,
+            })
     });
     let was_capped = all_results.len() > limit;
     if was_capped {
