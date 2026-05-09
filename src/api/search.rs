@@ -26,6 +26,7 @@ use crate::vault_registry::{VaultId, VaultStatus};
 
 const DEFAULT_LIMIT: usize = 100;
 const DEFAULT_SEMANTIC_LIMIT: usize = 10;
+const MAX_SEMANTIC_LIMIT: usize = 1000;
 const DEFAULT_MAX_MATCHES_PER_FILE: usize = 5;
 const DEFAULT_PREVIEW_BYTES: usize = 600;
 const SEMANTIC_PREVIEW_BYTES_MAX: usize = 2000;
@@ -54,6 +55,16 @@ fn resolve_preview_bytes(opt: Option<usize>) -> Result<usize, ApiError> {
             "preview_bytes must be greater than 0",
         )),
         Some(n) => Ok(n.min(SEMANTIC_PREVIEW_BYTES_MAX)),
+    }
+}
+
+fn resolve_semantic_limit(opt: Option<usize>) -> Result<usize, ApiError> {
+    match opt {
+        None => Ok(DEFAULT_SEMANTIC_LIMIT),
+        Some(n) if (1..=MAX_SEMANTIC_LIMIT).contains(&n) => Ok(n),
+        Some(n) => Err(ApiError::invalid_request(format!(
+            "limit must be in 1..={MAX_SEMANTIC_LIMIT}, got {n}"
+        ))),
     }
 }
 
@@ -323,7 +334,7 @@ pub(crate) async fn run_semantic_search(
 
     let include_text = parse_include_text(req.include_text.as_deref())?;
     let preview_bytes = resolve_preview_bytes(req.preview_bytes)?;
-    let limit = req.limit.unwrap_or(DEFAULT_SEMANTIC_LIMIT);
+    let limit = resolve_semantic_limit(req.limit)?;
     let is_document_mode = effective_granularity == "document";
 
     // Chunk mode uses the user's `limit` directly as candidate depth.
@@ -1024,6 +1035,44 @@ mod tests {
             msg.contains("paragraph"),
             "error should mention the bad value: {msg}"
         );
+    }
+
+    #[test]
+    fn resolve_semantic_limit_uses_default_when_omitted() {
+        assert_eq!(
+            resolve_semantic_limit(None)
+                .map_err(anyhow::Error::from)
+                .unwrap(),
+            DEFAULT_SEMANTIC_LIMIT
+        );
+    }
+
+    #[test]
+    fn resolve_semantic_limit_accepts_boundary_values() {
+        assert_eq!(
+            resolve_semantic_limit(Some(1))
+                .map_err(anyhow::Error::from)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_semantic_limit(Some(MAX_SEMANTIC_LIMIT))
+                .map_err(anyhow::Error::from)
+                .unwrap(),
+            MAX_SEMANTIC_LIMIT
+        );
+    }
+
+    #[test]
+    fn resolve_semantic_limit_rejects_out_of_range_values() {
+        let zero = resolve_semantic_limit(Some(0)).expect_err("0 is out of range");
+        let zero_msg = anyhow::Error::from(zero).to_string();
+        assert!(zero_msg.contains("limit"), "{zero_msg}");
+
+        let too_high =
+            resolve_semantic_limit(Some(MAX_SEMANTIC_LIMIT + 1)).expect_err("1001 is out of range");
+        let too_high_msg = anyhow::Error::from(too_high).to_string();
+        assert!(too_high_msg.contains("limit"), "{too_high_msg}");
     }
 
     #[test]

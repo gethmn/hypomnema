@@ -3075,6 +3075,42 @@ async fn semantic_request_invalid_granularity_returns_400() {
 }
 
 #[tokio::test]
+async fn semantic_request_limit_zero_returns_400() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "limit": 0 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("limit"), "error must mention limit: {msg}");
+}
+
+#[tokio::test]
+async fn semantic_request_limit_over_1000_returns_400() {
+    let h = harness().await;
+    let app = router(h.state.clone());
+    let req = json_request(
+        "POST",
+        "/search/semantic",
+        json!({ "query": "alpha", "limit": 1001 }),
+    )
+    .await;
+    let resp = app.oneshot(req).await.unwrap();
+    let (status, body) = body_json(resp).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "invalid_request");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("limit"), "error must mention limit: {msg}");
+}
+
+#[tokio::test]
 async fn semantic_request_chunks_per_document_zero_returns_400() {
     let h = harness().await;
     let app = router(h.state.clone());
