@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hypomnema::api::{self, ApiState, VaultEntry};
 use hypomnema::chunk::chunk_file;
@@ -385,6 +385,21 @@ fn count_chunks_vec_total(data_dir: &Path) -> i64 {
         .expect("count chunks_vec total")
 }
 
+async fn wait_for_chunk_vec_parity(data_dir: &Path, min_chunks: i64) -> (i64, i64) {
+    let deadline = Instant::now() + SETTLE * 20;
+    loop {
+        let total = count_chunks_total(data_dir);
+        let vec_total = count_chunks_vec_total(data_dir);
+        if total >= min_chunks && total == vec_total {
+            return (total, vec_total);
+        }
+        if Instant::now() >= deadline {
+            return (total, vec_total);
+        }
+        tokio::time::sleep(SETTLE).await;
+    }
+}
+
 fn read_chunk_created_ats(data_dir: &Path, rel: &str) -> Vec<String> {
     let conn = open_index(data_dir);
     let mut stmt = conn
@@ -475,10 +490,7 @@ async fn chunks_vec_row_per_chunks_row() {
     )
     .expect("write a.md");
     fs::write(daemon.vault.join("b.md"), b"# Title\n\nBody.\n").expect("write b.md");
-    tokio::time::sleep(SETTLE).await;
-
-    let total = count_chunks_total(&daemon.data_dir);
-    let vec_total = count_chunks_vec_total(&daemon.data_dir);
+    let (total, vec_total) = wait_for_chunk_vec_parity(&daemon.data_dir, 3).await;
     assert!(
         total >= 3,
         "expected ≥3 chunks across both files, got {total}"
