@@ -10,8 +10,9 @@ use hypomnema::client::{
     ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentQueryJson,
     ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
     FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
-    TerminateVaultResponse, VaultListResponse, VaultRowJson, is_connect_error,
+    SemanticDocumentResultJson, SemanticQueryJson, SemanticResultItem, SemanticResultJson,
+    SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
+    VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
 use hypomnema::logging::{self, BinaryKind};
@@ -87,15 +88,21 @@ async fn main() -> ExitCode {
                 query,
                 prefix,
                 limit,
+                granularity,
+                chunks_per_document,
                 vaults,
             } => {
                 cmd_search_semantic(
                     &config,
                     cli.daemon_url.as_deref(),
                     cli.json,
-                    query,
-                    prefix,
-                    limit,
+                    SemanticSearchParams {
+                        query,
+                        prefix,
+                        limit,
+                        granularity,
+                        chunks_per_document,
+                    },
                     vaults,
                 )
                 .await
@@ -157,6 +164,15 @@ struct ContentSearchParams {
     limit: Option<usize>,
 }
 
+/// Parameters for semantic search command.
+struct SemanticSearchParams {
+    query: String,
+    prefix: Option<String>,
+    limit: Option<usize>,
+    granularity: Option<String>,
+    chunks_per_document: Option<u32>,
+}
+
 async fn cmd_search_content(
     config: &Config,
     override_url: Option<&str>,
@@ -189,20 +205,20 @@ async fn cmd_search_semantic(
     config: &Config,
     override_url: Option<&str>,
     json: bool,
-    query: String,
-    prefix: Option<String>,
-    limit: Option<usize>,
+    params: SemanticSearchParams,
     vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = SemanticQueryJson {
-        query,
-        prefix,
-        limit,
+        query: params.query,
+        prefix: params.prefix,
+        limit: params.limit,
         min_similarity: None,
         vaults: vaults_or_none(vaults),
         include_text: None,
         preview_bytes: None,
+        granularity: params.granularity,
+        chunks_per_document: params.chunks_per_document,
     };
     let resp = client.search_semantic(&req).await?;
     if json {
@@ -687,12 +703,15 @@ fn print_content_block(r: &ContentResultJson) {
 fn render_semantic_text(resp: &SemanticSearchResponse) -> String {
     let mut out = String::new();
     let mut first = true;
-    for r in &resp.results {
+    for item in &resp.results {
         if !first {
             out.push('\n');
         }
         first = false;
-        append_semantic_block(&mut out, r);
+        match item {
+            SemanticResultItem::Chunk(r) => append_semantic_chunk_block(&mut out, r),
+            SemanticResultItem::Document(d) => append_semantic_document_block(&mut out, d),
+        }
     }
     if let Some(h) = &resp.hint {
         if !first {
@@ -703,7 +722,7 @@ fn render_semantic_text(resp: &SemanticSearchResponse) -> String {
     out
 }
 
-fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
+fn append_semantic_chunk_block(out: &mut String, r: &SemanticResultJson) {
     out.push_str(&format!("{}  (score: {:.2})\n", r.file_path, r.score));
     let segments: Vec<&str> = r
         .heading_path
@@ -716,6 +735,24 @@ fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
     }
     if let Some(text) = &r.text {
         out.push_str(&format!("  {text}\n"));
+    }
+}
+
+fn append_semantic_document_block(out: &mut String, d: &SemanticDocumentResultJson) {
+    out.push_str(&format!("{}  (score: {:.2})\n", d.file_path, d.score));
+    for chunk in &d.chunks {
+        let segments: Vec<&str> = chunk
+            .heading_path
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str())
+            .collect();
+        if !segments.is_empty() {
+            out.push_str(&format!("  > {}\n", segments.join(" / ")));
+        }
+        if let Some(text) = &chunk.text {
+            out.push_str(&format!("  {text}\n"));
+        }
     }
 }
 
@@ -759,8 +796,8 @@ mod tests {
         score: f32,
         heading_path: Vec<&str>,
         text: &str,
-    ) -> SemanticResultJson {
-        SemanticResultJson {
+    ) -> SemanticResultItem {
+        SemanticResultItem::Chunk(SemanticResultJson {
             score,
             file_path: file_path.to_string(),
             chunk_index: 0,
@@ -771,7 +808,7 @@ mod tests {
             content_hash: String::new(),
             vault: None,
             vault_name: None,
-        }
+        })
     }
 
     #[test]

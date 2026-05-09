@@ -113,6 +113,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 

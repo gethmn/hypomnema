@@ -198,6 +198,31 @@ See [ADR-0005: Local Everything](../decisions/0005-local-everything.md), [ADR-00
 
 ---
 
+## `[search.semantic]`
+
+Controls defaults and candidate depth for the semantic search endpoint (`POST /search/semantic`, `hmn search semantic`, and the `search_semantic` MCP tool). All keys are optional; the daemon ships with the values shown as defaults.
+
+| Option | Type | Required | Default | Description |
+|--------|------|----------|---------|-------------|
+| `default_granularity` | string | no | `"document"` | Default result granularity when the request omits `granularity`. Valid values: `"document"`, `"chunk"`. `"document"` groups results by file and answers *"which notes are relevant?"*; `"chunk"` returns a flat list and answers *"which passages are relevant?"* |
+| `default_chunks_per_document` | integer | no | `3` | Default number of evidence chunks per document result when `chunks_per_document` is absent from the request. Range: `1..=100`. |
+| `document_candidate_multiplier` | integer | no | `10` | Multiplied by the request `limit` to compute the kNN candidate pool fed to the document grouper (before `min_similarity` filtering). Higher values increase recall at the cost of more per-vault work. Minimum effective value is `1`. |
+| `document_candidate_limit` | integer | no | `1000` | Hard cap on candidate chunk count regardless of `limit × multiplier`. Prevents runaway memory use on large `limit` values. Must be ≥ 1. |
+
+**Example** — use chunk-first defaults for a low-resource deployment:
+
+```toml
+[search.semantic]
+default_granularity = "chunk"
+default_chunks_per_document = 1
+document_candidate_multiplier = 5
+document_candidate_limit = 200
+```
+
+See [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Configuration Knobs for the full document-mode candidate pipeline.
+
+---
+
 ## `[watcher]`
 
 | Option | Type | Required | Default | Description |

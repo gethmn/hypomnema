@@ -61,6 +61,8 @@ fn make_config(data_dir: PathBuf) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+
+        search: hypomnema::config::SearchConfig::default(),
     }
 }
 
@@ -115,6 +117,8 @@ fn build_test_state(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     }
 }
 

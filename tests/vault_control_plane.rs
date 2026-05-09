@@ -91,6 +91,8 @@ async fn spawn_live_daemon() -> LiveControlPlaneDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -129,6 +131,8 @@ fn make_config(data_dir: PathBuf) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+
+        search: hypomnema::config::SearchConfig::default(),
     }
 }
 
@@ -237,6 +241,8 @@ async fn spawn_multi_vault_daemon_with(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -1096,6 +1102,8 @@ async fn spawn_live_daemon_with_errored_row(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 

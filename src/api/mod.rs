@@ -16,6 +16,7 @@ use axum::routing::{get, post};
 
 pub use types::*;
 
+use crate::config::SemanticSearchConfig;
 use crate::control_plane::VaultManager;
 use crate::events::EventBus;
 use crate::store::Store;
@@ -52,6 +53,10 @@ pub struct ApiState {
     /// embedding signal (used in test fixtures that don't run an embedding
     /// service).
     pub embedding_endpoint: Option<String>,
+    /// Daemon-global semantic search defaults; resolved from `[search.semantic]`
+    /// config. Used by the semantic handler to supply config-level defaults when
+    /// request fields are absent.
+    pub semantic_config: SemanticSearchConfig,
 }
 
 pub fn router(state: ApiState) -> Router {
