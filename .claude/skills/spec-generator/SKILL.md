@@ -17,7 +17,7 @@ Key principles:
 - **Content quality beats structural completeness.** Sections marked `TBD` with a reason are more honest than vacuous filler.
 - **Scope-aware investigation.** A solo local CLI does not need analytics, rollout, or business-viability scrutiny. A public SaaS does. The skill asks one upfront question to set its investigative defaults; it pulls in deeper concerns just-in-time when the conversation surfaces a signal.
 - **LDS authority order is load-bearing.** If a draft spec contradicts a higher-authority document (vision, ADRs, architecture), the skill flags it — it does not silently override.
-- **Specs become specs, not PRDs.** This skill writes to `docs/specs/<feature>.md` (or `notes/proposals/<slug>.md` first, see Output Contract). It does not produce a parallel PRD canon.
+- **Specs become specs, not PRDs.** This skill writes to `docs/specs/<feature>.md` by default; the output path is overridable (see Output Contract). It does not produce a parallel PRD canon.
 
 ## Independent Thought
 
@@ -161,15 +161,22 @@ Read `references/spec-template-guide.md` for the section-by-section walkthrough.
 
 ### Output contract
 
-Decide where the spec lands:
+**Default output path**: `docs/specs/<feature>.md`. The companion stories file lands at `<spec-dir>/<feature>-stories.md` (same directory as the spec).
 
-- **Non-trivial features** (most): write the spec to `notes/proposals/<slug>.md`. Stories go to `notes/proposals/<slug>-stories.md`. After approval, both promote: spec to `docs/specs/<feature>.md`, stories archived alongside the proposal under `notes/proposals/archive/`.
-- **Trivial features** ("this is a one-paragraph spec amendment, not worth the proposal cycle"): write directly to `docs/specs/<feature>.md`, or as an amendment patch against an existing spec.
-- **Amendment to an existing spec**: write the amendment patch with the **full revised spec re-printed** for review context. After approval, apply the patch to the canonical spec; bump Version in the frontmatter; add a row to the Revision History table.
+**Override**: the user may specify any path. Common overrides:
 
-**Always announce the path you're choosing before writing**, so the user can override:
+- `notes/proposals/<slug>.md` — staged proposal-then-promote flow. Stories land at `notes/proposals/<slug>-stories.md`. After approval, the human promotes the files to `docs/specs/` and archives the proposal under `notes/proposals/archive/`.
+- `planning/<feature>-spec.md` or similar — for non-LDS projects that do not have a `docs/specs/` directory.
 
-> "This looks like a small enough change to `change-events.md` that I'll write it as an amendment patch rather than a new spec or a proposal. Override?"
+**Amendment to an existing spec**: write the amendment patch with the **full revised spec re-printed** for review context. After approval, apply the patch to the canonical spec; bump Version in the frontmatter; add a row to the Revision History table. The amendment writes to the existing spec's path (no override needed unless the user wants to stage it separately).
+
+**Always announce the resolved path before writing**, so the user can override:
+
+> "Writing the spec to `docs/specs/change-events.md`. Stories will land at `docs/specs/change-events-stories.md`. Override?"
+
+If the target file already exists and the change is not an amendment, confirm before overwriting.
+
+The spec covers the full surface of the feature; the breakdown into shippable steps is a separate concern handled by the `step-decomposer` skill against the finished spec.
 
 ### Always emit all 10 spec sections
 
@@ -191,7 +198,7 @@ For amendments, increment Version (0.1.0 → 0.1.1 for clarifications, → 0.2.0
 
 ### User stories as a peer artifact
 
-Stories are NOT a section of the spec — they live in their own file (`notes/proposals/<slug>-stories.md`). The spec defines behavior; the stories define delivery scope. They reference each other but live separately.
+Stories are NOT a section of the spec — they live in their own file alongside the spec (default `docs/specs/<feature>-stories.md`; if the spec was written to an override path, the stories file lives in the same directory). The spec defines behavior; the stories define delivery scope. They reference each other but live separately.
 
 Read `references/user-story-guide.md` for INVEST + AC discipline. The story file should reference the spec by path; the spec's Implementation Notes section can reference the stories file by path.
 
@@ -230,7 +237,7 @@ Categories (use only those that have content):
 3. **Architecture diagram updates needed** — if the spec touches module boundaries, what changes in `docs/architecture/overview.md`.
 4. **New CLI / config to add to `docs/reference/`** — if the spec exposes a new user-facing surface.
 5. **Open Questions routed to the spec they touch** — if the conversation surfaced questions belonging to another existing spec, point them there.
-6. **Workplan-ready user stories** — pointer to the peer artifact at `notes/proposals/<slug>-stories.md`.
+6. **Workplan-ready user stories** — pointer to the peer artifact at `<spec-dir>/<feature>-stories.md`.
 
 Use the TBD rule for distinguishing "this needs an ADR" from "this resolves at workplan time": *if the resolution fits in 1-3 paragraphs of workplan prose with a 'Why', it does not need to be an ADR*.
 
