@@ -83,7 +83,7 @@ pub enum DebugOp {
         #[arg(long, value_name = "MODE", value_parser = ["indexed", "preview", "diff"])]
         mode: Option<String>,
         /// Chunk text payload: preview, full, or none.
-        #[arg(long, value_name = "MODE", value_parser = ["preview", "full", "none"])]
+        #[arg(long, value_name = "SHOW_TEXT", value_parser = ["preview", "full", "none"])]
         show_text: Option<String>,
     },
 }

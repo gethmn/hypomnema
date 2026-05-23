@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Component;
 
 use anyhow::{Context, Result};
@@ -240,12 +241,19 @@ fn indexed_chunks_to_json(
     preview_chunks: &[Chunk],
     show_text: &ShowText,
 ) -> Vec<DebugChunkJson> {
+    // Index preview chunks by (chunk_index, content_hash) so each stored chunk
+    // matches in O(1) instead of a linear scan with full-content comparisons.
+    // content_hash equality stands in for content equality (both are sha256).
+    let preview_by_key: HashMap<(u32, &str), &Chunk> = preview_chunks
+        .iter()
+        .map(|chunk| ((chunk.chunk_index, chunk.content_hash.as_str()), chunk))
+        .collect();
     chunks
         .iter()
         .map(|stored| {
-            let matching_preview = preview_chunks.iter().find(|chunk| {
-                chunk.chunk_index == stored.chunk_index && chunk.content == stored.content
-            });
+            let matching_preview = preview_by_key
+                .get(&(stored.chunk_index, stored.content_hash.as_str()))
+                .copied();
             stored_to_json(stored, matching_preview, show_text)
         })
         .collect()
@@ -533,5 +541,57 @@ mod tests {
             boundary_end: "document_end".to_string(),
         }];
         assert_eq!(build_diff(&indexed, &preview).changed_chunks, vec![5]);
+    }
+
+    #[test]
+    fn indexed_chunks_match_preview_by_hash_for_boundaries() {
+        let stored = vec![
+            StoredChunk {
+                chunk_index: 0,
+                heading_path: String::new(),
+                content: "a".to_string(),
+                content_hash: "sha256:a".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+            },
+            StoredChunk {
+                chunk_index: 1,
+                heading_path: String::new(),
+                content: "b".to_string(),
+                content_hash: "sha256:b".to_string(),
+                start_byte: 1,
+                end_byte: 2,
+            },
+        ];
+        let preview = vec![
+            Chunk {
+                chunk_index: 0,
+                heading_path: String::new(),
+                content: "a".to_string(),
+                content_hash: "sha256:a".to_string(),
+                start_byte: 0,
+                end_byte: 1,
+                boundary_start: "document_start".to_string(),
+                boundary_end: "heading:h2".to_string(),
+            },
+            // Same index but diverged content/hash → must not match.
+            Chunk {
+                chunk_index: 1,
+                heading_path: String::new(),
+                content: "B!".to_string(),
+                content_hash: "sha256:diverged".to_string(),
+                start_byte: 1,
+                end_byte: 3,
+                boundary_start: "heading:h2".to_string(),
+                boundary_end: "document_end".to_string(),
+            },
+        ];
+        let out = indexed_chunks_to_json(&stored, &preview, &ShowText::None);
+        // Exact (index, hash) match pulls boundary metadata from the preview.
+        assert_eq!(out[0].boundary_start, "document_start");
+        assert_eq!(out[0].boundary_end, "heading:h2");
+        // Diverged chunk has no exact match → marked indexed_unknown.
+        assert_eq!(out[1].boundary_start, "indexed_unknown");
+        assert_eq!(out[1].boundary_end, "indexed_unknown");
     }
 }

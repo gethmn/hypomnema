@@ -352,8 +352,8 @@ fn render_content_get_text(response: &ContentGetResponse) -> Result<()> {
 
 fn render_debug_chunks_text(response: &DebugChunksResponse) {
     println!(
-        "{}  vault: {}  indexed: {}",
-        response.path, response.vault_name, response.content_hash
+        "{}  vault: {}  hash: {}  indexed_at: {}",
+        response.path, response.vault_name, response.content_hash, response.indexed_at
     );
     println!(
         "chunker: {}  target={}B  hard_cap={}B",
