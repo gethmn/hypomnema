@@ -465,10 +465,7 @@ async fn smoke_mode3_metadata_only() {
             "text_truncated must be absent for include_text=none"
         );
         assert!(result["score"].as_f64().is_some(), "score must be present");
-        assert!(
-            result["path"].as_str().is_some(),
-            "path must be present"
-        );
+        assert!(result["path"].as_str().is_some(), "path must be present");
         assert!(
             result["content_hash"].as_str().is_some(),
             "content_hash must be present"
