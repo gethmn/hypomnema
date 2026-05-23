@@ -68,6 +68,8 @@ async fn main() -> ExitCode {
                 mode,
                 prefix,
                 limit,
+                include_matches,
+                max_matches_per_file,
                 vaults,
             } => {
                 cmd_search_content(
@@ -79,6 +81,8 @@ async fn main() -> ExitCode {
                         mode,
                         prefix,
                         limit,
+                        include_matches,
+                        max_matches_per_file,
                     },
                     vaults,
                 )
@@ -163,6 +167,8 @@ struct ContentSearchParams {
     mode: String,
     prefix: Option<String>,
     limit: Option<usize>,
+    include_matches: bool,
+    max_matches_per_file: Option<usize>,
 }
 
 /// Parameters for semantic search command.
@@ -188,8 +194,8 @@ async fn cmd_search_content(
         regex: false,
         case_sensitive: false,
         prefix: params.prefix,
-        include_matches: true,
-        max_matches_per_file: None,
+        include_matches: params.include_matches,
+        max_matches_per_file: params.max_matches_per_file,
         limit: params.limit,
         vaults: vaults_or_none(vaults),
     };

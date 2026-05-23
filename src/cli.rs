@@ -192,6 +192,15 @@ pub enum SearchMode {
         /// Max results.
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Include per-line match snippets in the response. Off by default to match the
+        /// `search_content` request shape over MCP/HTTP; pass to opt in to snippet lines.
+        /// No effect in `--mode ranked`, which never returns snippets (only rank/score).
+        #[arg(long)]
+        include_matches: bool,
+        /// Maximum match snippets returned per file when `--include-matches` is set
+        /// (default 5). Ignored without `--include-matches` and in `--mode ranked`.
+        #[arg(long, value_name = "N")]
+        max_matches_per_file: Option<usize>,
         /// Restrict the search to a subset of vaults (comma-separated names or ids).
         #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
         vaults: Vec<String>,
@@ -313,12 +322,16 @@ mod tests {
                         mode: _,
                         prefix,
                         limit,
+                        include_matches,
+                        max_matches_per_file,
                         vaults,
                     },
             } => {
                 assert_eq!(query, "pgvector");
                 assert_eq!(prefix.as_deref(), Some("notes"));
                 assert_eq!(limit, Some(25));
+                assert!(!include_matches, "include_matches defaults to false");
+                assert_eq!(max_matches_per_file, None);
                 assert!(vaults.is_empty());
             }
             _ => panic!("expected Search/Content"),
