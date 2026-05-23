@@ -214,7 +214,7 @@ pub enum SemanticResultItem {
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticDocumentResultJson {
     pub score: f32,
-    pub file_path: String,
+    pub path: String,
     pub content_hash: String,
     pub chunks: Vec<SemanticEvidenceChunkJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,7 +242,7 @@ pub struct SemanticEvidenceChunkJson {
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticResultJson {
     pub score: f32,
-    pub file_path: String,
+    pub path: String,
     pub chunk_index: u32,
     pub heading_path: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,6 +310,107 @@ pub struct ContentGetResponse {
     pub results: Vec<ContentGetResultItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_results: Option<PartialResults>,
+}
+
+// ===== debug_chunks request/response types =====
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksRequest {
+    #[schemars(description = "Vault-relative Markdown path to inspect.")]
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional vault name or id. Required when the path is ambiguous.")]
+    pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Debug mode: `indexed` returns stored SQLite chunks, `preview` re-runs the current daemon chunker against indexed file content, `diff` returns both plus comparison diagnostics. Defaults to `indexed`."
+    )]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Chunk text payload: `preview`, `full`, or `none`. Defaults to `preview`."
+    )]
+    pub show_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksResponse {
+    pub vault: String,
+    pub vault_name: String,
+    pub path: String,
+    pub content_hash: String,
+    pub indexed_at: String,
+    pub chunker: DebugChunkerInfo,
+    pub indexed: Vec<DebugChunkJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<Vec<DebugChunkJson>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<DebugChunksDiff>,
+    pub summary: DebugChunksSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkerInfo {
+    pub version: String,
+    pub rules: Vec<String>,
+    pub target_bytes: usize,
+    pub hard_cap_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkJson {
+    pub chunk_index: u32,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub byte_len: usize,
+    pub heading_path: Vec<String>,
+    pub boundary_start: String,
+    pub boundary_end: String,
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_truncated: Option<bool>,
+    pub diagnostics: DebugChunkDiagnosticsJson,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkDiagnosticsJson {
+    pub fenced_code_blocks: usize,
+    pub fenced_code_bytes: usize,
+    pub fenced_code_languages: Vec<String>,
+    pub code_heavy: bool,
+    pub thematic_breaks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksDiff {
+    pub chunk_count_changed: bool,
+    pub indexed_chunk_count: usize,
+    pub preview_chunk_count: usize,
+    pub changed_chunks: Vec<u32>,
+    pub added_preview_chunks: Vec<u32>,
+    pub removed_indexed_chunks: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksSummary {
+    pub chunk_count: usize,
+    pub min_bytes: usize,
+    pub max_bytes: usize,
+    pub avg_bytes: f64,
+    pub code_heavy_chunks: usize,
+    pub thematic_break_boundaries: usize,
 }
 
 // ===== Cross-vault partial-results diagnostics =====
@@ -679,7 +780,7 @@ mod tests {
         let resp = SemanticSearchResponse {
             results: vec![SemanticResultItem::Chunk(SemanticResultJson {
                 score: 0.95,
-                file_path: "notes/a.md".to_string(),
+                path: "notes/a.md".to_string(),
                 chunk_index: 0,
                 heading_path: vec!["Intro".to_string()],
                 text: Some("alpha body".to_string()),
@@ -701,6 +802,9 @@ mod tests {
         );
         assert_eq!(entry["vault_name"].as_str(), Some("default"));
         assert_eq!(entry["content_hash"].as_str(), Some("sha256:00"));
+        // Canonical vault-relative path field is `path`, never `file_path`.
+        assert_eq!(entry["path"].as_str(), Some("notes/a.md"));
+        assert!(entry["file_path"].is_null(), "must not emit `file_path`");
     }
 
     #[test]
@@ -727,7 +831,7 @@ mod tests {
         let resp = SemanticSearchResponse {
             results: vec![SemanticResultItem::Document(SemanticDocumentResultJson {
                 score: 0.92,
-                file_path: "notes/b.md".to_string(),
+                path: "notes/b.md".to_string(),
                 content_hash: "sha256:01".to_string(),
                 chunks: vec![SemanticEvidenceChunkJson {
                     score: 0.92,
@@ -754,7 +858,8 @@ mod tests {
                 .is_some_and(|s| (s - 0.92_f64).abs() < 0.01),
             "document score should be ~0.92"
         );
-        assert_eq!(entry["file_path"].as_str(), Some("notes/b.md"));
+        assert_eq!(entry["path"].as_str(), Some("notes/b.md"));
+        assert!(entry["file_path"].is_null(), "must not emit `file_path`");
         assert_eq!(entry["content_hash"].as_str(), Some("sha256:01"));
         assert_eq!(entry["vault_name"].as_str(), Some("myvault"));
         let chunk = &entry["chunks"][0];

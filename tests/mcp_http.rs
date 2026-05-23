@@ -581,13 +581,14 @@ async fn tools_list_returns_all_tools() {
         .iter()
         .map(|t| t["name"].as_str().expect("tool name string"))
         .collect();
-    // Step 19 added content_get (read-only), bringing the total to 13.
-    assert_eq!(names.len(), 13, "expected 13 tools, got {names:?}");
+    // Step 19 added content_get (read-only); chunk debugging added debug_chunks.
+    assert_eq!(names.len(), 14, "expected 14 tools, got {names:?}");
     for expected in [
         "search_filesystem",
         "search_content",
         "search_semantic",
         "content_get",
+        "debug_chunks",
         "vault_list",
         "vault_status",
         "vault_create",

@@ -458,7 +458,7 @@ async fn semantic_handler_returns_200_with_results_for_seeded_chunks() {
     assert_eq!(status, StatusCode::OK);
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["file_path"], "a.md");
+    assert_eq!(results[0]["path"], "a.md");
     assert_eq!(results[0]["chunk_index"], 0);
     assert_eq!(results[0]["heading_path"], json!(["Intro"]));
     assert_eq!(results[0]["text"], "alpha body");
@@ -1275,8 +1275,8 @@ async fn cross_vault_semantic_results_score_desc_sorted() {
     let s0 = results[0]["score"].as_f64().unwrap();
     let s1 = results[1]["score"].as_f64().unwrap();
     assert!(s0 >= s1, "expected score-desc but got {s0} then {s1}");
-    assert_eq!(results[0]["file_path"], "bravo.md");
-    assert_eq!(results[1]["file_path"], "alpha.md");
+    assert_eq!(results[0]["path"], "bravo.md");
+    assert_eq!(results[1]["path"], "alpha.md");
 }
 
 #[tokio::test]
@@ -1639,7 +1639,7 @@ async fn semantic_search_assumes_same_dimension_across_vaults() {
     // Vault 0's chunk survives in results.
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0]["file_path"], "ok.md");
+    assert_eq!(results[0]["path"], "ok.md");
     // Vault 1 lands in failed.
     let failed = body["partial_results"]["failed"].as_array().unwrap();
     assert_eq!(failed.len(), 1);
@@ -2427,7 +2427,7 @@ async fn semantic_include_text_none_omits_text_fields() {
     );
     // metadata fields still populated
     assert!(result["score"].is_number(), "score must be present");
-    assert!(result["file_path"].is_string(), "file_path must be present");
+    assert!(result["path"].is_string(), "path must be present");
     assert!(
         result["content_hash"].is_string(),
         "content_hash must be present"
@@ -2659,7 +2659,7 @@ async fn semantic_document_mode_groups_chunks_into_one_doc() {
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 1, "two chunks of one file → one document");
     let doc = &results[0];
-    assert_eq!(doc["file_path"], "a.md");
+    assert_eq!(doc["path"], "a.md");
     assert_eq!(doc["content_hash"], "sha256:00");
     let doc_score = doc["score"].as_f64().unwrap() as f32;
     assert!(
@@ -2973,7 +2973,7 @@ async fn cross_vault_document_mode_groups_per_vault_separately() {
         .collect();
     assert_eq!(vaults.len(), 2, "both vaults represented");
     for r in results {
-        assert_eq!(r["file_path"], "shared.md");
+        assert_eq!(r["path"], "shared.md");
         assert_eq!(r["chunks"].as_array().unwrap().len(), 1);
     }
 }
@@ -3038,7 +3038,7 @@ async fn cross_vault_document_mode_score_then_vault_then_path_ordering() {
         .map(|r| {
             (
                 r["vault"].as_str().unwrap().to_string(),
-                r["file_path"].as_str().unwrap().to_string(),
+                r["path"].as_str().unwrap().to_string(),
             )
         })
         .collect();
@@ -3371,7 +3371,7 @@ async fn semantic_document_diversity_regression_one_doc_many_chunks() {
     );
     let paths: std::collections::HashSet<&str> = results
         .iter()
-        .map(|r| r["file_path"].as_str().unwrap())
+        .map(|r| r["path"].as_str().unwrap())
         .collect();
     assert_eq!(
         paths.len(),
@@ -3410,7 +3410,7 @@ async fn semantic_chunk_mode_multiple_flat_chunks_from_same_document() {
     assert_eq!(results.len(), 3, "all 3 chunks from a.md must appear flat");
     let paths: Vec<&str> = results
         .iter()
-        .map(|r| r["file_path"].as_str().unwrap())
+        .map(|r| r["path"].as_str().unwrap())
         .collect();
     assert!(paths.iter().all(|p| *p == "a.md"), "all results from a.md");
     let chunk_indexes: Vec<u64> = results
@@ -3574,7 +3574,7 @@ async fn semantic_document_mode_partial_results_on_vault_failure() {
     );
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 1, "vault 0's document must still appear");
-    assert_eq!(results[0]["file_path"], "ok.md");
+    assert_eq!(results[0]["path"], "ok.md");
     assert!(
         results[0].get("chunks").is_some(),
         "document mode: nested chunks must be present"

@@ -268,7 +268,7 @@ hmn --json search semantic 'how do we prevent spurious reindexes' \
   | jq '.results[0]'
 ```
 
-Expect `.file_path == "notes/design/watchers.md"`, `.vault_name ==
+Expect `.path == "notes/design/watchers.md"`, `.vault_name ==
 "sample"`. The chunk's `heading_path` should include `"Content hash
 gating"`. Score above 0.5 indicates a healthy match.
 
@@ -279,7 +279,7 @@ hmn --json search semantic 'wild yeast culture maintenance' \
   | jq '.results[0]'
 ```
 
-Expect `.file_path == "ingredients/sourdough-starter.md"`,
+Expect `.path == "ingredients/sourdough-starter.md"`,
 `.vault_name == "sample-2"`.
 
 ### C. Cross-vault topical query
@@ -289,7 +289,7 @@ hmn --json search semantic 'heading-aware document chunking' \
   | jq '.results[0]'
 ```
 
-Expect `.file_path == "notes/design/chunking.md"`, `.vault_name ==
+Expect `.path == "notes/design/chunking.md"`, `.vault_name ==
 "sample"`. The `chunking.md` file is unique to vault A; vault B has
 no comparable chunk, so this query lands cleanly on vault A.
 
@@ -297,7 +297,7 @@ no comparable chunk, so this query lands cleanly on vault A.
 
 ```bash
 hmn --json search semantic 'chunking' --limit 20 \
-  | jq '[.results[] | select(.file_path == "notes/design/chunking.md")] | length'
+  | jq '[.results[] | select(.path == "notes/design/chunking.md")] | length'
 ```
 
 Expect **at least 3** — `chunking.md` has three H2 sections, each
@@ -307,10 +307,10 @@ producing a chunk; the H1 intro may produce a fourth.
 
 ```bash
 hmn --json search semantic 'salt-tolerant lactobacillus brine' \
-  | jq '.results[0] | {file_path, vault_name, text}'
+  | jq '.results[0] | {path, vault_name, text}'
 ```
 
-Expect `.file_path == "techniques/fermentation.md"`, `.vault_name ==
+Expect `.path == "techniques/fermentation.md"`, `.vault_name ==
 "sample-2"`. The result `text` should describe the lacto-fermentation
 chemistry — **not** the YAML frontmatter (`title:` / `tags:` / etc.),
 which the chunker strips before chunking. If you see frontmatter

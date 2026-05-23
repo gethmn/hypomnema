@@ -2,24 +2,33 @@
 
 Audience: `step-NN-researcher`, spawned by the coordinator.
 
-Read first: `notes/playbook/shared-static.md`
+Read first:
 
-## Use Solo MCP
+1. `notes/playbook/shared-static.md`
+2. `notes/playbook/capabilities.md`
+3. The active runtime profile — base provider, then each overlay in order
+   (default: `notes/playbook/runtimes/solo.md`; with overlays, also
+   `runtimes/<overlay>.md`). See `runtimes/README.md` for composition rules.
 
-Run `whoami()` at first turn and confirm process identity as `step-NN-researcher`.
+## Identity
+
+Use the `identity` capability at first turn and confirm process identity
+as `step-NN-researcher`.
 
 ## Responsibility
 
 - Own workplan writing for the step.
 - Stay alive for the whole step as an on-demand research sidecar.
-- Produce clarifications for coordinator and builders when they are blocked on analysis/design/spec interpretation.
+- Produce clarifications for coordinator and builders when they are blocked
+  on analysis/design/spec interpretation.
 
 ## Workplan Phase (default)
 
-1. Read roadmap step section, relevant ADRs/specs, and workflow-notes expectations.
+1. Read roadmap step section, relevant ADRs/specs, and workflow-notes
+   expectations.
 2. Write `notes/roadmap/step-NN-workplan.md`.
-3. Post a concise summary to the coordinator.
-4. Wait for follow-up requests.
+3. Post a concise summary to the coordinator (`message-agent`).
+4. Wait for follow-up requests (`pause-until-signal`).
 
 ## Build-Phase Sidecar Behavior
 

@@ -38,6 +38,11 @@ pub enum Command {
         #[command(subcommand)]
         op: ContentOp,
     },
+    /// Developer diagnostics for indexed/chunked content.
+    Debug {
+        #[command(subcommand)]
+        op: DebugOp,
+    },
     /// Report daemon health.
     Status,
     /// Serve the MCP surface over stdio against a running `hmnd` daemon.
@@ -62,6 +67,24 @@ pub enum ContentOp {
         /// Repeatable. Omitting queries all active vaults.
         #[arg(long, value_name = "NAME|ID")]
         vault: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DebugOp {
+    /// Inspect stored and preview semantic chunks for an indexed file.
+    Chunks {
+        /// Vault-relative Markdown path to inspect.
+        path: String,
+        /// Restrict the lookup to one vault (name or id).
+        #[arg(long, value_name = "NAME|ID")]
+        vault: Option<String>,
+        /// Debug mode: indexed, preview, or diff.
+        #[arg(long, value_name = "MODE", value_parser = ["indexed", "preview", "diff"])]
+        mode: Option<String>,
+        /// Chunk text payload: preview, full, or none.
+        #[arg(long, value_name = "SHOW_TEXT", value_parser = ["preview", "full", "none"])]
+        show_text: Option<String>,
     },
 }
 
@@ -217,6 +240,40 @@ mod tests {
     fn parses_mcp_subcommand() {
         let cli = Cli::try_parse_from(["hmn", "mcp"]).expect("parses");
         assert!(matches!(cli.command, Command::Mcp));
+    }
+
+    #[test]
+    fn parses_debug_chunks() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "debug",
+            "chunks",
+            "notes/foo.md",
+            "--vault",
+            "personal",
+            "--mode",
+            "diff",
+            "--show-text",
+            "none",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Debug {
+                op:
+                    DebugOp::Chunks {
+                        path,
+                        vault,
+                        mode,
+                        show_text,
+                    },
+            } => {
+                assert_eq!(path, "notes/foo.md");
+                assert_eq!(vault.as_deref(), Some("personal"));
+                assert_eq!(mode.as_deref(), Some("diff"));
+                assert_eq!(show_text.as_deref(), Some("none"));
+            }
+            _ => panic!("expected Debug/Chunks"),
+        }
     }
 
     #[test]

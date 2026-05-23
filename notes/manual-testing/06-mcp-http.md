@@ -196,13 +196,13 @@ curl -s -X POST http://127.0.0.1:7777/mcp \
   -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{
     "name":"search_semantic",
     "arguments":{"query":"wild yeast culture maintenance"}}}' \
-  | jq '.result.structuredContent.results[0] | {file_path, vault_name}'
+  | jq '.result.structuredContent.results[0] | {path, vault_name}'
 ```
 
 Expect:
 
 ```json
-{"file_path":"ingredients/sourdough-starter.md","vault_name":"sample-2"}
+{"path":"ingredients/sourdough-starter.md","vault_name":"sample-2"}
 ```
 
 ### D. Equivalence check against `/search/...`

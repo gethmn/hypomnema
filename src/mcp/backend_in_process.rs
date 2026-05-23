@@ -10,9 +10,9 @@ use crate::api::search::{
 };
 use crate::api::types::{
     ContentGetRequest, ContentGetResponse, ContentQueryJson, ContentSearchResponse,
-    CreateVaultRequest, FilesystemQueryJson, FilesystemSearchResponse, RescanResponseJson,
-    SemanticQueryJson, SemanticSearchResponse, TerminateVaultResponse, VaultListResponse,
-    VaultRowJson,
+    CreateVaultRequest, DebugChunksRequest, DebugChunksResponse, FilesystemQueryJson,
+    FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson, SemanticSearchResponse,
+    TerminateVaultResponse, VaultListResponse, VaultRowJson,
 };
 use crate::config::SemanticSearchConfig;
 use crate::control_plane::{CreateVaultRequest as ControlCreateRequest, VaultManager};
@@ -69,6 +69,12 @@ impl HypomnemaBackend for InProcessBackend {
 
     async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
         run_content_get(&self.vault_manager, req)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn debug_chunks(&self, req: &DebugChunksRequest) -> Result<DebugChunksResponse> {
+        crate::api::debug::run_debug_chunks(&self.vault_manager, req)
             .await
             .map_err(Into::into)
     }

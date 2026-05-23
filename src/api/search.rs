@@ -469,8 +469,8 @@ fn build_chunk_results(
             .then_with(|| semantic_result_item_vault(a).cmp(&semantic_result_item_vault(b)))
             .then_with(|| match (a, b) {
                 (SemanticResultItem::Chunk(a), SemanticResultItem::Chunk(b)) => a
-                    .file_path
-                    .cmp(&b.file_path)
+                    .path
+                    .cmp(&b.path)
                     .then_with(|| a.chunk_index.cmp(&b.chunk_index)),
                 _ => std::cmp::Ordering::Equal,
             })
@@ -542,7 +542,7 @@ fn build_document_results(
             .collect();
         docs_out.push(SemanticDocumentResultJson {
             score: best_score,
-            file_path,
+            path: file_path,
             content_hash,
             chunks,
             vault: Some(acc.entry.id.to_string()),
@@ -557,7 +557,7 @@ fn build_document_results(
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.vault.as_deref().cmp(&b.vault.as_deref()))
-            .then_with(|| a.file_path.cmp(&b.file_path))
+            .then_with(|| a.path.cmp(&b.path))
     });
     let was_capped = docs_out.len() > limit;
     if was_capped {
@@ -707,7 +707,7 @@ fn result_item_sort_key(item: &ContentGetResultItem) -> (&str, &str) {
     }
 }
 
-fn normalize_retrieval_path(path: &str) -> String {
+pub(crate) fn normalize_retrieval_path(path: &str) -> String {
     // Strip a leading "./" component and collapse any duplicate internal slashes.
     let stripped = path.strip_prefix("./").unwrap_or(path);
     // Collapse duplicate slashes (simple pass — do not shell out)
@@ -815,7 +815,7 @@ fn semantic_to_json(
     };
     SemanticResultJson {
         score: r.score,
-        file_path: r.file_path,
+        path: r.file_path,
         chunk_index: r.chunk_index,
         heading_path: r.heading_path.split('/').map(String::from).collect(),
         text,
@@ -1006,6 +1006,15 @@ mod tests {
 
     fn default_cfg() -> SemanticSearchConfig {
         SemanticSearchConfig::default()
+    }
+
+    #[test]
+    fn normalize_retrieval_path_strips_dot_slash_and_collapses_slashes() {
+        // Shared contract relied on by content_get and debug_chunks lookups.
+        assert_eq!(normalize_retrieval_path("./notes/a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("notes//a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("notes/a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("./a///b/c.md"), "a/b/c.md");
     }
 
     #[test]
