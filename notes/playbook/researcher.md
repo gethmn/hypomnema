@@ -6,7 +6,9 @@ Read first:
 
 1. `notes/playbook/shared-static.md`
 2. `notes/playbook/capabilities.md`
-3. `notes/playbook/runtimes/<active-runtime>.md` (default: `runtimes/solo.md`)
+3. The active runtime profile — base provider, then each overlay in order
+   (default: `notes/playbook/runtimes/solo.md`; with overlays, also
+   `runtimes/<overlay>.md`). See `runtimes/README.md` for composition rules.
 
 ## Identity
 

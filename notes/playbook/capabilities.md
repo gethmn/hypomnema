@@ -10,7 +10,9 @@ Read order for any role:
 
 1. `notes/playbook/shared-static.md` (role invariants, naming, tags, template)
 2. `notes/playbook/capabilities.md` (this file)
-3. `notes/playbook/runtimes/<active-runtime>.md` (concrete tool mapping)
+3. The active runtime profile — base provider, then each overlay in order
+   (concrete tool mapping; default `notes/playbook/runtimes/solo.md`). See
+   `runtimes/README.md` § Profile (base + overlays).
 
 A new orchestration layer is supported by adding a `runtimes/<name>.md` that
 implements one or more of the capabilities below. Layer A (role + shared

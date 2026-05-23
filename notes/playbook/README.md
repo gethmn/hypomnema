@@ -29,8 +29,9 @@ Long-form prompts:
 - `researcher.md`
 - `builder.md`
 
-Each role reads `shared-static.md` → `capabilities.md` → the active
-`runtimes/<runtime>.md` → its own role file.
+Each role reads `shared-static.md` → `capabilities.md` → the active runtime
+profile (base provider + any overlays in order; default `runtimes/solo.md`) →
+its own role file.
 
 ## Path Conventions
 
