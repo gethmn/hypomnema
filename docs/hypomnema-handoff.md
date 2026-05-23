@@ -3,21 +3,21 @@
 > *"The hypomnemata constituted a material memory of things read, heard, or thought, thus offering these as an accumulated treasure for rereading and later meditation."*
 > — Michel Foucault, on the ancient Greek notebook tradition
 
-> **Purpose:** Orientation for picking up Hypomnema in a fresh chat or a new project context. Captures what was decided, why, and what’s deliberately deferred. Not a tutorial; not a spec. The “what we know going in” document.
+> **Purpose:** Historical orientation for picking up Hypomnema in a fresh chat or a new project context. Captures what was decided, why, and what was deliberately deferred around the original v0 gate. Not a tutorial; not a spec. Current product boundaries live in [`product/vision.md`](product/vision.md).
 >
 > **Origin:** Spun out from the Iris Vault Bridge design exploration. The full path of that exploration lives in the iris-vault-bridge-* document series; this doc compresses the parts that survived into Hypomnema’s scope.
 
 ## What Hypomnema is
 
-A local daemon that watches a directory of Markdown files and indexes them so that any consumer — most commonly an AI agent connected via MCP — can search the contents three ways:
+A local daemon that watches registered directories of Markdown files and indexes them so that any consumer — most commonly an AI agent connected via MCP — can search the contents three ways:
 
 - **Filesystem search** — what files exist, what’s in this directory, glob patterns
 - **Content search** — grep-shaped: which files contain this exact string
 - **Semantic search** — vector similarity over chunked content
 
-It also emits change events to a durable local log, so consumers can subscribe to “this file changed” notifications without polling.
+It also emits live change events, so consumers can subscribe to “this file changed” notifications while connected and re-query the index for current truth after reconnecting.
 
-The watched directory is treated as the user’s. Hypomnema reads from it. Hypomnema does not write to it. State that Hypomnema maintains (the index, the event log, configuration, logs) lives in the daemon’s own data directory, never under the watched path.
+The watched directory is treated as the user’s. Hypomnema reads from it. Hypomnema does not write to user-authored vault files. State that Hypomnema maintains (the index, vault registry, configuration, logs, and any future durable event store) lives in the daemon’s own data directory, never under the watched path.
 
 ## On the name
 
@@ -35,7 +35,7 @@ It is not Iris’s vault bridge. The original framing — “Iris projects its t
 
 Hypomnema is the smaller, generic thing that fell out of asking “what would still be useful even without the bidirectional half?” The answer turned out to be: a lot. Probably enough to live as its own project with its own users.
 
-It is not Obsidian-specific. Obsidian is the vault format that motivated it (and where the prototype consumer lives), but the design assumes nothing about Obsidian. Any directory of Markdown files works. Frontmatter is read but not interpreted. Wikilinks aren’t parsed in v0. Tags aren’t indexed specially.
+It is not Obsidian-specific. Obsidian is the vault format that motivated it (and where the prototype consumer lives), but the design assumes nothing about Obsidian. Any directory of Markdown files works. Frontmatter is stored as raw text and stripped only for semantic chunking; it is not interpreted as structured metadata. Wikilinks, backlinks, and tags are not indexed specially today.
 
 ## How we got here
 
@@ -53,21 +53,21 @@ Five conceptual moves, each one narrowing the scope:
 
 Hypomnema is the artifact at the end of those five moves. The sibling docs that preceded it remain useful as historical context — they’re the design space that Hypomnema chose a small corner of.
 
-## Scope (v0)
+## Original v0 Scope (Completed)
 
-The minimum useful daemon:
+The original minimum useful daemon:
 
-- Watch one configured directory recursively for Markdown file changes
+- Watch a configured directory recursively for Markdown file changes
 - Maintain three indexes: filesystem (paths, sizes, mtimes), content (the file text), semantic (chunked, embedded, in sqlite-vec)
 - Expose search over HTTP and MCP
-- Emit change events to an append-only JSONL outbox in the daemon’s data directory
+- Emit live change events to active subscribers
 - Run as a local daemon with a CLI for management
 
-That’s the whole v0. Single directory, single user, single machine, read-only.
+That gate is complete. The project has also shipped beyond the original v0 scope, including multi-vault lifecycle, content retrieval, ranked content search, Streamable HTTP MCP, semantic payload budgeting, and document-granularity semantic results.
 
-## Out of scope (deferred)
+## Current boundaries and backlog
 
-Canonical "real, planned, but not v0" list lives in [`product/vision.md` → Non-Goals](product/vision.md#non-goals). The round-agnostic backlog of work that *could* land in some future round (multi-vault, agent-host integration, public-presence work, process/playbook edits, operational follow-ups) lives in [`notes/backlog.md`](../notes/backlog.md) — pulled into roadmaps as rounds are written. Implementation-shaped deferrals specific to this handoff (no workspace split, no `thiserror`, no abstraction layers) are documented below under [Crate stack](#crate-stack).
+The canonical current-state matrix lives in [`product/vision.md` → Current Product Boundaries](product/vision.md#current-product-boundaries). The round-agnostic backlog of work that *could* land in a future round lives in [`notes/backlog.md`](../notes/backlog.md). Historical v0 exclusions should not be used as blockers for discussion; if a boundary moves, update the vision/spec/ADR trail before implementing it.
 
 ## Load-bearing decisions
 
@@ -95,32 +95,32 @@ Filesystem, content, and semantic search answer different question shapes. Agent
 
 ### Local everything
 
-Local embedding model (nomic-embed-text-v1.5 via TEI or vLLM sidecar, configurable to anything OpenAI-API-shaped). Local vector store (sqlite-vec, one file on disk). Local outbox (JSONL in the daemon’s data directory). No cloud dependencies, no required external services. This is non-negotiable for the office case where data leaving the box may be a hard restriction, and it’s also just operationally simpler.
+Local embedding model (nomic-embed-text-v1.5 via TEI or vLLM sidecar, configurable to anything OpenAI-API-shaped). Local vector store (sqlite-vec, one file on disk). Local live event bus, with any future durable event store kept in the daemon data directory. No cloud dependencies, no required external services. This is non-negotiable for the office case where data leaving the box may be a hard restriction, and it’s also just operationally simpler.
 
-### Outbox lives outside the watched directory
+### Daemon state lives outside the watched directory
 
-The daemon’s append-only event log lives in `~/.local/share/hypomnema/` (or platform equivalent), never inside the watched vault. A constantly-growing file inside a Syncthing or Dropbox directory creates pathological sync behavior. The principle generalizes: any state that mutates frequently or is device-specific stays out of the synced path.
+The daemon’s mutable state lives in `~/.local/share/hypomnema/` (or platform equivalent), never inside a watched vault. A constantly-growing file inside a Syncthing or Dropbox directory creates pathological sync behavior. The principle generalizes: any state that mutates frequently or is device-specific stays out of the synced path.
 
 ### sqlite-vec over Lance, qdrant, etc.
 
 One file on disk. No separate process. No network port. Loaded as a SQLite extension into the daemon’s existing connection pool. The daemon ships as the binary plus the extension `.so`/`.dylib`/`.dll` — two files, not a service architecture.
 
-The dimension of the vector column is baked into the schema (768 for nomic-embed-text-v1.5). Model-switching isn’t a v0 concern; if it ever becomes real, it’s a re-index, not a runtime switch.
+The dimension of the vector column is baked into the schema (768 for nomic-embed-text-v1.5). Model-switching is a re-index operation, not a runtime config flip.
 
-## The v0 step plan
+## The original v0 step plan
 
-Eight steps, dependency-ordered, each independently useful as a stopping point:
+Eight steps, dependency-ordered, each independently useful as a stopping point. All have shipped, with the outbox step evolving into live event streaming rather than a public JSONL log:
 
 1. **Skeleton.** Daemon starts, reads config, logs what it’s watching, exits cleanly on SIGINT.
 2. **Scan + hash.** Walk the directory, compute content hashes, store in SQLite. Re-runs are deterministic.
 3. **Watcher.** `notify` + `notify-debouncer-full`, filtered to `.md` files, with the content-hash check that distinguishes “OS noticed a write” from “content changed.”
-4. **Outbox.** Persist real change events to JSONL in the daemon’s data directory.
+4. **Live change events.** Publish real change events to connected subscribers.
 5. **Filesystem and content search over HTTP.** List/glob and grep, exposed via Axum. CLI built against these. Useful enough to dogfood for ordinary find/grep work.
 6. **Chunking and embedding.** pulldown-cmark heading-aware chunking, embed via TEI, store in sqlite-vec. The step most likely to surprise you.
 7. **Semantic search.** Query → embed → vector search → return chunks with metadata.
 8. **MCP wrapper.** Same operations, MCP transport via `rmcp`. Test against an actual agent (Claude Code, Iris).
 
-If a step is hard, ship the previous one and keep using it. Step 5 is genuinely valuable on its own.
+This list is historical context, not an active gate for new work.
 
 ## Crate stack
 
@@ -137,7 +137,7 @@ If a step is hard, ship the previous one and keep using it. Step 5 is genuinely 
 - `anyhow` — error handling
 - `clap` (`derive`) — CLI
 
-No `thiserror` until there’s a public library API. No async-trait abstractions until there’s a second concrete implementation demanding one. No workspace split until a second consumer demands it.
+No `thiserror` until there’s a public library API or stable cross-module error contract. No async-trait abstractions until there’s a second concrete implementation demanding one. No workspace split until a second consumer demands it.
 
 ## Repository orientation
 
@@ -157,7 +157,7 @@ These are gotchas the conversation predicted before any code was written. Each h
 - **Watcher event storms during editor saves and sync operations.** Use the debouncer, never roll your own. (`filesystem-watching` skill)
 - **Spurious re-indexing from mtime-only change detection.** Hash the content; compare against the last known hash; emit only on actual change. (`filesystem-watching` skill)
 - **Sync-conflict files from Syncthing/Obsidian Sync/Dropbox.** Filter at the watcher; never index. Surface counts in a health view. (`filesystem-watching` skill)
-- **Putting state in the watched directory.** Outbox, index, logs all live in the daemon’s data directory. Synced directories mangle anything that mutates frequently. (AGENTS.md)
+- **Putting state in the watched directory.** Index, registry, logs, and any future durable event store all live in the daemon’s data directory. Synced directories mangle anything that mutates frequently. (AGENTS.md)
 - **Model-dimension mismatches.** Bake the dimension in at schema-creation time; fail loudly at startup if config disagrees. (`sqlite-vec-extension` skill)
 - **In-place vector updates.** Always delete-and-reinsert. Vec0 doesn’t update gracefully. (`sqlite-vec-extension` skill)
 - **Regex-based or blank-line-based chunking.** Use pulldown-cmark events. (`markdown-chunking` skill)
@@ -166,19 +166,19 @@ These are gotchas the conversation predicted before any code was written. Each h
 
 Hypomnema has no awareness of Iris. Iris is one consumer of Hypomnema among potentially several.
 
-The Iris-side integration is thin: an adapter that calls Hypomnema’s search endpoints (via MCP or HTTP) as agent tools, and tails Hypomnema’s outbox to invalidate any vault-derived state Iris caches. No forward path from Iris’s model changes to vault writes — there’s no write path on the Hypomnema side to feed.
+The Iris-side integration is thin: an adapter that calls Hypomnema’s search endpoints (via MCP or HTTP) as agent tools, and consumes Hypomnema’s live events to invalidate any vault-derived state Iris caches. No forward path from Iris’s model changes to vault writes — there’s no write path on the Hypomnema side to feed.
 
 When Hexist arrives and provides proper bidirectional sync via CRDTs, Hypomnema’s search capability is still useful. What changes is how Iris’s own state gets managed, which is Hexist’s domain, not Hypomnema’s.
 
 The deferred work — ownership model, conflict resolution, format spec, atomic writes — is preserved in the original `iris-vault-bridge-*.md` documents in the Iris project. Those docs are not lost; they describe a problem Hypomnema chose not to solve, and they remain accurate as design groundwork for whatever does eventually solve it.
 
-## Open questions for early implementation
+## Open questions for future implementation
 
 Canonical list lives in [`product/vision.md` → Open Questions](product/vision.md#open-questions).
 
-## Done when
+## Completion record
 
-Canonical list lives in [`product/vision.md` → Success Criteria](product/vision.md#success-criteria).
+Canonical record lives in [`product/vision.md` → Original v0 Completion Record](product/vision.md#original-v0-completion-record).
 
 ## Reference material
 

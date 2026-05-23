@@ -43,7 +43,7 @@ The data substrate this spec reads from — the `chunks` metadata table and the 
 
 ### Chunking
 
-Chunks are produced by the indexer (not at query time) using pulldown-cmark to parse Markdown events and split on heading boundaries. See the `markdown-chunking` skill in `.claude/skills/` for the current boundary rules. This describes v0's Markdown chunking strategy; alternative strategies for non-Markdown text are out of v0 scope (see [ADR-0003 § Amendments](../decisions/0003-indexing-in-the-daemon.md#amendments) and [vision.md § Non-Goals](../product/vision.md#non-goals) → "Text-format coverage beyond Markdown").
+Chunks are produced by the indexer (not at query time) using pulldown-cmark to parse Markdown events and split on heading boundaries. See the `markdown-chunking` skill in `.claude/skills/` for the current boundary rules. This describes the current Markdown chunking strategy; alternative strategies for non-Markdown text are not implemented today and are tracked as a future product boundary (see [ADR-0003 § Amendments](../decisions/0003-indexing-in-the-daemon.md#amendments) and [vision.md § Current Product Boundaries](../product/vision.md#current-product-boundaries)).
 
 Each chunk carries:
 - `chunk_id` (the `chunks.id` column from the schema baked in step 6)
@@ -63,7 +63,7 @@ Cross-vault execution semantics — vault scoping, ordering, partial-failure han
 - **`vaults` filter**: `Some([...])` narrows to the named subset; `None` queries all active vaults; `Some([])` is a request validation error.
 - **Same-embedding-model assumption**: every active vault's `chunks_vec` is built with the daemon-wide embedding model and dimension. The embedding service is configured per-daemon, not per-vault, and `chunks_vec`'s dimension is migration-baked per [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md). A multi-model-embedding deployment (different embedding models per vault) is round-4+; until then, cross-vault score comparison is sound by construction.
 
-For N=1 (single-vault deployment) the cross-vault wire shape collapses to v0/step-9 semantics — single slice already score-sorted, `vault` + `vault_name` populated but the `partial_results` field absent.
+For N=1 (single-vault deployment) the cross-vault wire shape collapses to legacy single-vault semantics — single slice already score-sorted, `vault` + `vault_name` populated but the `partial_results` field absent.
 
 ---
 
@@ -388,7 +388,7 @@ A vault in `paused` or `errored` status is silently skipped; one entry per skipp
 
 ### Preview boundary in multibyte UTF-8
 
-The `preview_bytes` cap is a byte limit, not a character limit. The implementation walks back from the byte cap to the nearest valid UTF-8 character boundary to avoid returning invalid UTF-8. In v0 there is no paragraph or sentence heuristic: the boundary is wherever the byte cap falls, aligned to a character boundary. A preview may therefore end mid-sentence or mid-word.
+The `preview_bytes` cap is a byte limit, not a character limit. The implementation walks back from the byte cap to the nearest valid UTF-8 character boundary to avoid returning invalid UTF-8. Today there is no paragraph or sentence heuristic: the boundary is wherever the byte cap falls, aligned to a character boundary. A preview may therefore end mid-sentence or mid-word.
 
 ### Boilerplate-heavy chunks
 
@@ -414,5 +414,5 @@ The chunker does not strip fenced code blocks, Dataview queries, or other genera
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff v0 scope |
 | 0.2.0 | 2026-04-27 | Multi-vault adoption (round 3 / step 10): `vault` semantics flipped from "always absent" to "populated when multi-vault active"; added `vault_name`, request-side `vaults` filter, response-envelope `partial_results`, global score-desc cross-vault ordering with `vault_id` tie-break. Same-embedding-model assumption documented. Cross-vault execution semantics cross-referenced from [vault-management.md](./vault-management.md). |
 | 0.3.0 | 2026-05-01 | Round 8 / Step 17: payload budgeting added. Request: `include_text` (`preview` \| `full` \| `none`, default `preview`) and `preview_bytes` (default 600, server max 2000, silently clamped). Response: `text` changed from required to conditional; added `text_kind`, `text_truncated` (both conditional, present alongside `text`); added `content_hash` (required, `sha256:`-prefixed, projected from chunk metadata). `limit` default re-pinned as 10. Validation Rules section added; Examples section added (default preview, full-text, metadata-only); Edge Cases: added "Preview boundary in multibyte UTF-8" and "Boilerplate-heavy chunks". Resolved proposal questions (text-field strategy → `text` + `text_kind` + `text_truncated`; `preview_bytes` max → 2000, clamped; `content_hash` inclusion → yes; content-search `include_matches` default drift → corrected in step 17.6). Chunk/section-retrieval question deferred to content-retrieval proposal. |
-| 0.3.1 | 2026-05-03 | Clarification (no behavior change): § Chunking notes that the pulldown-cmark heading-aware strategy is v0's chunking strategy; alternative strategies for non-Markdown text are out of v0 scope. Cross-references ADR-0003 § Amendments and vision.md § Non-Goals → "Text-format coverage beyond Markdown" added by the same canon-positioning sweep. |
+| 0.3.1 | 2026-05-03 | Clarification (no behavior change): § Chunking notes that the pulldown-cmark heading-aware strategy is the current Markdown strategy; alternative strategies for non-Markdown text are not implemented today. Cross-references ADR-0003 § Amendments and vision.md § Current Product Boundaries added by the same canon-positioning sweep. |
 | 0.4.0 | 2026-05-08 | Round 14 / Step 25: document granularity. Request: `granularity` (`document` \| `chunk`, default `document`) and `chunks_per_document` (1..=100, default 3). Response: new document-result shape with `chunks` evidence array and document-level `score` (max chunk score); chunk-result shape unchanged. Configuration knobs: `[search.semantic]` `default_granularity`, `default_chunks_per_document`, `document_candidate_multiplier`, `document_candidate_limit`. Validation: `invalid_request` on unrecognized `granularity`, out-of-range `limit`, or out-of-range `chunks_per_document`. |

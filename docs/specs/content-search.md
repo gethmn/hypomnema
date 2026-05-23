@@ -32,7 +32,7 @@ File text is stored inside each per-vault SQLite store as part of the indexer's 
 
 ### Semantics
 
-- Default: case-insensitive substring match (ASCII-folded; Unicode case folding is not applied in v0).
+- Default: case-insensitive substring match (ASCII-folded; Unicode case folding is not applied today).
 - Optional: case-sensitive mode
 - Optional: regex mode using the Rust `regex` crate's default Unicode flavor. The request's `case_sensitive` flag is ignored when `regex: true`; case-sensitivity is a property of the pattern (`(?i)foo`).
 - A file matches if it contains at least one occurrence of the query
@@ -43,11 +43,11 @@ File text is stored inside each per-vault SQLite store as part of the indexer's 
 Cross-vault execution semantics — vault scoping, ordering, partial-failure handling, paused/errored vault inclusion, fan-out model — are pinned in [vault-management.md § Cross-Vault Search Semantics](./vault-management.md#cross-vault-search-semantics) and apply uniformly across the three search modes. The summary that's content-search-specific:
 
 - **Default scope**: all currently active vaults; per-result `vault` + `vault_name` disambiguate origin.
-- **Ordering**: global path-ascending across vaults (lifted from v0/step-9's per-vault path-asc; the merged list is sorted as a single slice). Identical paths across two vaults break ties by `vault_id`.
+- **Ordering**: global path-ascending across vaults (lifted from the original single-vault path-asc behavior; the merged list is sorted as a single slice). Identical paths across two vaults break ties by `vault_id`.
 - **`limit`**: each vault contributes up to `limit` results to the merge pool; the merged list is then truncated to `limit`. `truncated: true` is set if any per-vault search reported truncation **or** the merged list was capped.
 - **`vaults` filter**: `Some([...])` narrows to the named subset; `None` queries all active vaults; `Some([])` is a request validation error.
 
-For N=1 (single-vault deployment) the cross-vault wire shape collapses to v0/step-9 semantics.
+For N=1 (single-vault deployment) the cross-vault wire shape collapses to legacy single-vault semantics.
 
 ---
 
@@ -101,7 +101,7 @@ truncated: false
 | `path` | string | yes | Vault-relative path |
 | `match_count` | integer | yes | Total matches in the file (may exceed `matches.len()` when `max_matches_per_file` truncates) |
 | `matches` | array | no | Per-line match details when `include_matches: true`; omitted otherwise |
-| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
+| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active; omitted only by legacy single-vault wire shapes. |
 | `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
 | `truncated` | boolean | yes | True if any per-vault search reported truncation OR the merged list exceeded `limit`. |
 | `partial_results` | object | no | Cross-vault diagnostic; present only when at least one vault was skipped or failed. See § Cross-Vault Partial Results. |
@@ -124,7 +124,7 @@ partial_results:
       message: "index.sqlite: I/O error"
 ```
 
-`partial_results` is omitted entirely when no vault was skipped or failed (additive wire change; v0/step-9 consumers ignoring the field continue to see the same `results` and `truncated` shape).
+`partial_results` is omitted entirely when no vault was skipped or failed (additive wire change; older consumers ignoring the field continue to see the same `results` and `truncated` shape).
 
 ---
 
@@ -132,15 +132,15 @@ partial_results:
 
 ### Binary or very large files
 
-Not a concern in v0: only Markdown files are indexed.
+Not a current concern: only Markdown files are indexed.
 
 ### Query too broad
 
-If `limit` is exceeded after cross-vault merge, results are truncated and `truncated: true` is set. No pagination in v0 / round 3.
+If `limit` is exceeded after cross-vault merge, results are truncated and `truncated: true` is set. There is no pagination today.
 
 ### Regex with catastrophic backtracking
 
-Rust's `regex` crate does not support backreferences and has linear-time matching, so pathological patterns are not a v0 DoS concern.
+Rust's `regex` crate does not support backreferences and has linear-time matching, so pathological patterns are not a current DoS concern.
 
 ### Lossy UTF-8
 

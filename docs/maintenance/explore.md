@@ -64,7 +64,7 @@ Store as `PROPOSAL`.
 
 Read the LDS layers in priority order (highest authority first). For each layer, look for items that the proposal would contradict, amend, or violate.
 
-1. **`docs/product/vision.md`** — Non-Goals, Guiding Principles, success criteria, Open Questions
+1. **`docs/product/vision.md`** — Current Product Boundaries, Guiding Principles, completion record, Open Questions
 2. **`docs/decisions/*.md`** — Status, Decision sections, Consequences, Amendments
 3. **`docs/specs/*.md`** — behavior contracts, schema shapes, edge case decisions
 4. **`docs/architecture/overview.md`** — module boundaries, contracts, invariants
@@ -79,7 +79,7 @@ A single proposal may conflict with multiple layers at once. Enumerate every con
 >
 > | Layer | Document | Reference | What conflicts |
 > |-------|----------|-----------|----------------|
-> | Vision | `docs/product/vision.md` | Non-Goals (line NN) | Proposal would amend "<exact line>" |
+> | Vision | `docs/product/vision.md` | Current Product Boundaries (line NN) | Proposal would amend "<exact line>" |
 > | Decisions | `docs/decisions/NNNN-<slug>.md` | Decision section | Proposal would supersede "<short summary>" |
 > | Specs | `docs/specs/<feature>.md` | Behavior section | Proposal would amend "<short summary>" |
 > | Architecture | `docs/architecture/overview.md#<anchor>` | Invariant on `<X>` | Proposal would violate "<short summary>" |
@@ -103,11 +103,11 @@ Some canon items already enumerate alternatives the team considered (e.g., `visi
 
 For each conflict from Step 1, find the load-bearing rationale. Rationale lives in different places:
 
-- **Explicit in the doc**: vision Non-Goals often have parenthetical "(because <reason>)" or are discussed in nearby paragraphs; ADR Context and Consequences sections name the trade-offs; specs cite their related ADRs
+- **Explicit in the doc**: vision product boundaries often have parenthetical "(because <reason>)" or are discussed in nearby paragraphs; ADR Context and Consequences sections name the trade-offs; specs cite their related ADRs
 - **In a related ADR**: a Non-Goal in vision often traces to an ADR that decided the related question
 - **In commit history**: when rationale is implicit, `git log` for the line/file may surface the original reasoning
 - **In notes**: `notes/project-planning-workflow-notes.md` and other notes files often capture rationale that didn't make it into canon yet
-- **Inferable**: sometimes the rationale is implicit from related Non-Goals / Guiding Principles / Goals — name your inference and confirm with the user
+- **Inferable**: sometimes the rationale is implicit from related product boundaries / Guiding Principles / Goals — name your inference and confirm with the user
 
 #### 2a: Document the rationale per conflict
 
@@ -238,8 +238,8 @@ For each canon edit named in Step 3's impact map, produce a concrete edit plan. 
 >
 > | File | Section | Change |
 > |------|---------|--------|
-> | `docs/product/vision.md` | Non-Goals (line NN) | **Remove** "<exact line>" |
-> | `docs/product/vision.md` | Non-Goals | **Add** new line: "<text>" |
+> | `docs/product/vision.md` | Current Product Boundaries (line NN) | **Remove** "<exact line>" |
+> | `docs/product/vision.md` | Current Product Boundaries | **Add** new line: "<text>" |
 > | `docs/product/vision.md` | Open Questions | **Update** entry "<X>" to reference ADR-NNNN |
 > | `docs/architecture/overview.md` | `#<anchor>` | **Amend** invariant from "<old>" to "<new>" |
 > | `docs/decisions/NNNN-<existing>.md` | Amendments section | **Append** amendment dated YYYY-MM-DD with summary of the change |
@@ -268,7 +268,7 @@ Forward-compat is the lightest-weight path. Produce a short note that:
 - States the forward-compat hook(s) that should be in place now to make the future change additive
 
 Suggest where the note should live:
-- Vision **Open Questions** section (if the deferred decision affects guiding principles or Non-Goals)
+- Vision **Open Questions** section (if the deferred decision affects guiding principles or product boundaries)
 - Workplan note (if the hook applies to an in-flight step)
 - Spec **Open Questions** (if the hook is feature-scoped)
 

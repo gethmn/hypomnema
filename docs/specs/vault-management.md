@@ -16,7 +16,7 @@ This spec covers the full intended surface. Per the project's LDS rule that spec
 
 - **Step 10** ships `create`, `list`, `status`, `terminate` plus the cross-vault search refinements.
 - **Step 11** (round-3 follow-on) ships `pause`, `resume`, `reset`, `rename`, `rescan` against the same wire shapes.
-- **v0 event-stream amendment** ships `watch` as a live-only change-event subscription over CLI and HTTP. MCP `vault_watch` is deferred pending rmcp streaming support (see [change-events.md](./change-events.md#mcp-subscription)).
+- **Live event-stream amendment** ships `watch` as a live-only change-event subscription over CLI and HTTP. MCP `vault_watch` is deferred pending rmcp streaming support (see [change-events.md](./change-events.md#mcp-subscription)).
 
 **Related Documents**:
 - [ADR-0009: Multi-Vault per Daemon](../decisions/0009-multi-vault-per-daemon.md)
@@ -91,7 +91,7 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 | `reset` | Step 11 | Force-clear `last_error`; restart watcher + indexer. With `--rebuild`, also drop and rebuild the per-vault `chunks` + `chunks_vec` tables (keeps `files`). |
 | `rename` | Step 11 | Registry UPDATE: `id ↔ new name`. Per-vault data unchanged; surrogate ID unchanged. Live change events continue to carry the surrogate ID, not the name. |
 | `rescan` | Step 11 | Force full reconciliation against the vault's directory contents; live change events emitted for files whose content hash changes. |
-| `watch` | v0 event stream | Subscribe to live change events for one vault or all active vaults; no replay / no `since` in v0. |
+| `watch` | live event stream | Subscribe to live change events for one vault or all active vaults; no replay / no `since` today. |
 | `terminate` | Step 10 | Stop watcher + indexer; remove registry row; remove the per-vault subdirectory at `<data_dir>/vaults/<id>/`; **never** touch the vault path's own files. |
 
 #### `create`
@@ -183,13 +183,13 @@ Each operation is invoked over HTTP, CLI, or MCP. The wire shapes in § Data Sch
 
 **Response** (`200 OK`): updated `VaultRow` plus a `rescan_initiated_at` timestamp; the rescan itself is asynchronous.
 
-#### `watch` (v0 event stream)
+#### `watch` (live event stream)
 
 **Request**: long-lived streaming subscription by vault selector. CLI shape is `hmn vault watch [NAME|ID] [--all]`; HTTP framing is pinned in [change-events.md](./change-events.md). MCP `vault_watch` is deferred.
 
 **Flow**: resolve the requested vault or active vault set; subscribe the client to the daemon's live in-memory change event bus; stream newline-delimited event envelopes until disconnect, daemon shutdown, vault termination, or stream error.
 
-**Response**: live stream of change-event envelopes. No replay and no `since` argument in v0.
+**Response**: live stream of change-event envelopes. No replay and no `since` argument today.
 
 **Errors**: `404 vault_not_found` when a requested selector does not resolve.
 
@@ -222,7 +222,7 @@ The four search/event specs ([filesystem-search.md](./filesystem-search.md), [co
 
 **Global path-ascending across all in-scope vaults.** The merge step interleaves results by `path` (ascending, byte-lexicographic). Identical paths across two vaults break ties by `vault_id` (UUIDv7 → creation-time-stable, so the same query against the same content returns the same order across daemon restarts).
 
-For N=1 (single-vault), this is identical to v0/step-9 behavior — single slice already path-sorted. For N≥2, the cross-vault default is "as if you had one big vault" semantically, with `vault` + `vault_name` per result for origin disambiguation. Operators can split or merge vaults without confusing consumers about ordering.
+For N=1 (single-vault), this is identical to legacy single-vault behavior — single slice already path-sorted. For N≥2, the cross-vault default is "as if you had one big vault" semantically, with `vault` + `vault_name` per result for origin disambiguation. Operators can split or merge vaults without confusing consumers about ordering.
 
 #### Result ordering — semantic-search
 
@@ -276,7 +276,7 @@ partial_results:                           # OMITTED when no skips/failures
       message: "<short detail>"
 ```
 
-The `partial_results` field is present **only when at least one vault was skipped or failed**. Empty arrays are not emitted; the field itself is absent in the all-success / all-active case. Wire-bytes additive: v0/step-9 consumers parsing `results` / `truncated` see exactly the same fields when no skip/fail happens. No bumped-major-version breaking change.
+The `partial_results` field is present **only when at least one vault was skipped or failed**. Empty arrays are not emitted; the field itself is absent in the all-success / all-active case. Wire-bytes additive: older consumers parsing `results` / `truncated` see exactly the same fields when no skip/fail happens. No bumped-major-version breaking change.
 
 `skipped` is for *intentional* exclusions (paused/errored vault). `failed` is for *unexpected* runtime errors. Distinguishing them gives consumers the signal they need without overloading one channel.
 
@@ -351,7 +351,7 @@ The lifecycle operations plus the live event subscription are exposed as MCP too
 - Future write tools inherit the same gate. No config-key-explosion across rounds.
 - Operators wanting strict opt-out get a single-line config edit (`[mcp] enable_write_tools = false`).
 
-Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically. `vault_watch` is not shipped in v0: `rmcp` 1.5.0 does not expose a server-side API for long-lived push streaming from a tool call. MCP clients can consume live change events via the daemon's HTTP watch endpoints (`GET /vaults/{id}/watch`, `GET /events/watch`). See [change-events.md](./change-events.md#mcp-subscription) for the deferred MCP streaming design note.
+Both stdio MCP (the `hmn mcp` subcommand, [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md)) and HTTP MCP (the `/mcp` endpoint on `hmnd`, [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md)) serve this same tool surface; the `[mcp] enable_write_tools` flag governs both transports identically. `vault_watch` is not shipped today: `rmcp` 1.5.0 does not expose a server-side API for long-lived push streaming from a tool call. MCP clients can consume live change events via the daemon's HTTP watch endpoints (`GET /vaults/{id}/watch`, `GET /events/watch`). See [change-events.md](./change-events.md#mcp-subscription) for the deferred MCP streaming design note.
 
 ### Compose-Style Declarative Layer (deferred)
 
@@ -702,7 +702,7 @@ Race: a search request iterates active vaults, takes Arc clones, and a `terminat
 
 ### Live event stream lag
 
-A slow `watch` subscriber may miss events if the in-memory channel overflows. The stream reports lag when the runtime can detect it; the consumer must re-query the index for current state. There is no replay in v0.
+A slow `watch` subscriber may miss events if the in-memory channel overflows. The stream reports lag when the runtime can detect it; the consumer must re-query the index for current state. There is no replay today.
 
 ### Vault count: 0
 
@@ -731,7 +731,7 @@ Daemon refuses to start; logs the `registry_corrupt` error. Operator restores `v
 | Search-side: `vaults` filter is empty array | 422 | `invalid_request` | Filter must be non-empty if specified; absent (`None`) is the all-active default. |
 | MCP write tool invoked when gated off | — (MCP envelope) | `write_tools_disabled` | Structured error envelope returned by the tool body. Read-only tools unaffected. |
 
-The error envelope shape `{"error": {"code": "<code>", "message": "<human text>"}}` matches the v0/round-2 shape used by the search APIs.
+The error envelope shape `{"error": {"code": "<code>", "message": "<human text>"}}` matches the existing shape used by the search APIs.
 
 ---
 

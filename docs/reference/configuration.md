@@ -64,7 +64,7 @@ dimension = 768
 api_key = ""   # empty for local services that don't require one
 timeout_ms = 30000   # per-request embed timeout
 max_retries = 1      # retry once on transport error or HTTP 5xx; 250ms backoff
-batch_size = 1       # chunks per embed request (v0 always 1)
+batch_size = 1       # chunks per embed request (currently always 1)
 
 # Watcher tuning
 # The watcher only considers .md files; ignore_patterns further excludes matches within that set.
@@ -129,7 +129,7 @@ vaults.sqlite. Remove the [vault] block from your config when convenient
 When triggered, the daemon:
 
 - Inserts one row into `vaults.sqlite` with name set to `default_vault_name`, the legacy `[vault].path` (canonicalized), status `active` if the path is accessible (or `errored` with a recorded `last_error` if not), and a fresh UUIDv7 ID.
-- Atomically renames the legacy index files — `index.sqlite`, `index.sqlite-wal` (if present), and `index.sqlite-shm` (if present) — from `<data_dir>/` into `<data_dir>/vaults/<vault_id>/`. Any legacy `outbox.jsonl` is left in place and ignored; the JSONL outbox has been removed as the v0 event contract.
+- Atomically renames the legacy index files — `index.sqlite`, `index.sqlite-wal` (if present), and `index.sqlite-shm` (if present) — from `<data_dir>/` into `<data_dir>/vaults/<vault_id>/`. Any legacy `outbox.jsonl` is left in place and ignored; the JSONL outbox has been removed as the public event contract.
 - Writes `<data_dir>/vaults/<vault_id>/meta.toml` (a human-readable mirror of the registry row, per ADR-0010).
 - Starts the watcher and indexer for the migrated vault (when status is `active`).
 
@@ -147,7 +147,7 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; v0 does not implement auth. Step 5 binds the Axum router on this address; failure to bind is fatal at daemon startup. |
+| `bind` | string | no | `127.0.0.1:7777` | Socket address for the HTTP endpoint. Loopback-only by default; Hypomnema currently does not implement auth. The daemon binds the Axum router on this address; failure to bind is fatal at daemon startup. |
 
 > **Client note**: `hmn` derives its default daemon URL from this binding (e.g. `http://127.0.0.1:7777`). Override on the client with `--daemon-url` or `HYPOMNEMA_DAEMON_URL` — useful when the daemon runs on a different host or port than the local default.
 
@@ -157,9 +157,9 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 
 | Option | Type | Required | Default | Description |
 |--------|------|----------|---------|-------------|
-| `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | Forward-compat knob for the stdio-vs-socket MCP transport family. `transport = "stdio"` is served by the `hmn mcp` subcommand on the CLI binary. Streamable HTTP MCP is configured separately under `[mcp.http]` and lives on `hmnd` at `/mcp`. Setting `transport = "socket"` parses and validates but is **not bound** in v0; `hmnd` emits a `WARN`-level log at startup and continues running. The deferred socket transport will live in `hmnd` when it ships. See [step-08 workplan § Resolution D](../roadmap/step-08-workplan.md#d-connection-lifecycle-stdio-process-per-connection-vs-socket-long-lived) for the deferral rationale and binary-placement reasoning, and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) for the formal record. |
-| `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path. **Parsed and validated in v0 but not bound** — see `transport` above. When the socket transport ships, the file will be created with mode `0600` (owner-only) per the deferred forward-compat decision in [step-08 workplan § Resolution E](../roadmap/step-08-workplan.md#e-authentication-on-the-socket-transport). |
-| `enable_write_tools` | bool | no | `true` | Single-flag gate for **all seven** vault write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`). When `true` (the default), the MCP surface advertises the three search tools, the read-only vault tools (`vault_list`, `vault_status`), and the seven write tools. When `false`, the read-only tools remain advertised and `tools/call` against any write tool returns a structured `write_tools_disabled` error envelope (the tool stays in the `tools/list` response — gating happens at call time, per [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface)). The seven write tools share a single trust posture; per-tool gating is round-4+ if a use-case surfaces. A `vault_watch` read-only streaming tool is deferred pending rmcp streaming verification; when it ships it will not be gated by this flag. |
+| `transport` | `"stdio"` \| `"socket"` | no | `"stdio"` | Forward-compat knob for the stdio-vs-socket MCP transport family. `transport = "stdio"` is served by the `hmn mcp` subcommand on the CLI binary. Streamable HTTP MCP is configured separately under `[mcp.http]` and lives on `hmnd` at `/mcp`. Setting `transport = "socket"` parses and validates but is **not bound today**; `hmnd` emits a `WARN`-level log at startup and continues running. The deferred socket transport will live in `hmnd` when it ships. See [step-08 workplan § Resolution D](../roadmap/step-08-workplan.md#d-connection-lifecycle-stdio-process-per-connection-vs-socket-long-lived) for the deferral rationale and binary-placement reasoning, and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) for the formal record. |
+| `socket` | path | if `transport = "socket"` | `~/.local/share/hypomnema/mcp.sock` | Unix socket path. **Parsed and validated but not bound today** — see `transport` above. When the socket transport ships, the file will be created with mode `0600` (owner-only) per the deferred forward-compat decision in [step-08 workplan § Resolution E](../roadmap/step-08-workplan.md#e-authentication-on-the-socket-transport). |
+| `enable_write_tools` | bool | no | `true` | Single-flag gate for **all seven** vault write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`). When `true` (the default), the MCP surface advertises the three search tools, the read-only vault tools (`vault_list`, `vault_status`), and the seven write tools. When `false`, the read-only tools remain advertised and `tools/call` against any write tool returns a structured `write_tools_disabled` error envelope (the tool stays in the `tools/list` response — gating happens at call time, per [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface)). The seven write tools share a single trust posture; per-tool gating is a future/backlog candidate if a use-case surfaces. A `vault_watch` read-only streaming tool is deferred pending rmcp streaming design/support; when it ships it will not be gated by this flag. |
 
 > **MCP via the CLI**: the stdio MCP entry point is `hmn mcp` — see [`cli.md` § `hmn mcp`](./cli.md#mcp) and [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) for the binary-placement reasoning. Agent hosts (Claude Code, Iris) can configure `hmn` as the MCP command; `hmn mcp` translates MCP tool calls into HTTP requests against the running `hmnd`.
 
@@ -188,7 +188,7 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 | `api_key` | string | no | `""` | Sent as `Authorization: Bearer` if non-empty |
 | `timeout_ms` | integer | no | `30000` | Per-request timeout for the embed HTTP call, in milliseconds. |
 | `max_retries` | integer | no | `1` | Maximum retries on transport-level failures or HTTP `5xx`. Backoff before retry is 250ms. `4xx` responses are never retried (those are the daemon's bug, not the service's). Set to `0` to disable retries. |
-| `batch_size` | integer | no | `1` | Number of chunks per embed request. v0 ships at `1`; future steps may promote to batching when chunk volume justifies the coordination cost. |
+| `batch_size` | integer | no | `1` | Number of chunks per embed request. Hypomnema currently ships at `1`; future work may promote to batching when chunk volume justifies the coordination cost. |
 
 Changing `dimension` after the index is built is not supported — the vec0 virtual table's dimension is fixed at creation time. A different embedding model with a different dimension requires a re-index (drop + rebuild).
 
@@ -232,7 +232,7 @@ See [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Configurat
 
 Sync tools that burst-write across more than the debounce window may justify `debounce_ms = 1000` or `2000`; do not raise it speculatively — the watcher logs backpressure, raise it when you see those logs.
 
-> **Future direction (not v0):** honor `.gitignore` / `.dockerignore` when present; add a Mutagen-style `ignore_vcs_files` flag. See [product/vision.md#open-questions](../product/vision.md#open-questions).
+> **Future direction:** honor `.gitignore` / `.dockerignore` when present; add a Mutagen-style `ignore_vcs_files` flag. See [product/vision.md#open-questions](../product/vision.md#open-questions).
 
 ---
 
@@ -295,7 +295,7 @@ Levels: `trace`, `debug`, `info`, `warn`, `error`.
 - `mcp.transport = "socket"` requires `mcp.socket` to be set and the parent directory to be writable
 - `mcp.http.path` must equal `"/mcp"` in v1; any other value fails the daemon at startup with the message `mcp.http.path must be "/mcp" in this version of Hypomnema` ([ADR-0013](../decisions/0013-mcp-transport-streamable-http.md))
 - A top-level `[vault]` block is parsed but **deprecated**; see [Legacy `[vault]` block migration](#legacy-vault-block-migration) — its presence does not fail validation, but logs a `WARN` while the legacy migration could still engage (registry empty)
-- The daemon scans + reconciles each active vault on every startup; this is the only mode in v0.
+- The daemon scans + reconciles each active vault on every startup; this is the only startup mode today.
 
 ---
 

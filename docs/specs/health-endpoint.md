@@ -165,7 +165,7 @@ The result is **not cached**. Every `/health` call probes fresh. If this proves 
 - **Per-vault detail in `/health`**: use `GET /status` for per-vault breakdown. `/health` is intentionally summary-only so orchestration layers see a single boolean readiness signal.
 - **MCP tool surface**: `/health` is HTTP-only. Health probes are an HTTP idiom, not an MCP tool.
 - **`/metrics` endpoint**: Prometheus-style metrics are a separate future round (explicitly out of scope for v0.5.0).
-- **Caching the embedding probe**: not implemented in v0. Future small round if dogfood shows orchestrators polling too aggressively.
+- **Caching the embedding probe**: not implemented today. Future small round if dogfood shows orchestrators polling too aggressively.
 
 ---
 

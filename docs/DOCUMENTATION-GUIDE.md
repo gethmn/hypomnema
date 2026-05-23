@@ -74,8 +74,8 @@ Use canonical names in prose; use directory names in file paths.
 |------|------------|
 | **ADR (Architectural Decision Record)** | An immutable Layer 1 document capturing a significant decision with context, decision, and consequences |
 | **MADR (Markdown Any Decision Records)** | The template format used for this project's ADRs — minimal variant |
-| **PRD-Lite** | The Layer 2 document style: problem, vision, core concepts, non-goals, success criteria |
-| **Gherkin** | A DSL for Layer 6 executable specifications (Given/When/Then). Not used here in v0. |
+| **PRD-Lite** | The Layer 2 document style: problem, vision, core concepts, current product boundaries, completion record |
+| **Gherkin** | A DSL for Layer 6 executable specifications (Given/When/Then). Not used here today. |
 
 ### Authority Order (for conflict resolution)
 
@@ -126,7 +126,7 @@ These thresholds control when content should move from a main document to an app
 
 **Purpose**: Define *what* the product is and *why* it exists. Stable; rarely changes.
 
-**Template**: Lean PRD — Problem, Vision, Core Concepts, Non-Goals, Success Criteria.
+**Template**: Lean PRD — Problem, Vision, Core Concepts, Current Product Boundaries, Completion Record.
 
 ### Layer 3: Architecture (`architecture/`)
 

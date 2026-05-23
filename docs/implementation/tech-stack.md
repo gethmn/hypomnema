@@ -12,7 +12,7 @@
 
 ---
 
-This document defines the technology stack for Hypomnema and orders the v0 implementation work.
+This document defines the technology stack for Hypomnema and preserves the original v0 implementation order as historical context.
 
 ---
 
@@ -142,10 +142,10 @@ clap = { version = "4", features = ["derive"] }
 | Package | Reason |
 |---------|--------|
 | **thiserror** | Until there's a public library API, `anyhow::Result` everywhere is fine. |
-| **async-trait / tower abstractions over embedding, vector store, transport** | Pick one of each concretely, build against it, refactor when a *second* real use case demands an abstraction. Premature abstraction in a v0 daemon is a trap. |
+| **async-trait / tower abstractions over embedding, vector store, transport** | Pick one of each concretely, build against it, refactor when a *second* real use case demands an abstraction. Premature abstraction in a local daemon is a trap. |
 | **Workspace split into multiple crates** | Single crate with `lib` + two `bin` targets (`hmnd` and `hmn`). Two binaries in one crate is not a workspace — it keeps the shared library next to both consumers. Split into a workspace only when a second consumer demands reuse of the library as its own crate. See [ADR-0008](../decisions/0008-two-binary-daemon-plus-cli.md). |
 
-These exclusions are explicit v0 scope boundaries, not permanent prohibitions. See the "Out of scope" section of [hypomnema-handoff.md](../hypomnema-handoff.md) for the full list.
+These exclusions are current engineering defaults, not permanent prohibitions. If a concrete use case needs one, update the relevant spec/ADR before introducing it.
 
 ---
 
@@ -204,9 +204,9 @@ No `src/main.rs` — both entry points live under `src/bin/`. Modules tagged "hm
 
 ---
 
-## Implementation Priority
+## Original v0 Implementation Order (Completed)
 
-Eight steps, dependency-ordered, each independently useful as a stopping point. Each is a unit of work that can ship; if the next step proves hard, the previous one remains useful on its own.
+Eight steps, dependency-ordered, each independently useful as a stopping point. This list is historical context: the original v0 gate is complete and the project has shipped beyond it.
 
 ### Phase 1: Skeleton & Scan
 
@@ -225,9 +225,9 @@ Eight steps, dependency-ordered, each independently useful as a stopping point. 
 7. **Semantic search** — Query → embed → vector search → return chunks with metadata.
 8. **MCP wrapper** — Same operations, MCP transport via `rmcp`. Test against an actual agent (Claude Code, Iris).
 
-If a step is hard, ship the previous one and keep using it. Step 5 (filesystem + content over HTTP) is the natural early shipping gate — it is genuinely valuable on its own, and reaching it validates the whole indexing-and-watch skeleton.
+Step 5 (filesystem + content over HTTP) was the natural early shipping gate and remains useful context for why the implementation was sequenced this way.
 
-> **Multi-vault support** (per [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) is **post-v0**; it lands as **round 3** of the roadmap. The eight steps above remain single-vault. Round 3 introduces `src/vault_registry/` and `src/control_plane/`, refactors the watcher / indexer / store / event-stream modules to be per-vault-aware, and ships the vault-management spec (`docs/specs/vault-management.md`).
+> **Multi-vault support** (per [ADR-0009](../decisions/0009-multi-vault-per-daemon.md), [ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md), [ADR-0011](../decisions/0011-vault-management-on-hmn.md)) was post-original-v0 work and has shipped. It introduced `src/vault_registry/` and `src/control_plane/`, refactored the watcher / indexer / store / event-stream modules to be per-vault-aware, and shipped the vault-management spec (`docs/specs/vault-management.md`).
 
 ---
 
@@ -278,4 +278,4 @@ The handoff names eight pitfalls that agents writing Hypomnema code need to know
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1.0 | 2026-04-23 | Initial draft, seeded from project handoff "Crate stack" and "v0 step plan" sections |
-| 0.2.0 | 2026-04-26 | Multi-vault adoption (ADR-0009 / ADR-0010 / ADR-0011): added `vault_registry/` and `control_plane/` modules to the project structure; added forward-pointer note that multi-vault implementation is round 3, post-v0. v0 step plan unchanged. |
+| 0.2.0 | 2026-04-26 | Multi-vault adoption (ADR-0009 / ADR-0010 / ADR-0011): added `vault_registry/` and `control_plane/` modules to the project structure; added forward-pointer note that multi-vault implementation was planned for round 3 after the original v0 gate. |
