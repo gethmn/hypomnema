@@ -1,3 +1,4 @@
+pub(crate) mod debug;
 pub(crate) mod error;
 mod health;
 pub mod mcp_http;
@@ -67,6 +68,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/search/content", post(search::content))
         .route("/search/semantic", post(search::semantic))
         .route("/content/get", post(search::content_get))
+        .route("/debug/chunks", post(debug::chunks))
         .route("/vaults", post(vaults::create).get(vaults::list))
         .route(
             "/vaults/{name_or_id}",

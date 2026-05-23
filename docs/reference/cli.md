@@ -157,9 +157,11 @@ hmn search content "pgvector" --vaults personal --vaults work   # repeating work
 
 As of step 7, all three modes — `hmn search filesystem`, `hmn search content`, and `hmn search semantic` — are functional. Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each filesystem/content result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
 
+**Canonical path field**: across all search and content-retrieval JSON responses — filesystem, content, semantic (chunk and document), and `content_get` — the vault-relative file path is named `path`. The `content_get` request takes `paths` (a list). This rule holds identically over CLI `--json`, the HTTP API, and stdio/HTTP MCP, since all surfaces serialize the same response types.
+
 **`--vaults` semantics** (step 10): values are matched against vault names first, then surrogate IDs. Unknown values do **not** fail the request — they appear in the response's `partial_results.failed` array with `code: "vault_not_found"` and the search proceeds against the recognized subset. Passing `--vaults` with an empty value list (e.g. `--vaults ""`) is rejected as `invalid_request`. Omitting `--vaults` queries every active vault. Paused or errored vaults that fall in scope are reported in `partial_results.skipped` with their current `status` and `reason` (the registry's `last_error` for `errored`); see [`docs/specs/vault-management.md` § Cross-Vault Search Semantics](../specs/vault-management.md#cross-vault-search-semantics).
 
-**`hmn search semantic` — document granularity (default, step 25)**: results are grouped by parent file. Text mode renders one block per document: a leading `<file_path>  (score: N.NN)` line, then each evidence chunk indented below it with its own heading path and text. Example:
+**`hmn search semantic` — document granularity (default, step 25)**: results are grouped by parent file. Text mode renders one block per document: a leading `<path>  (score: N.NN)` line, then each evidence chunk indented below it with its own heading path and text. Example:
 
 ```
 notes/tools/hypomnema.md  (score: 0.82)
@@ -173,7 +175,7 @@ notes/design/watchers.md  (score: 0.68)
   mtime alone is not enough; compare content hashes…
 ```
 
-**`hmn search semantic` — chunk granularity**: text mode renders one block per chunk (pre-step-25 behavior): a leading `<file_path>  (score: N.NN)` line, the heading path, and the chunk text. Example:
+**`hmn search semantic` — chunk granularity**: text mode renders one block per chunk (pre-step-25 behavior): a leading `<path>  (score: N.NN)` line, the heading path, and the chunk text. Example:
 
 ```
 notes/tools/hypomnema.md  (score: 0.82)
@@ -186,6 +188,17 @@ notes/design/watchers.md  (score: 0.71)
 ```
 
 When the daemon's response carries a top-level `hint` (e.g. `"semantic index is building"` — see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Empty index), the CLI prints it on its own line, parenthesized: `(semantic index is building)`. The hint appears after the result blocks if both are present; in the empty-index case the hint stands alone. When the embedding service is unreachable or returns an unexpected dimension at query time, the daemon returns HTTP 503 with envelope code `embedding_unavailable`; the CLI surfaces the message and exits non-zero.
+
+#### `debug chunks`
+
+Inspect how one indexed Markdown file is chunked for semantic search. The work runs in `hmnd`; `hmn` only routes the request and renders the response.
+
+**Usage**:
+```
+hmn debug chunks PATH [--vault NAME|ID] [--mode indexed|preview|diff] [--show-text preview|full|none]
+```
+
+`indexed` (default) shows the chunks currently stored in SQLite. `preview` also re-runs the daemon's current chunker over the indexed file content. `diff` returns both views plus changed/added/removed chunk indexes. Text output includes byte ranges, heading paths, boundary reasons, fenced-code counts/bytes/languages, thematic-break diagnostics, and warnings such as `code-heavy chunk`. Pass `--json` to receive the daemon response unchanged.
 
 #### `vault`
 

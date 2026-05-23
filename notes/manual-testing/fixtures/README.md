@@ -88,7 +88,7 @@ results depends on model and tie-breaking.
 | `vector similarity in sqlite` | `notes/databases/pgvector.md` *or* `notes/databases/sqlite.md` | both files discuss vector search in SQLite-shaped storage; either is acceptable as top-1 |
 | `heading-aware document chunking` | `notes/design/chunking.md` | exact-topic chunk |
 
-Each result carries `score`, `file_path`, `chunk_index`, `heading_path`
+Each result carries `score`, `path`, `chunk_index`, `heading_path`
 (array of headings), and `text`. `notes/design/chunking.md` should
 produce **at least 3 chunks** (one per H2 section), each with a
 `heading_path` array that includes the relevant H2 title.

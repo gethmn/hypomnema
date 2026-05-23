@@ -906,8 +906,8 @@ async fn cross_vault_semantic_search_returns_intermingled_score_desc_sorted() {
     let s0 = results[0]["score"].as_f64().unwrap();
     let s1 = results[1]["score"].as_f64().unwrap();
     assert!(s0 >= s1, "expected score-desc but got {s0} then {s1}");
-    assert_eq!(results[0]["file_path"], "bravo.md");
-    assert_eq!(results[1]["file_path"], "alpha.md");
+    assert_eq!(results[0]["path"], "bravo.md");
+    assert_eq!(results[1]["path"], "alpha.md");
 
     daemon.shutdown().await;
 }

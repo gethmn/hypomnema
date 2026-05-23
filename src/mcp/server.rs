@@ -7,9 +7,9 @@ use rmcp::{tool, tool_handler, tool_router};
 use serde_json::{Value, json};
 
 use crate::api::types::{
-    ContentGetRequest, ContentQueryJson, CreateVaultRequest, FilesystemQueryJson,
-    SemanticQueryJson, VaultCreateInput, VaultPauseInput, VaultRenameInput, VaultRescanInput,
-    VaultResetInput, VaultResumeInput, VaultStatusInput, VaultTerminateInput,
+    ContentGetRequest, ContentQueryJson, CreateVaultRequest, DebugChunksRequest,
+    FilesystemQueryJson, SemanticQueryJson, VaultCreateInput, VaultPauseInput, VaultRenameInput,
+    VaultRescanInput, VaultResetInput, VaultResumeInput, VaultStatusInput, VaultTerminateInput,
 };
 use crate::mcp::backend::HypomnemaBackend;
 
@@ -99,6 +99,26 @@ impl HypomnemaMcpServer {
         Parameters(input): Parameters<ContentGetRequest>,
     ) -> CallToolResult {
         match self.backend.content_get(&input).await {
+            Ok(resp) => CallToolResult::structured(
+                serde_json::to_value(resp).expect("response is JSON-serializable"),
+            ),
+            Err(err) => {
+                CallToolResult::structured_error(envelope_from_anyhow(&*self.backend, &err))
+            }
+        }
+    }
+
+    #[tool(
+        description = "Inspect semantic chunking for one indexed Markdown file. Returns stored \
+                       SQLite chunks by default; mode `preview` re-runs the daemon chunker over \
+                       indexed file content, and mode `diff` compares both. Read-only developer \
+                       diagnostic for understanding headings, thematic breaks, and fenced code."
+    )]
+    async fn debug_chunks(
+        &self,
+        Parameters(input): Parameters<DebugChunksRequest>,
+    ) -> CallToolResult {
+        match self.backend.debug_chunks(&input).await {
             Ok(resp) => CallToolResult::structured(
                 serde_json::to_value(resp).expect("response is JSON-serializable"),
             ),
@@ -361,9 +381,11 @@ mod tests {
 
     use super::*;
     use crate::api::types::{
-        ContentMatchJson, ContentResultJson, ContentSearchResponse, FilesystemResultJson,
-        FilesystemSearchResponse, RescanResponseJson, SemanticResultItem, SemanticResultJson,
-        SemanticSearchResponse, TerminateVaultResponse, VaultListResponse, VaultRowJson,
+        ContentMatchJson, ContentResultJson, ContentSearchResponse, DebugChunkDiagnosticsJson,
+        DebugChunkJson, DebugChunkerInfo, DebugChunksResponse, DebugChunksSummary,
+        FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson, SemanticResultItem,
+        SemanticResultJson, SemanticSearchResponse, TerminateVaultResponse, VaultListResponse,
+        VaultRowJson,
     };
     use crate::client::DaemonClient;
     use crate::config::Config;
@@ -539,7 +561,7 @@ mod tests {
                 axum::Json(SemanticSearchResponse {
                     results: vec![SemanticResultItem::Chunk(SemanticResultJson {
                         score: 0.75,
-                        file_path: "notes/baz.md".into(),
+                        path: "notes/baz.md".into(),
                         chunk_index: 2,
                         heading_path: vec!["H1".into(), "H2".into()],
                         text: Some("some chunk text".into()),
@@ -569,8 +591,80 @@ mod tests {
         let value = result
             .structured_content
             .expect("structured content present");
-        assert_eq!(value["results"][0]["file_path"], json!("notes/baz.md"));
+        assert_eq!(value["results"][0]["path"], json!("notes/baz.md"));
         assert_eq!(value["results"][0]["chunk_index"], json!(2));
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_debug_chunks_round_trips_success() {
+        let app = Router::new().route(
+            "/debug/chunks",
+            post(|| async {
+                axum::Json(DebugChunksResponse {
+                    vault: "vault-id".into(),
+                    vault_name: "personal".into(),
+                    path: "notes/foo.md".into(),
+                    content_hash: "sha256:file".into(),
+                    indexed_at: "2026-05-23T00:00:00Z".into(),
+                    chunker: DebugChunkerInfo {
+                        version: "markdown-heading-v1".into(),
+                        rules: vec!["split on thematic breaks".into()],
+                        target_bytes: 2000,
+                        hard_cap_bytes: 3200,
+                    },
+                    indexed: vec![DebugChunkJson {
+                        chunk_index: 0,
+                        start_byte: 0,
+                        end_byte: 12,
+                        byte_len: 12,
+                        heading_path: vec!["A".into()],
+                        boundary_start: "document_start".into(),
+                        boundary_end: "thematic_break".into(),
+                        content_hash: "sha256:chunk".into(),
+                        text: Some("# A\n\nBody.".into()),
+                        text_kind: Some("preview".into()),
+                        text_truncated: Some(false),
+                        diagnostics: DebugChunkDiagnosticsJson {
+                            fenced_code_blocks: 0,
+                            fenced_code_bytes: 0,
+                            fenced_code_languages: vec![],
+                            code_heavy: false,
+                            thematic_breaks: 0,
+                        },
+                        warnings: vec![],
+                    }],
+                    preview: None,
+                    diff: None,
+                    summary: DebugChunksSummary {
+                        chunk_count: 1,
+                        min_bytes: 12,
+                        max_bytes: 12,
+                        avg_bytes: 12.0,
+                        code_heavy_chunks: 0,
+                        thematic_break_boundaries: 1,
+                    },
+                })
+            }),
+        );
+        let mock = MockDaemon::spawn(app).await;
+        let server = server_against(&mock.base_url);
+
+        let result = server
+            .debug_chunks(Parameters(DebugChunksRequest {
+                path: "notes/foo.md".into(),
+                vault: None,
+                mode: None,
+                show_text: None,
+            }))
+            .await;
+
+        assert!(!result.is_error.unwrap_or(false));
+        let value = result
+            .structured_content
+            .expect("structured content present");
+        assert_eq!(value["path"], json!("notes/foo.md"));
+        assert_eq!(value["indexed"][0]["boundary_end"], json!("thematic_break"));
         mock.shutdown().await;
     }
 

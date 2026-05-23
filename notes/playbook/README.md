@@ -16,12 +16,21 @@ Long-form prompts:
 
 ## Files
 
-- `shared-static.md`
-- `agent-tool-selection.md`
+- `shared-static.md` — agnostic role invariants, naming, tags, scratchpad template
+- `capabilities.md` — agnostic capability contract (the runtime seam)
+- `runtimes/` — runtime providers; compose as `base + overlays`. See
+  `runtimes/README.md` for composition rules. Default profile:
+  `base: solo, overlays: []`. Available providers: `runtimes/solo.md`
+  (complete base), `runtimes/duo.md` (partial overlay covering
+  `spawn-agent-at-tier`).
+- `agent-tool-selection.md` — compatibility pointer; content split across `capabilities.md` and `runtimes/solo.md`
 - `orchestrator.md`
 - `coordinator.md`
 - `researcher.md`
 - `builder.md`
+
+Each role reads `shared-static.md` → `capabilities.md` → the active
+`runtimes/<runtime>.md` → its own role file.
 
 ## Path Conventions
 

@@ -113,7 +113,7 @@ The response shape varies by `granularity`. The top-level envelope is the same; 
 ```yaml
 results:
   - score: 0.82
-    file_path: "notes/tools/hypomnema.md"
+    path: "notes/tools/hypomnema.md"
     chunk_index: 4
     heading_path: ["Pitfalls", "Sync conflicts"]
     text: "Syncthing and Dropbox write files in bursts…"
@@ -123,7 +123,7 @@ results:
     vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
     vault_name: "personal"
   - score: 0.71
-    file_path: "notes/design/watchers.md"
+    path: "notes/design/watchers.md"
     chunk_index: 2
     heading_path: ["Change detection"]
     text: "mtime alone is not enough; compare content hashes…"
@@ -141,7 +141,7 @@ results:
 ```yaml
 results:
   - score: 0.82
-    file_path: "notes/tools/hypomnema.md"
+    path: "notes/tools/hypomnema.md"
     content_hash: "sha256:abc123…"
     vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
     vault_name: "personal"
@@ -159,7 +159,7 @@ results:
         text_kind: "preview"
         text_truncated: false
   - score: 0.68
-    file_path: "notes/design/watchers.md"
+    path: "notes/design/watchers.md"
     content_hash: "sha256:def456…"
     vault: "01951f6c-7c3b-7a2e-8c1d-1a2b3c4d5e6f"
     vault_name: "personal"
@@ -187,7 +187,7 @@ truncated: false
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `score` | float | yes | Cosine similarity in `[0.0, 1.0]`. Conversion formula below. |
-| `file_path` | string | yes | Vault-relative path of the file the chunk came from |
+| `path` | string | yes | Vault-relative path of the file the chunk came from. Canonical path field shared with filesystem/content/content_get results. |
 | `chunk_index` | integer | yes | Ordinal of the chunk within the file |
 | `heading_path` | array of strings | yes | Heading hierarchy that contains the chunk |
 | `text` | string | conditional | Present unless `include_text: "none"`. |
@@ -202,7 +202,7 @@ truncated: false
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `score` | float | yes | Document score: the maximum chunk score among all chunks of this file that appeared in the kNN candidate pool. |
-| `file_path` | string | yes | Vault-relative path of the document |
+| `path` | string | yes | Vault-relative path of the document. Canonical path field shared with filesystem/content/content_get results. |
 | `content_hash` | string | yes | `sha256:`-prefixed file content hash |
 | `vault` | string | no | Surrogate vault ID. Populated in multi-vault deployments. |
 | `vault_name` | string | no | Point-in-time vault display name. Populated alongside `vault`. |
@@ -287,7 +287,7 @@ query: "why do sync tools cause watcher event storms?"
 ```yaml
 results:
   - score: 0.87
-    file_path: "notes/tools/hypomnema.md"
+    path: "notes/tools/hypomnema.md"
     chunk_index: 3
     heading_path: ["Pitfalls", "Sync conflicts"]
     text: "Syncthing and Dropbox write files in bursts…"
@@ -314,7 +314,7 @@ include_text: "full"
 ```yaml
 results:
   - score: 0.91
-    file_path: "docs/decisions/0007-sqlite-vec-over-alternatives.md"
+    path: "docs/decisions/0007-sqlite-vec-over-alternatives.md"
     chunk_index: 1
     heading_path: ["Amendments"]
     text: "Migration 0004 bakes `distance_metric=cosine` and the 768-dim shape into…"
@@ -341,7 +341,7 @@ include_text: "none"
 ```yaml
 results:
   - score: 0.79
-    file_path: "notes/design/search.md"
+    path: "notes/design/search.md"
     chunk_index: 5
     heading_path: ["Ranking", "Score normalization"]
     content_hash: "sha256:ghi789…"
@@ -392,7 +392,11 @@ The `preview_bytes` cap is a byte limit, not a character limit. The implementati
 
 ### Boilerplate-heavy chunks
 
-The chunker does not strip fenced code blocks, Dataview queries, or other generated content. A matched chunk that is predominantly boilerplate will return preview text up to the byte cap, which may be entirely code or table syntax. Callers that need clean prose can request `include_text: "none"` for a discovery pass, then fetch the full file via a retrieval operation after reviewing `file_path` and `heading_path`.
+The chunker does not strip fenced code blocks, Dataview queries, or other generated content. Fenced code is kept intact and embedded with its surrounding chunk. The debug surface (`hmn debug chunks` / `debug_chunks`) reports fenced-code block count, code byte share, languages, and a `code-heavy chunk` warning when code dominates a chunk.
+
+### Thematic breaks
+
+Markdown thematic breaks (`---`, `***`, `___`) are chunk boundaries. They close the previous chunk and start the next chunk under the same heading path; the thematic-break marker itself is not embedded as chunk text. This is intended for notes that use `---` as an intra-heading topic shift.
 
 ---
 
