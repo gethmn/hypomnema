@@ -306,21 +306,26 @@ pub fn diagnose_chunk(content: &str) -> ChunkDiagnostics {
     for line in content.split_inclusive('\n') {
         let line_start = offset;
         let line_end = line_start + line.len();
-        let trimmed = line.trim();
+        // Fences and thematic breaks accept at most 3 leading spaces; 4+ spaces
+        // (or a leading tab) make the line indented code, which must not be read
+        // as a block marker. `None` => skip marker classification for this line.
+        let marker = block_marker_candidate(line);
 
-        if let Some((marker, start)) = &in_fence {
-            if is_closing_fence(trimmed, marker) {
+        if let Some((fence, start)) = &in_fence {
+            if marker.is_some_and(|t| is_closing_fence(t, fence)) {
                 fenced_code_blocks += 1;
                 fenced_code_bytes += line_end.saturating_sub(*start);
                 in_fence = None;
             }
-        } else if let Some((marker, lang)) = opening_fence(trimmed) {
-            if !lang.is_empty() && !fenced_code_languages.iter().any(|l| l == &lang) {
-                fenced_code_languages.push(lang);
+        } else if let Some(trimmed) = marker {
+            if let Some((fence, lang)) = opening_fence(trimmed) {
+                if !lang.is_empty() && !fenced_code_languages.iter().any(|l| l == &lang) {
+                    fenced_code_languages.push(lang);
+                }
+                in_fence = Some((fence, line_start));
+            } else if is_thematic_break_line(trimmed) {
+                thematic_breaks += 1;
             }
-            in_fence = Some((marker, line_start));
-        } else if is_thematic_break_line(trimmed) {
-            thematic_breaks += 1;
         }
 
         offset = line_end;
@@ -338,6 +343,24 @@ pub fn diagnose_chunk(content: &str) -> ChunkDiagnostics {
         code_heavy: !content.is_empty() && fenced_code_bytes * 2 > content.len(),
         thematic_breaks,
     }
+}
+
+/// Returns the trimmed line for block-marker matching only when its leading
+/// indentation is ≤3 spaces. A leading tab or 4+ spaces denotes indented code
+/// (CommonMark), so such lines never count as fences or thematic breaks.
+fn block_marker_candidate(line: &str) -> Option<&str> {
+    let mut spaces = 0usize;
+    for ch in line.chars() {
+        match ch {
+            ' ' => spaces += 1,
+            '\t' => return None,
+            _ => break,
+        }
+        if spaces > 3 {
+            return None;
+        }
+    }
+    Some(line.trim())
 }
 
 fn opening_fence(trimmed: &str) -> Option<(String, String)> {
@@ -664,6 +687,24 @@ mod tests {
         assert_eq!(diagnostics.fenced_code_blocks, 1);
         assert!(diagnostics.fenced_code_bytes > 0);
         assert_eq!(diagnostics.fenced_code_languages, vec!["toml"]);
+    }
+
+    #[test]
+    fn diagnose_ignores_indented_code_block_markers() {
+        // 4-space indented lines are indented code in CommonMark, not block
+        // markers; they must not inflate thematic_breaks or fenced_code_blocks.
+        let content = "Prose paragraph.\n\n    ---\n\n    ```rust\n    let x = 1;\n    ```\n";
+        let d = diagnose_chunk(content);
+        assert_eq!(d.thematic_breaks, 0, "indented --- is code, not a break");
+        assert_eq!(d.fenced_code_blocks, 0, "indented ``` is code, not a fence");
+
+        // A non-indented thematic break (≤3 leading spaces) is still counted.
+        assert_eq!(diagnose_chunk("a\n\n---\n\nb\n").thematic_breaks, 1);
+        // A fence indented by ≤3 spaces is still recognized.
+        assert_eq!(
+            diagnose_chunk("   ```rust\n   code\n   ```\n").fenced_code_blocks,
+            1
+        );
     }
 
     // --- Sanity tests over the helpers ---

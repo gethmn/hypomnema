@@ -62,9 +62,13 @@ pub(crate) async fn run_debug_chunks(
     req: &DebugChunksRequest,
 ) -> Result<DebugChunksResponse, ApiError> {
     validate_path(&req.path)?;
+    // Normalize the lookup path the same way content_get does (strip leading
+    // "./", collapse duplicate slashes) so equivalent paths don't yield a
+    // spurious path_not_found.
+    let path = super::search::normalize_retrieval_path(&req.path);
     let mode = parse_mode(req.mode.as_deref())?;
     let show_text = parse_show_text(req.show_text.as_deref())?;
-    let (entry, indexed) = resolve_indexed_file(manager, req).await?;
+    let (entry, indexed) = resolve_indexed_file(manager, req, &path).await?;
 
     let preview_chunks = chunk::chunk_file(&indexed.content);
     let indexed_json = indexed_chunks_to_json(&indexed.chunks, &preview_chunks, &show_text);
@@ -86,7 +90,7 @@ pub(crate) async fn run_debug_chunks(
     Ok(DebugChunksResponse {
         vault: entry.id.to_string(),
         vault_name: entry.name.clone(),
-        path: req.path.clone(),
+        path,
         content_hash: indexed.content_hash,
         indexed_at: indexed.indexed_at,
         chunker: chunker_info(),
@@ -122,6 +126,7 @@ fn parse_show_text(raw: Option<&str>) -> Result<ShowText, ApiError> {
 async fn resolve_indexed_file(
     manager: &VaultManager,
     req: &DebugChunksRequest,
+    path: &str,
 ) -> Result<(std::sync::Arc<VaultEntry>, IndexedFileChunks), ApiError> {
     let scope = manager.search_scope().await?;
     let active_entries: Vec<_> = scope
@@ -154,11 +159,11 @@ async fn resolve_indexed_file(
 
     let mut found = Vec::new();
     for entry in candidates {
-        match load_indexed_chunks(entry.store.pool(), req.path.clone()).await {
+        match load_indexed_chunks(entry.store.pool(), path.to_string()).await {
             Ok(Some(indexed)) => found.push((entry, indexed)),
             Ok(None) => {}
             Err(err) => {
-                tracing::error!(error = ?err, path = %req.path, "debug chunks lookup failed");
+                tracing::error!(error = ?err, path = %path, "debug chunks lookup failed");
                 return Err(ApiError::new(
                     "debug_chunks_failed",
                     "failed to read indexed chunks",

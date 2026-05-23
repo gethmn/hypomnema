@@ -707,7 +707,7 @@ fn result_item_sort_key(item: &ContentGetResultItem) -> (&str, &str) {
     }
 }
 
-fn normalize_retrieval_path(path: &str) -> String {
+pub(crate) fn normalize_retrieval_path(path: &str) -> String {
     // Strip a leading "./" component and collapse any duplicate internal slashes.
     let stripped = path.strip_prefix("./").unwrap_or(path);
     // Collapse duplicate slashes (simple pass — do not shell out)
@@ -1006,6 +1006,15 @@ mod tests {
 
     fn default_cfg() -> SemanticSearchConfig {
         SemanticSearchConfig::default()
+    }
+
+    #[test]
+    fn normalize_retrieval_path_strips_dot_slash_and_collapses_slashes() {
+        // Shared contract relied on by content_get and debug_chunks lookups.
+        assert_eq!(normalize_retrieval_path("./notes/a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("notes//a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("notes/a.md"), "notes/a.md");
+        assert_eq!(normalize_retrieval_path("./a///b/c.md"), "a/b/c.md");
     }
 
     #[test]
