@@ -140,6 +140,8 @@ hmn search <mode> <query> [options]
 | `--prefix PATH` | Restrict results to a vault subdirectory | — |
 | `--vaults LIST` | Comma-separated names or IDs to restrict the search to | — (search all active vaults) |
 | `--limit N` | Max results | 10 (semantic), 100 (filesystem, content) |
+| `--include-matches` | `content` mode only: include per-line match snippets in each result | off (omitted → no `matches`) |
+| `--max-matches-per-file N` | `content` mode only: cap snippets per file when `--include-matches` is set | 5 |
 | `--granularity GRANULARITY` | Result granularity for `semantic` mode: `document` or `chunk` | `document` (daemon default; configurable via `[search.semantic]`) |
 | `--chunks-per-document N` | Max evidence chunks per document result in `document` mode (1..=100) | 3 (daemon default; configurable via `[search.semantic]`) |
 
@@ -156,6 +158,8 @@ hmn search content "pgvector" --vaults personal --vaults work   # repeating work
 ```
 
 As of step 7, all three modes — `hmn search filesystem`, `hmn search content`, and `hmn search semantic` — are functional. Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each filesystem/content result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
+
+**Content snippets are opt-in (parity with MCP)**: `hmn search content` does not request per-line match snippets unless you pass `--include-matches`. This makes `hmn search content "q" --json` send the same logical request as a default MCP/HTTP `search_content` call (`include_matches` defaults to `false` on the wire), so both return `match_count` without a populated `matches` array until you opt in. Pass `--include-matches` (optionally with `--max-matches-per-file N`, default 5) to receive snippet lines in both human and `--json` output. Ranked mode (`--mode ranked`) renders rank/score and does not use snippets.
 
 **Canonical path field**: across all search and content-retrieval JSON responses — filesystem, content, semantic (chunk and document), and `content_get` — the vault-relative file path is named `path`. The `content_get` request takes `paths` (a list). This rule holds identically over CLI `--json`, the HTTP API, and stdio/HTTP MCP, since all surfaces serialize the same response types.
 

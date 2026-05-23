@@ -269,6 +269,111 @@ async fn hmn_search_content_text_mode() {
         stdout.contains("notes/sub/multi.md (1 matches)"),
         "expected `<path> (<count> matches)` block, got {stdout}"
     );
+    // Snippets are opt-in: without `--include-matches` the human view shows the
+    // count line but no indented `  <line>: <text>` snippet for the match.
+    assert!(
+        !stdout.contains("line two contains pgvector here"),
+        "expected no snippet line without --include-matches, got {stdout}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_search_content_json_omits_matches_by_default() {
+    // Regression for the CLI/MCP parity drift: `hmn search content --json`
+    // used to hardcode `include_matches: true`, so it returned populated
+    // snippets while a default MCP `search_content` (`include_matches` defaults
+    // to false on the wire) returned `matches: []`. The default `--json`
+    // request must now carry the same shape as MCP: a non-zero `match_count`
+    // but an empty `matches` array until the caller opts in. This assertion
+    // fails against the pre-fix code, which populated `matches`.
+    let fx = fixture();
+    seed_default_vault(&fx);
+    let daemon = spawn_live_daemon(fx).await;
+
+    let out = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &["--json", "search", "content", "pgvector"],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "hmn exit={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON: {e}; raw={:?}", out.stdout));
+    let multi = body["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing `results` array in {body}"))
+        .iter()
+        .find(|r| r["path"].as_str() == Some("notes/sub/multi.md"))
+        .unwrap_or_else(|| panic!("notes/sub/multi.md missing from results: {body}"));
+    assert!(
+        multi["match_count"].as_u64().unwrap_or(0) >= 1,
+        "expected match_count >= 1, got {multi}"
+    );
+    let matches = multi["matches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("`matches` should serialize as an array: {multi}"));
+    assert!(
+        matches.is_empty(),
+        "default --json content search must omit snippets (parity with MCP), got {multi}"
+    );
+
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn hmn_search_content_json_include_matches_opt_in() {
+    // The explicit CLI opt-in restores snippet details in `--json` output, and
+    // `--max-matches-per-file` caps how many snippets each file carries.
+    let fx = fixture();
+    seed_default_vault(&fx);
+    let daemon = spawn_live_daemon(fx).await;
+
+    let out = run_hmn(
+        &daemon.cfg_path,
+        &daemon.base_url,
+        &[
+            "--json",
+            "search",
+            "content",
+            "pgvector",
+            "--include-matches",
+        ],
+    )
+    .await;
+    assert!(
+        out.status.success(),
+        "hmn exit={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON: {e}; raw={:?}", out.stdout));
+    let multi = body["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing `results` array in {body}"))
+        .iter()
+        .find(|r| r["path"].as_str() == Some("notes/sub/multi.md"))
+        .unwrap_or_else(|| panic!("notes/sub/multi.md missing from results: {body}"));
+    let matches = multi["matches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("`matches` should serialize as an array: {multi}"));
+    assert!(
+        !matches.is_empty(),
+        "expected populated matches with --include-matches, got {multi}"
+    );
+    assert!(
+        matches[0]["text"]
+            .as_str()
+            .is_some_and(|t| t.contains("pgvector")),
+        "expected snippet text to contain the query, got {multi}"
+    );
 
     daemon.shutdown().await;
 }

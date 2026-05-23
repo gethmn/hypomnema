@@ -594,6 +594,17 @@ async fn mcp_call_search_content_returns_structured_content() {
         match_count >= 1,
         "expected match_count >= 1 on needle.md, got {match_count} ({needle})"
     );
+    // Parity anchor (see tests/cli.rs::hmn_search_content_json_omits_matches_by_default):
+    // a default `search_content` call leaves `include_matches` at its wire default
+    // of false, so `matches` serializes as an empty array even though match_count
+    // is non-zero. The CLI `--json` default must produce the same shape.
+    let matches = needle["matches"]
+        .as_array()
+        .unwrap_or_else(|| panic!("`matches` should serialize as an array: {needle}"));
+    assert!(
+        matches.is_empty(),
+        "default search_content must omit snippets until include_matches is set, got {needle}"
+    );
 
     client.shutdown().await;
     daemon.shutdown().await;
