@@ -181,7 +181,7 @@ async fn resolve_indexed_file(
         )),
         1 => Ok(found.remove(0)),
         _ => Err(ApiError::invalid_request(
-            "path exists in multiple active vaults; pass --vault",
+            "path exists in multiple active vaults; specify a vault to disambiguate",
         )),
     }
 }
