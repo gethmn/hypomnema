@@ -235,6 +235,10 @@ impl<'a> Chunker<'a> {
         if len > CHUNK_TARGET_BYTES {
             if let Some(open) = self.open_chunk.take() {
                 self.emit(open, end, reason);
+                // Carry the split reason forward so the next chunk's
+                // boundary_start reflects the size break rather than
+                // defaulting to "document_start".
+                self.pending_boundary_start = Some(reason.to_string());
             }
         }
     }
@@ -687,6 +691,23 @@ mod tests {
         assert_eq!(diagnostics.fenced_code_blocks, 1);
         assert!(diagnostics.fenced_code_bytes > 0);
         assert_eq!(diagnostics.fenced_code_languages, vec!["toml"]);
+    }
+
+    #[test]
+    fn size_split_sets_size_boundary_on_next_chunk() {
+        // A paragraph past CHUNK_TARGET_BYTES forces a size split at the block
+        // boundary; the chunk that follows must report the size boundary, not
+        // fall back to "document_start".
+        let big = "x".repeat(2500);
+        let input = format!("# H\n\n{big}\n\nTail paragraph.\n");
+        let chunks = chunk_file(&input);
+        assert!(
+            chunks.len() >= 2,
+            "expected a size split, got {}",
+            chunks.len()
+        );
+        assert_eq!(chunks[0].boundary_end, "size_after_block");
+        assert_eq!(chunks[1].boundary_start, "size_after_block");
     }
 
     #[test]

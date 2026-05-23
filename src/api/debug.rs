@@ -365,6 +365,11 @@ fn make_preview(s: &str, max_bytes: usize) -> (String, bool) {
 }
 
 fn split_heading_path(path: &str) -> Vec<String> {
+    // A chunk with no headings stores an empty path; return [] rather than
+    // [""] so the wire shape isn't a misleading single empty segment.
+    if path.is_empty() {
+        return Vec::new();
+    }
     path.split('/').map(String::from).collect()
 }
 
@@ -546,6 +551,15 @@ mod tests {
             boundary_end: "document_end".to_string(),
         }];
         assert_eq!(build_diff(&indexed, &preview).changed_chunks, vec![5]);
+    }
+
+    #[test]
+    fn split_heading_path_empty_is_empty_vec() {
+        assert!(split_heading_path("").is_empty());
+        assert_eq!(
+            split_heading_path("A/B"),
+            vec!["A".to_string(), "B".to_string()]
+        );
     }
 
     #[test]

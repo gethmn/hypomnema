@@ -109,10 +109,13 @@ impl HypomnemaMcpServer {
     }
 
     #[tool(
-        description = "Inspect semantic chunking for one indexed Markdown file. Returns stored \
-                       SQLite chunks by default; mode `preview` re-runs the daemon chunker over \
-                       indexed file content, and mode `diff` compares both. Read-only developer \
-                       diagnostic for understanding headings, thematic breaks, and fenced code."
+        description = "Inspect semantic chunking for one indexed Markdown file. Returns the \
+                       file's stored SQLite chunks; mode `preview` additionally returns chunks \
+                       recomputed from current indexed content, and mode `diff` adds a \
+                       stored-vs-recomputed comparison. The chunker runs internally in every \
+                       mode to annotate stored chunks with boundary metadata. Read-only \
+                       developer diagnostic for understanding headings, thematic breaks, and \
+                       fenced code."
     )]
     async fn debug_chunks(
         &self,
