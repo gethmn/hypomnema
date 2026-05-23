@@ -140,8 +140,8 @@ hmn search <mode> <query> [options]
 | `--prefix PATH` | Restrict results to a vault subdirectory | — |
 | `--vaults LIST` | Comma-separated names or IDs to restrict the search to | — (search all active vaults) |
 | `--limit N` | Max results | 10 (semantic), 100 (filesystem, content) |
-| `--include-matches` | `content` mode only: include per-line match snippets in each result | off (omitted → no `matches`) |
-| `--max-matches-per-file N` | `content` mode only: cap snippets per file when `--include-matches` is set | 5 |
+| `--include-matches` | `content` mode only: include per-line match snippets in each result | off (each result still carries `matches: []`) |
+| `--max-matches-per-file N` | `content` mode only: cap snippets per file when `--include-matches` is set (no effect in `--mode ranked`) | 5 |
 | `--granularity GRANULARITY` | Result granularity for `semantic` mode: `document` or `chunk` | `document` (daemon default; configurable via `[search.semantic]`) |
 | `--chunks-per-document N` | Max evidence chunks per document result in `document` mode (1..=100) | 3 (daemon default; configurable via `[search.semantic]`) |
 

@@ -194,10 +194,11 @@ pub enum SearchMode {
         limit: Option<usize>,
         /// Include per-line match snippets in the response. Off by default to match the
         /// `search_content` request shape over MCP/HTTP; pass to opt in to snippet lines.
+        /// No effect in `--mode ranked`, which never returns snippets (only rank/score).
         #[arg(long)]
         include_matches: bool,
         /// Maximum match snippets returned per file when `--include-matches` is set
-        /// (default 5). Ignored without `--include-matches`.
+        /// (default 5). Ignored without `--include-matches` and in `--mode ranked`.
         #[arg(long, value_name = "N")]
         max_matches_per_file: Option<usize>,
         /// Restrict the search to a subset of vaults (comma-separated names or ids).

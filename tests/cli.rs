@@ -335,6 +335,10 @@ async fn hmn_search_content_json_include_matches_opt_in() {
     seed_default_vault(&fx);
     let daemon = spawn_live_daemon(fx).await;
 
+    // `notes/sub/multi.md` ("line one\nline two contains pgvector here\nline
+    // three\n") is the only seeded file containing "line", and it matches on
+    // all three lines — so `--max-matches-per-file 2` should report the full
+    // `match_count` (3) while truncating `matches` to 2 entries.
     let out = run_hmn(
         &daemon.cfg_path,
         &daemon.base_url,
@@ -342,8 +346,10 @@ async fn hmn_search_content_json_include_matches_opt_in() {
             "--json",
             "search",
             "content",
-            "pgvector",
+            "line",
             "--include-matches",
+            "--max-matches-per-file",
+            "2",
         ],
     )
     .await;
@@ -361,17 +367,23 @@ async fn hmn_search_content_json_include_matches_opt_in() {
         .iter()
         .find(|r| r["path"].as_str() == Some("notes/sub/multi.md"))
         .unwrap_or_else(|| panic!("notes/sub/multi.md missing from results: {body}"));
+    assert_eq!(
+        multi["match_count"].as_u64(),
+        Some(3),
+        "match_count should report the full match total, got {multi}"
+    );
     let matches = multi["matches"]
         .as_array()
         .unwrap_or_else(|| panic!("`matches` should serialize as an array: {multi}"));
-    assert!(
-        !matches.is_empty(),
-        "expected populated matches with --include-matches, got {multi}"
+    assert_eq!(
+        matches.len(),
+        2,
+        "--max-matches-per-file 2 should cap snippets at 2, got {multi}"
     );
     assert!(
         matches[0]["text"]
             .as_str()
-            .is_some_and(|t| t.contains("pgvector")),
+            .is_some_and(|t| t.contains("line")),
         "expected snippet text to contain the query, got {multi}"
     );
 
