@@ -61,11 +61,12 @@ pub(crate) async fn run_debug_chunks(
     manager: &VaultManager,
     req: &DebugChunksRequest,
 ) -> Result<DebugChunksResponse, ApiError> {
-    validate_path(&req.path)?;
     // Normalize the lookup path the same way content_get does (strip leading
     // "./", collapse duplicate slashes) so equivalent paths don't yield a
-    // spurious path_not_found.
+    // spurious path_not_found, then validate the canonical value so emptiness
+    // (e.g. "./" -> "") and ".." segments are caught as invalid_path.
     let path = super::search::normalize_retrieval_path(&req.path);
+    validate_path(&path)?;
     let mode = parse_mode(req.mode.as_deref())?;
     let show_text = parse_show_text(req.show_text.as_deref())?;
     let (entry, indexed) = resolve_indexed_file(manager, req, &path).await?;
@@ -551,6 +552,15 @@ mod tests {
             boundary_end: "document_end".to_string(),
         }];
         assert_eq!(build_diff(&indexed, &preview).changed_chunks, vec![5]);
+    }
+
+    #[test]
+    fn dot_slash_path_normalizes_to_empty_then_fails_validation() {
+        // Regression: validating the normalized (canonical) value turns "./"
+        // into invalid_path rather than a confusing path_not_found.
+        let normalized = crate::api::search::normalize_retrieval_path("./");
+        assert!(normalized.is_empty());
+        assert!(validate_path(&normalized).is_err());
     }
 
     #[test]
