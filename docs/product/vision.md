@@ -2,7 +2,7 @@
 
 **Version**: 0.3.0
 **Date**: 2026-05-03
-**Status**: Draft
+**Status**: Living vision; original v0 achieved
 
 ---
 
@@ -25,13 +25,13 @@ Building this retrieval layer separately inside every consumer — every agent, 
 
 ### The Gap
 
-There is no small, generic, local service that makes a directory of notes searchable through three shapes (filesystem / content / semantic) over both HTTP and MCP, emits live change notifications for active subscribers, and never writes back into the watched directory. (v0 indexes Markdown; the gap is independent of file format — see Non-Goals.)
+There was no small, generic, local service that makes a directory of notes searchable through three shapes (filesystem / content / semantic) over both HTTP and MCP, emits live change notifications for active subscribers, and never writes back into the watched directory. Hypomnema fills that gap for Markdown notes today. Future format and metadata work is tracked as current product boundaries rather than as v0 blockers.
 
 ---
 
 ## Product Vision
 
-Hypomnema makes a directory of notes searchable and reachable to any consumer — most commonly an AI agent connected via MCP — running locally on the user's machine. Internally it is a long-running local service (a daemon, `hmnd`) that watches the directory and maintains live indexes; the user-facing framing is the searchable substrate, not the process model. v0 watches a directory of Markdown files; broader text-format coverage is a deferred decision (see Non-Goals). Consumers can search the contents three ways:
+Hypomnema makes directories of notes searchable and reachable to any consumer — most commonly an AI agent connected via MCP — running locally on the user's machine. Internally it is a long-running local service (a daemon, `hmnd`) that watches registered vaults and maintains live indexes; the user-facing framing is the searchable substrate, not the process model. Today it indexes Markdown files; broader text-format coverage is a future product decision, not an active v0 restriction. Consumers can search the contents three ways:
 
 1. **Filesystem search**: what files exist, what's in this directory, glob patterns
 2. **Content search**: grep-shaped, which files contain this exact string
@@ -57,7 +57,7 @@ From the ancient Greek ὑπόμνημα (plural *hypomnemata*) — a personal n
 
 ### Vaults
 
-The user's directories of Markdown files. Hypomnema watches one or more vaults; each vault has a name and a generated surrogate identifier. Hypomnema reads from a vault recursively but never writes to it. Frontmatter is read but not interpreted. Wikilinks are not parsed in v0. Obsidian vaults are implicitly supported since any directory of `.md` files works.
+The user's directories of Markdown files. Hypomnema watches one or more vaults; each vault has a name and a generated surrogate identifier. Hypomnema reads from a vault recursively but never writes to user-authored files. Frontmatter is stored as raw content and stripped only for semantic chunking; it is not parsed into structured metadata. Wikilinks, backlinks, and tags are not indexed specially today. Obsidian vaults are implicitly supported since any directory of `.md` files works.
 
 ### Vault Lifecycle
 
@@ -72,7 +72,7 @@ Hypomnema maintains three indexes over the vault:
 
 ### Change Events
 
-Live file-change notifications emitted after the watcher/indexer confirms a real indexed change. In v0 these events are not durable and are not replayed; consumers use them as invalidation hints and re-query the index for current truth when they connect, reconnect, or detect stream loss. A future replayable stream requires an explicit event-store design with sequence numbers, stream generations, retention, and reset semantics.
+Live file-change notifications emitted after the watcher/indexer confirms a real indexed change. These events are not durable and are not replayed; consumers use them as invalidation hints and re-query the index for current truth when they connect, reconnect, or detect stream loss. A future replayable stream requires an explicit event-store design with sequence numbers, stream generations, retention, and reset semantics.
 
 ### Consumer
 
@@ -80,46 +80,75 @@ Anything that calls Hypomnema: AI agents over MCP (Iris, Claude Code), HTTP clie
 
 ---
 
-## Non-Goals
+## Current Product Boundaries
 
-What Hypomnema explicitly does NOT do. These are real, planned, and preserved as design groundwork — but not in v0:
+The original v0 gate is complete, so "not in v0" is no longer a reason to stop a discussion. Use these labels instead.
 
-- **Writes to the vault**: No file creation, no modification, no atomic-write logic. The daemon does not write under the watched path at all.
-- **The ownership model** (`vault_root` / `vault_path` distinction): Not needed when there's no write path to enforce boundaries on.
-- **Format spec for bridge-managed files**: No `iris_id` / `hmn_id` frontmatter convention, no recognition of "bridge-owned" files.
-- **Conflict resolution**: No three-way merge, no last-known-synced tracking, no escalation. Read-only systems don't have conflicts.
-- **Durable/replayable event history**: No "subscribe since X", no public byte offsets, no durable event retention guarantee. v0 change events are live-only invalidation hints; replayable history requires a future event-store design.
-- **Multi-instance coordination**: Each daemon is independent.
-- **Obsidian-specific behavior**: Obsidian is the vault format that motivated this project, but the design assumes nothing about Obsidian. Wikilinks aren't parsed. Tags aren't indexed specially. Frontmatter isn't interpreted.
-- **Bidirectional sync** (the original full vault-bridge scope): Belongs to a CRDT-based system (Hexist, AFFiNE, Anytype, Logseq in transition). Hypomnema is the smaller generic thing that fell out of asking "what would still be useful even without the bidirectional half?" — the answer was: probably enough to live as its own project.
-- **Text-format coverage beyond Markdown**: v0's semantic-search chunking is Markdown-specific (pulldown-cmark heading-aware boundaries; see [ADR-0003](../decisions/0003-indexing-in-the-daemon.md)). Filesystem search and content search are format-agnostic by construction; semantic search over non-Markdown text would require a new chunking strategy and is out of v0 scope. The watcher's `.md` filter and the chunker are the load-bearing implementation locks; positioning the project around "directories of notes" rather than "Markdown only" is intentional forward-compat — it does not commit v0 to anything beyond Markdown.
+### Shipped
+
+| Area | Current status | Where tracked |
+|---|---|---|
+| Filesystem search | Shipped over HTTP, CLI, and MCP | [filesystem-search.md](../specs/filesystem-search.md) |
+| Content search | Shipped, including ranked FTS mode | [content-search.md](../specs/content-search.md) |
+| Semantic search | Shipped with Markdown heading-aware chunking, sqlite-vec, payload budgeting, and document/chunk granularity | [semantic-search.md](../specs/semantic-search.md) |
+| Content retrieval | Shipped over HTTP, CLI, and MCP | [content-retrieval.md](../specs/content-retrieval.md) |
+| Multi-vault lifecycle | Shipped: create, list, status, pause, resume, reset, rename, rescan, terminate | [vault-management.md](../specs/vault-management.md) |
+| Live change events | Shipped over CLI/HTTP as live-only streams | [change-events.md](../specs/change-events.md) |
+| MCP request/response tools | Shipped over stdio and Streamable HTTP | [mcp-streamable-http.md](../specs/mcp-streamable-http.md) |
+
+### Not Implemented Yet / Backlog Candidates
+
+| Area | Current status | Where tracked |
+|---|---|---|
+| Structured frontmatter | Raw file content is indexed; frontmatter is not parsed into fields | Search specs open questions / future proposal |
+| Tags | Inline `#tag` and `frontmatter.tags` are searchable only as raw text | Future proposal |
+| Wikilinks/backlinks | Not parsed or indexed as a graph | Future proposal |
+| Durable/replayable events | Not shipped; current streams are live-only | [change-events.md](../specs/change-events.md) |
+| MCP `vault_watch` | Deferred pending long-lived MCP streaming design/support | [change-events.md](../specs/change-events.md#mcp-subscription) |
+| Unix-socket MCP | Config parses, but no socket listener is bound | [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) |
+| Semantic indexing beyond Markdown | Not shipped; requires file discovery and chunking strategy changes | [semantic-search.md](../specs/semantic-search.md) |
+| Pagination/cursors and streaming search responses | Not shipped; current responses are bounded gather-then-return | Search specs and [vault-management.md](../specs/vault-management.md) |
+
+### Still Product Boundaries Unless Reopened
+
+- **User-authored vault writes**: no file creation, modification, deletion, or atomic-write logic under the watched path unless a future accepted design adds a write surface.
+- **Bidirectional sync**: conflict resolution, three-way merge, last-known-synced tracking, and escalation belong to a different product shape unless explicitly reopened.
+- **Bridge-managed file ownership model**: no `vault_root` / `vault_path` distinction or `iris_id` / `hmn_id` convention today.
+- **Multi-instance coordination**: each daemon is independent.
+- **Obsidian lock-in**: Obsidian motivated the project, but Hypomnema stays generic; Obsidian-specific metadata can be discussed as additive indexing behavior, not as a project dependency.
 
 ---
 
-## Success Criteria
+## Original v0 Completion Record
 
-v0 is done when:
+The original v0 gate is complete. The implementation has also shipped several post-v0 capabilities, especially multi-vault lifecycle and content retrieval.
 
-- [ ] A fresh install can index a vault, serve all three search types over HTTP and MCP, and emit live change events to active subscribers.
-- [ ] The watcher correctly handles editor saves and sync-tool writes without re-indexing unchanged files.
-- [ ] A consumer (Iris or any other) can run `hmn vault watch` or subscribe over MCP/HTTP and receive live real-change notifications while connected.
-- [ ] The daemon survives a crash without corrupting its index; restart re-reconciles cleanly.
-- [ ] An agent connected via MCP can perform "do I have notes on X" → "show me the directory" → "which file mentions Y" without surprises.
+- [x] A fresh install can index vaults, serve all three search types over HTTP and MCP, and emit live change events to active subscribers.
+- [x] The watcher handles editor saves and sync-tool writes without re-indexing unchanged files.
+- [x] Consumers can run `hmn vault watch` or subscribe over HTTP and receive live real-change notifications while connected.
+- [x] The daemon keeps mutable state outside watched vaults and uses SQLite transactions for index consistency.
+- [x] An agent connected via MCP can perform "do I have notes on X" → "show me the directory" → "which file mentions Y" workflows.
+
+Important evolved decisions:
+
+- The early JSONL outbox idea is no longer the public event contract. The shipped contract is a live event bus exposed through CLI/HTTP streams; durable replay remains a separate future design.
+- MCP `vault_watch` is not shipped because the current rmcp tool-call shape is request/response rather than server-push streaming.
+- Multi-vault support started as post-v0 work and has already shipped.
 
 ---
 
 ## Open Questions
 
-Things deliberately not decided yet, to be settled in early code:
+Live questions should be treated as normal future product work, not as v0 scope blockers:
 
-- [ ] Exact event envelope schema for the live event stream. Start minimal (`{type, event_type, vault, path, content_hash, detected_at}`), grow as concrete consumer invalidation needs land.
-- [ ] Configuration file format and location. TOML at `~/.config/hypomnema/config.toml` is the reasonable default; confirm during the skeleton step.
-- [ ] Logging verbosity defaults. Probably `info` at the daemon level, `warn` for `notify`, `error` for `tokio`.
-- [ ] Health and metrics endpoint shape. Out of scope for v0 but worth pre-allocating a `/health` route for easy expansion.
-- [ ] CLI subcommand naming. `hmn start`, `hmn scan`, `hmn search`, `hmn status` is one obvious shape; could change.
-- [ ] Whether the daemon should auto-rescan on startup or trust the existing index. Probably: rescan and reconcile, but make it skippable for fast restarts.
-- [ ] How should the watcher handle VCS-aware ignores? Options to consider: honor `.gitignore` / `.dockerignore` when present; add a Mutagen-inspired `ignore_vcs_files` config. v0 does not commit to any of these — `ignore_patterns` is the only filtering mechanism.
-- [ ] **Cross-vault search UX.** Multi-vault is adopted in [ADR-0009](../decisions/0009-multi-vault-per-daemon.md); search runs across all active vaults by default, with per-result `vault` and `vault_name` disambiguating origin and an optional `vaults` filter restricting scope. The product-UX question — how prominently a user or agent needs to specify or see vault scope when composing searches — is open, separate from the wire-shape decisions in ADR-0009. Detailed spec-level semantics (ordering, pagination, fan-out, partial-failure, paused/errored handling) are tracked in `docs/specs/vault-management.md` § Open Questions and resolve at the round-3 workplan.
+- [ ] Should structured frontmatter become a first-class index, and if so which fields are generic versus format-specific?
+- [ ] Should tags from inline `#tag` and frontmatter `tags` share one normalized tag index?
+- [ ] Should wikilinks/backlinks be parsed into a graph, and should that graph be exposed through search, retrieval metadata, or a separate endpoint?
+- [ ] Should semantic indexing expand beyond Markdown, and what chunking strategy applies to plain text or other formats?
+- [ ] Should live events become durable/replayable, and where should the event store live?
+- [ ] Should MCP grow a streaming `vault_watch` surface once the transport shape is clear?
+- [ ] Should search add pagination/cursors or streaming response shapes for large multi-vault deployments?
+- [ ] Should watcher filtering honor `.gitignore` / `.dockerignore`, or is explicit `ignore_patterns` enough?
 
 ---
 
@@ -143,5 +172,5 @@ Things deliberately not decided yet, to be settled in early code:
 
 - [Architecture Overview](../architecture/overview.md) — how the containers fit together
 - [Key Decisions](../decisions/) — the load-bearing choices
-- [Implementation: Tech Stack](../implementation/tech-stack.md) — crate list and v0 step plan
+- [Implementation: Tech Stack](../implementation/tech-stack.md) — crate list and original v0 step plan
 - [Project Handoff](../hypomnema-handoff.md) — full origin story and design-space context

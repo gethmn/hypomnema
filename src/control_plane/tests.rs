@@ -33,6 +33,7 @@ fn make_config_at(data_dir: &Path) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+        search: crate::config::SearchConfig::default(),
     }
 }
 

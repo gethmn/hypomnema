@@ -32,6 +32,17 @@ pub struct Chunk {
     pub content_hash: String,
     pub start_byte: usize,
     pub end_byte: usize,
+    pub boundary_start: String,
+    pub boundary_end: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkDiagnostics {
+    pub fenced_code_blocks: usize,
+    pub fenced_code_bytes: usize,
+    pub fenced_code_languages: Vec<String>,
+    pub code_heavy: bool,
+    pub thematic_breaks: usize,
 }
 
 /// Encodes a byte slice as a lowercase hex string.
@@ -73,6 +84,7 @@ pub fn chunk_file(file_content: &str) -> Vec<Chunk> {
 struct OpenChunk {
     start: usize,
     heading_path: String,
+    boundary_start: String,
 }
 
 /// Tracks the most recent H1, H2, H3 heading text. Slot 0 = H1, 1 = H2, 2 = H3.
@@ -92,6 +104,7 @@ struct Chunker<'a> {
     code_block_depth: u32,
     capturing_heading: bool,
     heading_text_buf: String,
+    pending_boundary_start: Option<String>,
 }
 
 impl<'a> Chunker<'a> {
@@ -106,6 +119,7 @@ impl<'a> Chunker<'a> {
             code_block_depth: 0,
             capturing_heading: false,
             heading_text_buf: String::new(),
+            pending_boundary_start: None,
         }
     }
 
@@ -115,7 +129,7 @@ impl<'a> Chunker<'a> {
             self.handle_event(event, range);
         }
         if let Some(open) = self.open_chunk.take() {
-            self.emit(open, self.body.len());
+            self.emit(open, self.body.len(), "document_end");
         }
     }
 
@@ -128,14 +142,31 @@ impl<'a> Chunker<'a> {
             self.heading_text_buf.clear();
             if level_index(*level) < 3 {
                 if let Some(open) = self.open_chunk.take() {
-                    self.emit(open, range.start);
+                    self.emit(
+                        open,
+                        range.start,
+                        &format!("heading:{}", heading_label(*level)),
+                    );
                 }
+                // A heading always opens its chunk with a heading boundary. A
+                // pending thematic break (e.g. `---` immediately before this
+                // heading) is already recorded as the previous chunk's
+                // boundary_end, so clear it rather than mislabeling this chunk.
+                self.pending_boundary_start = None;
                 self.open_chunk = Some(OpenChunk {
                     start: range.start,
                     heading_path: String::new(),
+                    boundary_start: format!("heading:{}", heading_label(*level)),
                 });
                 opened_via_heading = true;
             }
+        }
+        if matches!(event, Event::Rule) {
+            if let Some(open) = self.open_chunk.take() {
+                self.emit(open, range.start, "thematic_break");
+            }
+            self.pending_boundary_start = Some("thematic_break".to_string());
+            return;
         }
         if !opened_via_heading {
             self.ensure_open(range.start);
@@ -162,13 +193,13 @@ impl<'a> Chunker<'a> {
             }
             Event::End(TagEnd::CodeBlock) => {
                 self.code_block_depth = self.code_block_depth.saturating_sub(1);
-                self.maybe_size_break(range.end);
+                self.maybe_size_break(range.end, "size_after_code_block");
             }
             Event::End(TagEnd::Paragraph)
             | Event::End(TagEnd::Item)
             | Event::End(TagEnd::List(_))
             | Event::End(TagEnd::BlockQuote(_)) => {
-                self.maybe_size_break(range.end);
+                self.maybe_size_break(range.end, "size_after_block");
             }
             Event::Text(ref t) | Event::Code(ref t) => {
                 if self.capturing_heading {
@@ -184,11 +215,15 @@ impl<'a> Chunker<'a> {
             self.open_chunk = Some(OpenChunk {
                 start,
                 heading_path: render_path(&self.heading_stack),
+                boundary_start: self
+                    .pending_boundary_start
+                    .take()
+                    .unwrap_or_else(|| "document_start".to_string()),
             });
         }
     }
 
-    fn maybe_size_break(&mut self, end: usize) {
+    fn maybe_size_break(&mut self, end: usize, reason: &str) {
         if self.code_block_depth > 0 {
             return;
         }
@@ -199,12 +234,16 @@ impl<'a> Chunker<'a> {
             .unwrap_or(0);
         if len > CHUNK_TARGET_BYTES {
             if let Some(open) = self.open_chunk.take() {
-                self.emit(open, end);
+                self.emit(open, end, reason);
+                // Carry the split reason forward so the next chunk's
+                // boundary_start reflects the size break rather than
+                // defaulting to "document_start".
+                self.pending_boundary_start = Some(reason.to_string());
             }
         }
     }
 
-    fn emit(&mut self, open: OpenChunk, end: usize) {
+    fn emit(&mut self, open: OpenChunk, end: usize, boundary_end: &str) {
         let end = end.min(self.body.len());
         if end <= open.start {
             return;
@@ -223,6 +262,8 @@ impl<'a> Chunker<'a> {
             content_hash,
             start_byte: self.body_offset_in_file + open.start,
             end_byte: self.body_offset_in_file + end,
+            boundary_start: open.boundary_start,
+            boundary_end: boundary_end.to_string(),
         });
         self.next_index += 1;
     }
@@ -239,12 +280,130 @@ fn level_index(level: HeadingLevel) -> usize {
     }
 }
 
+fn heading_label(level: HeadingLevel) -> &'static str {
+    match level {
+        HeadingLevel::H1 => "h1",
+        HeadingLevel::H2 => "h2",
+        HeadingLevel::H3 => "h3",
+        HeadingLevel::H4 => "h4",
+        HeadingLevel::H5 => "h5",
+        HeadingLevel::H6 => "h6",
+    }
+}
+
 fn render_path(stack: &[String; 3]) -> String {
     let last_filled = stack.iter().rposition(|s| !s.is_empty());
     match last_filled {
         None => String::new(),
         Some(i) => stack[..=i].join("/"),
     }
+}
+
+pub fn diagnose_chunk(content: &str) -> ChunkDiagnostics {
+    let mut fenced_code_blocks = 0usize;
+    let mut fenced_code_bytes = 0usize;
+    let mut fenced_code_languages: Vec<String> = Vec::new();
+    let mut thematic_breaks = 0usize;
+    let mut in_fence: Option<(String, usize)> = None;
+
+    let mut offset = 0usize;
+    for line in content.split_inclusive('\n') {
+        let line_start = offset;
+        let line_end = line_start + line.len();
+        // Fences and thematic breaks accept at most 3 leading spaces; 4+ spaces
+        // (or a leading tab) make the line indented code, which must not be read
+        // as a block marker. `None` => skip marker classification for this line.
+        let marker = block_marker_candidate(line);
+
+        if let Some((fence, start)) = &in_fence {
+            if marker.is_some_and(|t| is_closing_fence(t, fence)) {
+                fenced_code_blocks += 1;
+                fenced_code_bytes += line_end.saturating_sub(*start);
+                in_fence = None;
+            }
+        } else if let Some(trimmed) = marker {
+            if let Some((fence, lang)) = opening_fence(trimmed) {
+                if !lang.is_empty() && !fenced_code_languages.iter().any(|l| l == &lang) {
+                    fenced_code_languages.push(lang);
+                }
+                in_fence = Some((fence, line_start));
+            } else if is_thematic_break_line(trimmed) {
+                thematic_breaks += 1;
+            }
+        }
+
+        offset = line_end;
+    }
+
+    if let Some((_marker, start)) = in_fence {
+        fenced_code_blocks += 1;
+        fenced_code_bytes += content.len().saturating_sub(start);
+    }
+
+    ChunkDiagnostics {
+        fenced_code_blocks,
+        fenced_code_bytes,
+        fenced_code_languages,
+        code_heavy: !content.is_empty() && fenced_code_bytes * 2 > content.len(),
+        thematic_breaks,
+    }
+}
+
+/// Returns the trimmed line for block-marker matching only when its leading
+/// indentation is ≤3 spaces. A leading tab or 4+ spaces denotes indented code
+/// (CommonMark), so such lines never count as fences or thematic breaks.
+fn block_marker_candidate(line: &str) -> Option<&str> {
+    let mut spaces = 0usize;
+    for ch in line.chars() {
+        match ch {
+            ' ' => spaces += 1,
+            '\t' => return None,
+            _ => break,
+        }
+        if spaces > 3 {
+            return None;
+        }
+    }
+    Some(line.trim())
+}
+
+fn opening_fence(trimmed: &str) -> Option<(String, String)> {
+    let marker = if trimmed.starts_with("```") {
+        "`"
+    } else if trimmed.starts_with("~~~") {
+        "~"
+    } else {
+        return None;
+    };
+    let marker_ch = marker.chars().next().expect("marker is non-empty");
+    let count = trimmed.chars().take_while(|c| *c == marker_ch).count();
+    if count < 3 {
+        return None;
+    }
+    let lang = trimmed[count..]
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    Some((marker.repeat(count), lang))
+}
+
+fn is_closing_fence(trimmed: &str, marker: &str) -> bool {
+    let Some(ch) = marker.chars().next() else {
+        return false;
+    };
+    trimmed.len() >= marker.len() && trimmed.chars().all(|c| c == ch)
+}
+
+fn is_thematic_break_line(trimmed: &str) -> bool {
+    if trimmed.len() < 3 {
+        return false;
+    }
+    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.len() >= 3
+        && (compact.chars().all(|c| c == '-')
+            || compact.chars().all(|c| c == '*')
+            || compact.chars().all(|c| c == '_'))
 }
 
 #[cfg(test)]
@@ -364,6 +523,52 @@ mod tests {
     }
 
     #[test]
+    fn thematic_break_splits_sections_under_same_heading() {
+        let input = "# A\n\n## B\n\nFirst direction.\n\n---\n\nDifferent direction.\n";
+        let chunks = chunk_file(input);
+        assert_eq!(chunks.len(), 3, "got {chunks:#?}");
+        assert_eq!(chunks[0].heading_path, "A");
+        assert_eq!(chunks[1].heading_path, "A/B");
+        assert_eq!(chunks[2].heading_path, "A/B");
+        assert_eq!(chunks[1].boundary_end, "thematic_break");
+        assert_eq!(chunks[2].boundary_start, "thematic_break");
+        assert!(chunks[1].content.contains("First direction"));
+        assert!(chunks[2].content.contains("Different direction"));
+        assert!(!chunks[1].content.contains("---"));
+        assert!(!chunks[2].content.contains("---"));
+        assert_indices_contiguous(&chunks);
+    }
+
+    #[test]
+    fn thematic_break_immediately_before_heading_keeps_heading_boundary() {
+        // `---` directly before a heading closes the prior chunk (boundary_end
+        // = thematic_break) but the heading-opened chunk must report a heading
+        // boundary_start, not inherit the pending thematic break.
+        let input = "# Doc\n\n## A\n\nFirst.\n\n---\n\n## B\n\nSecond.\n";
+        let chunks = chunk_file(input);
+        let a = chunks
+            .iter()
+            .find(|c| c.content.contains("First"))
+            .expect("chunk with First");
+        let b = chunks
+            .iter()
+            .find(|c| c.content.contains("Second"))
+            .expect("chunk with Second");
+        assert_eq!(a.boundary_end, "thematic_break");
+        assert_eq!(b.boundary_start, "heading:h2");
+    }
+
+    #[test]
+    fn frontmatter_delimiter_is_not_body_thematic_break() {
+        let input = "---\ntitle: A\n---\n# A\n\nBody.\n";
+        let chunks = chunk_file(input);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading_path, "A");
+        assert_eq!(chunks[0].boundary_start, "heading:h1");
+        assert!(!chunks[0].content.contains("title: A"));
+    }
+
+    #[test]
     fn code_blocks_spanning_many_lines_preserved_as_unit() {
         // Code block of ~3000 bytes — past the target, but should not split.
         let mut input = String::from("# Code\n\n```\n");
@@ -474,6 +679,53 @@ mod tests {
         // chunk text equals the input, but the formula must be SHA-256 of
         // chunk content:
         assert_eq!(c.content_hash, expected_hash(&c.content));
+    }
+
+    #[test]
+    fn fenced_code_is_kept_and_classified() {
+        let input = "# A\n\n```toml\n[tool]\nname = \"hmn\"\n```\n\nProse.\n";
+        let chunks = chunk_file(input);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].content.contains("```toml"));
+        let diagnostics = diagnose_chunk(&chunks[0].content);
+        assert_eq!(diagnostics.fenced_code_blocks, 1);
+        assert!(diagnostics.fenced_code_bytes > 0);
+        assert_eq!(diagnostics.fenced_code_languages, vec!["toml"]);
+    }
+
+    #[test]
+    fn size_split_sets_size_boundary_on_next_chunk() {
+        // A paragraph past CHUNK_TARGET_BYTES forces a size split at the block
+        // boundary; the chunk that follows must report the size boundary, not
+        // fall back to "document_start".
+        let big = "x".repeat(2500);
+        let input = format!("# H\n\n{big}\n\nTail paragraph.\n");
+        let chunks = chunk_file(&input);
+        assert!(
+            chunks.len() >= 2,
+            "expected a size split, got {}",
+            chunks.len()
+        );
+        assert_eq!(chunks[0].boundary_end, "size_after_block");
+        assert_eq!(chunks[1].boundary_start, "size_after_block");
+    }
+
+    #[test]
+    fn diagnose_ignores_indented_code_block_markers() {
+        // 4-space indented lines are indented code in CommonMark, not block
+        // markers; they must not inflate thematic_breaks or fenced_code_blocks.
+        let content = "Prose paragraph.\n\n    ---\n\n    ```rust\n    let x = 1;\n    ```\n";
+        let d = diagnose_chunk(content);
+        assert_eq!(d.thematic_breaks, 0, "indented --- is code, not a break");
+        assert_eq!(d.fenced_code_blocks, 0, "indented ``` is code, not a fence");
+
+        // A non-indented thematic break (≤3 leading spaces) is still counted.
+        assert_eq!(diagnose_chunk("a\n\n---\n\nb\n").thematic_breaks, 1);
+        // A fence indented by ≤3 spaces is still recognized.
+        assert_eq!(
+            diagnose_chunk("   ```rust\n   code\n   ```\n").fenced_code_blocks,
+            1
+        );
     }
 
     // --- Sanity tests over the helpers ---

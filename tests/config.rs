@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hypomnema::config::{Config, WatcherConfig};
+use hypomnema::config::{Config, SemanticSearchConfig, WatcherConfig};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -283,6 +283,168 @@ fn rejects_vault_that_is_a_file() {
     let err = Config::load(Some(&cfg_path)).expect_err("expected rejection for file vault");
     let msg = format!("{err:#}");
     assert!(msg.contains("directory"), "{msg}");
+}
+
+// ===== Step 25 Task 1: [search.semantic] config defaults and validation =====
+
+#[test]
+fn search_semantic_defaults_are_correct() {
+    let cfg = SemanticSearchConfig::default();
+    assert_eq!(cfg.default_granularity, "document");
+    assert_eq!(cfg.default_chunks_per_document, 3);
+    assert_eq!(cfg.document_candidate_multiplier, 10);
+    assert_eq!(cfg.document_candidate_limit, 1000);
+}
+
+#[test]
+fn search_semantic_parses_from_toml() {
+    let root = ScopedTmp(unique_tmp("search-semantic-toml"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             default_granularity = \"chunk\"\n\
+             default_chunks_per_document = 5\n\
+             document_candidate_multiplier = 20\n\
+             document_candidate_limit = 500\n",
+            vault.display()
+        ),
+    );
+    let cfg = Config::load(Some(&cfg_path)).expect("should parse");
+    assert_eq!(cfg.search.semantic.default_granularity, "chunk");
+    assert_eq!(cfg.search.semantic.default_chunks_per_document, 5);
+    assert_eq!(cfg.search.semantic.document_candidate_multiplier, 20);
+    assert_eq!(cfg.search.semantic.document_candidate_limit, 500);
+}
+
+#[test]
+fn search_semantic_default_granularity_round_trips_as_document() {
+    let root = ScopedTmp(unique_tmp("search-semantic-default-gran"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(&root.0, &format!("vault = \"{}\"\n", vault.display()));
+    let cfg = Config::load(Some(&cfg_path)).expect("should parse");
+    assert_eq!(cfg.search.semantic.default_granularity, "document");
+}
+
+#[test]
+fn search_semantic_rejects_invalid_granularity() {
+    let root = ScopedTmp(unique_tmp("search-semantic-bad-gran"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             default_granularity = \"paragraph\"\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("invalid granularity should reject");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("paragraph") || msg.contains("granularity"),
+        "error must mention the bad value: {msg}"
+    );
+}
+
+#[test]
+fn search_semantic_rejects_chunks_per_document_zero() {
+    let root = ScopedTmp(unique_tmp("search-semantic-cpd-zero"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             default_chunks_per_document = 0\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("0 should reject");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("chunks_per_document"), "{msg}");
+}
+
+#[test]
+fn search_semantic_rejects_chunks_per_document_over_100() {
+    let root = ScopedTmp(unique_tmp("search-semantic-cpd-over"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             default_chunks_per_document = 101\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("101 should reject");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("chunks_per_document"), "{msg}");
+}
+
+#[test]
+fn search_semantic_rejects_candidate_multiplier_zero() {
+    let root = ScopedTmp(unique_tmp("search-semantic-mult-zero"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             document_candidate_multiplier = 0\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("0 should reject");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("candidate_multiplier"), "{msg}");
+}
+
+#[test]
+fn search_semantic_rejects_candidate_limit_over_10000() {
+    let root = ScopedTmp(unique_tmp("search-semantic-limit-over"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             document_candidate_limit = 10001\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("10001 should reject");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("candidate_limit"), "{msg}");
+}
+
+#[test]
+fn search_semantic_rejects_unknown_key() {
+    let root = ScopedTmp(unique_tmp("search-semantic-unknown-key"));
+    let vault = root.0.join("vault");
+    fs::create_dir_all(&vault).unwrap();
+    let cfg_path = write_config(
+        &root.0,
+        &format!(
+            "vault = \"{}\"\n\
+             [search.semantic]\n\
+             bogus_field = true\n",
+            vault.display()
+        ),
+    );
+    let err = Config::load(Some(&cfg_path)).expect_err("unknown field should reject");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("bogus_field"), "{msg}");
 }
 
 #[test]

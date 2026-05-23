@@ -8,9 +8,12 @@ use serde::de::DeserializeOwned;
 
 pub use crate::api::types::{
     ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentMatchJson,
-    ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest, ErrorEnvelope,
+    ContentQueryJson, ContentResultJson, ContentSearchResponse, CreateVaultRequest,
+    DebugChunkDiagnosticsJson, DebugChunkJson, DebugChunkerInfo, DebugChunksDiff,
+    DebugChunksRequest, DebugChunksResponse, DebugChunksSummary, ErrorEnvelope,
     FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, HealthResponse,
-    RenameRequest, RescanResponseJson, ResetRequest, SemanticQueryJson, SemanticResultJson,
+    RenameRequest, RescanResponseJson, ResetRequest, SemanticDocumentResultJson,
+    SemanticEvidenceChunkJson, SemanticQueryJson, SemanticResultItem, SemanticResultJson,
     SemanticSearchResponse, StatusResponse, TerminateVaultResponse, VaultListResponse,
     VaultRowJson,
 };
@@ -83,6 +86,12 @@ impl DaemonClient {
 
     pub async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
         let url = format!("{}/content/get", self.base_url);
+        let resp = self.http.post(&url).json(req).send().await?;
+        decode_response(resp).await
+    }
+
+    pub async fn debug_chunks(&self, req: &DebugChunksRequest) -> Result<DebugChunksResponse> {
+        let url = format!("{}/debug/chunks", self.base_url);
         let resp = self.http.post(&url).json(req).send().await?;
         decode_response(resp).await
     }
@@ -320,6 +329,7 @@ mod tests {
             event_bus: manager.event_bus(),
             started_at: std::time::Instant::now(),
             embedding_endpoint: None,
+            semantic_config: crate::config::SemanticSearchConfig::default(),
         };
         let app = router(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

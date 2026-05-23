@@ -1,3 +1,4 @@
+pub(crate) mod debug;
 pub(crate) mod error;
 mod health;
 pub mod mcp_http;
@@ -18,6 +19,7 @@ use chrono::{DateTime, Utc};
 
 pub use types::*;
 
+use crate::config::SemanticSearchConfig;
 use crate::control_plane::VaultManager;
 use crate::events::EventBus;
 use crate::store::Store;
@@ -101,6 +103,10 @@ pub struct ApiState {
     /// embedding signal (used in test fixtures that don't run an embedding
     /// service).
     pub embedding_endpoint: Option<String>,
+    /// Daemon-global semantic search defaults; resolved from `[search.semantic]`
+    /// config. Used by the semantic handler to supply config-level defaults when
+    /// request fields are absent.
+    pub semantic_config: SemanticSearchConfig,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -111,6 +117,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/search/content", post(search::content))
         .route("/search/semantic", post(search::semantic))
         .route("/content/get", post(search::content_get))
+        .route("/debug/chunks", post(debug::chunks))
         .route("/vaults", post(vaults::create).get(vaults::list))
         .route(
             "/vaults/{name_or_id}",

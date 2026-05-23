@@ -157,6 +157,7 @@ mod tests {
             event_bus: manager.event_bus(),
             started_at: Instant::now(),
             embedding_endpoint: None,
+            semantic_config: crate::config::SemanticSearchConfig::default(),
         };
         (state, dir, vault)
     }
@@ -227,6 +228,7 @@ mod tests {
             event_bus: manager.event_bus(),
             started_at: Instant::now(),
             embedding_endpoint: None,
+            semantic_config: crate::config::SemanticSearchConfig::default(),
         };
         let (status, body) = get_health(state).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);

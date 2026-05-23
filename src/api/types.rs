@@ -173,12 +173,22 @@ pub struct SemanticQueryJson {
         description = "Maximum bytes of chunk text returned when `include_text` is `preview`. Defaults to 600; server maximum is 2000 (values above this are clamped silently, not rejected). Ignored when `include_text` is `full` or `none`."
     )]
     pub preview_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Result granularity: `\"document\"` (default) groups results by parent document and returns bounded evidence chunks per document; `\"chunk\"` returns flat individual chunk results. `chunks_per_document` is accepted but ignored in chunk mode."
+    )]
+    pub granularity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Maximum evidence chunks per document result when `granularity` is `\"document\"`. Ignored in chunk mode. Must be in 1..=100; defaults to the daemon config value (built-in default: 3)."
+    )]
+    pub chunks_per_document: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticSearchResponse {
-    pub results: Vec<SemanticResultJson>,
+    pub results: Vec<SemanticResultItem>,
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
@@ -186,11 +196,53 @@ pub struct SemanticSearchResponse {
     pub partial_results: Option<PartialResults>,
 }
 
+/// Untagged result union: the effective `granularity` determines which variant
+/// appears. `Chunk` matches the pre-Step-25 flat shape; `Document` is the new
+/// grouped shape. Both variants are present in the schema so callers can
+/// prepare for either.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(untagged)]
+pub enum SemanticResultItem {
+    Chunk(SemanticResultJson),
+    Document(SemanticDocumentResultJson),
+}
+
+/// Document-granularity result: one entry per matched document, scored by its
+/// highest-scoring candidate chunk, with bounded evidence chunks nested inside.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SemanticDocumentResultJson {
+    pub score: f32,
+    pub path: String,
+    pub content_hash: String,
+    pub chunks: Vec<SemanticEvidenceChunkJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_name: Option<String>,
+}
+
+/// One evidence chunk nested inside a document-granularity result.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct SemanticEvidenceChunkJson {
+    pub score: f32,
+    pub chunk_index: u32,
+    pub heading_path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_truncated: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticResultJson {
     pub score: f32,
-    pub file_path: String,
+    pub path: String,
     pub chunk_index: u32,
     pub heading_path: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,6 +310,107 @@ pub struct ContentGetResponse {
     pub results: Vec<ContentGetResultItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_results: Option<PartialResults>,
+}
+
+// ===== debug_chunks request/response types =====
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksRequest {
+    #[schemars(description = "Vault-relative Markdown path to inspect.")]
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(description = "Optional vault name or id. Required when the path is ambiguous.")]
+    pub vault: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Debug mode: `indexed` returns stored SQLite chunks, `preview` re-runs the current daemon chunker against indexed file content, `diff` returns both plus comparison diagnostics. Defaults to `indexed`."
+    )]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Chunk text payload: `preview`, `full`, or `none`. Defaults to `preview`."
+    )]
+    pub show_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksResponse {
+    pub vault: String,
+    pub vault_name: String,
+    pub path: String,
+    pub content_hash: String,
+    pub indexed_at: String,
+    pub chunker: DebugChunkerInfo,
+    pub indexed: Vec<DebugChunkJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<Vec<DebugChunkJson>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<DebugChunksDiff>,
+    pub summary: DebugChunksSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkerInfo {
+    pub version: String,
+    pub rules: Vec<String>,
+    pub target_bytes: usize,
+    pub hard_cap_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkJson {
+    pub chunk_index: u32,
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub byte_len: usize,
+    pub heading_path: Vec<String>,
+    pub boundary_start: String,
+    pub boundary_end: String,
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_truncated: Option<bool>,
+    pub diagnostics: DebugChunkDiagnosticsJson,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunkDiagnosticsJson {
+    pub fenced_code_blocks: usize,
+    pub fenced_code_bytes: usize,
+    pub fenced_code_languages: Vec<String>,
+    pub code_heavy: bool,
+    pub thematic_breaks: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksDiff {
+    pub chunk_count_changed: bool,
+    pub indexed_chunk_count: usize,
+    pub preview_chunk_count: usize,
+    pub changed_chunks: Vec<u32>,
+    pub added_preview_chunks: Vec<u32>,
+    pub removed_indexed_chunks: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct DebugChunksSummary {
+    pub chunk_count: usize,
+    pub min_bytes: usize,
+    pub max_bytes: usize,
+    pub avg_bytes: f64,
+    pub code_heavy_chunks: usize,
+    pub thematic_break_boundaries: usize,
 }
 
 // ===== Cross-vault partial-results diagnostics =====
@@ -656,9 +809,9 @@ mod tests {
     #[test]
     fn semantic_search_response_serializes_vault_and_vault_name() {
         let resp = SemanticSearchResponse {
-            results: vec![SemanticResultJson {
+            results: vec![SemanticResultItem::Chunk(SemanticResultJson {
                 score: 0.95,
-                file_path: "notes/a.md".to_string(),
+                path: "notes/a.md".to_string(),
                 chunk_index: 0,
                 heading_path: vec!["Intro".to_string()],
                 text: Some("alpha body".to_string()),
@@ -667,7 +820,7 @@ mod tests {
                 content_hash: "sha256:00".to_string(),
                 vault: Some("018f3a7c-9b4e-7d2a-95f1-c8a6e3b2d1f0".to_string()),
                 vault_name: Some("default".to_string()),
-            }],
+            })],
             truncated: false,
             hint: None,
             partial_results: None,
@@ -680,5 +833,74 @@ mod tests {
         );
         assert_eq!(entry["vault_name"].as_str(), Some("default"));
         assert_eq!(entry["content_hash"].as_str(), Some("sha256:00"));
+        // Canonical vault-relative path field is `path`, never `file_path`.
+        assert_eq!(entry["path"].as_str(), Some("notes/a.md"));
+        assert!(entry["file_path"].is_null(), "must not emit `file_path`");
+    }
+
+    #[test]
+    fn semantic_query_json_accepts_granularity_and_chunks_per_document() {
+        let schema = schema_for!(SemanticQueryJson);
+        let p = props(&schema);
+        assert!(p.contains_key("granularity"), "missing granularity field");
+        assert!(
+            !description(p, "granularity").is_empty(),
+            "granularity has no description"
+        );
+        assert!(
+            p.contains_key("chunks_per_document"),
+            "missing chunks_per_document field"
+        );
+        assert!(
+            !description(p, "chunks_per_document").is_empty(),
+            "chunks_per_document has no description"
+        );
+    }
+
+    #[test]
+    fn semantic_document_result_serializes_correctly() {
+        let resp = SemanticSearchResponse {
+            results: vec![SemanticResultItem::Document(SemanticDocumentResultJson {
+                score: 0.92,
+                path: "notes/b.md".to_string(),
+                content_hash: "sha256:01".to_string(),
+                chunks: vec![SemanticEvidenceChunkJson {
+                    score: 0.92,
+                    chunk_index: 1,
+                    heading_path: vec!["Section".to_string()],
+                    text: Some("evidence text".to_string()),
+                    text_kind: Some("preview".to_string()),
+                    text_truncated: Some(false),
+                }],
+                vault: Some("018f3a7c-0000-0000-0000-000000000001".to_string()),
+                vault_name: Some("myvault".to_string()),
+            })],
+            truncated: false,
+            hint: None,
+            partial_results: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&resp).unwrap();
+        let entry = &v["results"][0];
+        // f32 serialized through JSON does not equal the f64 constant exactly;
+        // verify the key is present and plausible rather than exact.
+        assert!(
+            entry["score"]
+                .as_f64()
+                .is_some_and(|s| (s - 0.92_f64).abs() < 0.01),
+            "document score should be ~0.92"
+        );
+        assert_eq!(entry["path"].as_str(), Some("notes/b.md"));
+        assert!(entry["file_path"].is_null(), "must not emit `file_path`");
+        assert_eq!(entry["content_hash"].as_str(), Some("sha256:01"));
+        assert_eq!(entry["vault_name"].as_str(), Some("myvault"));
+        let chunk = &entry["chunks"][0];
+        assert!(
+            chunk["score"]
+                .as_f64()
+                .is_some_and(|s| (s - 0.92_f64).abs() < 0.01),
+            "chunk score should be ~0.92"
+        );
+        assert_eq!(chunk["chunk_index"].as_u64(), Some(1));
+        assert_eq!(chunk["text"].as_str(), Some("evidence text"));
     }
 }

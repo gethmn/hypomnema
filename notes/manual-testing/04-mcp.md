@@ -279,16 +279,16 @@ Expect three results, all `"sample-2"` — see
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
   "name":"search_semantic","arguments":{"query":"heading-aware document chunking"}}}' \
-  | jq '.result.structuredContent.results[0] | {file_path, vault_name}'
+  | jq '.result.structuredContent.results[0] | {path, vault_name}'
 ```
 
 Expect:
 
 ```json
-{"file_path":"notes/design/chunking.md","vault_name":"sample"}
+{"path":"notes/design/chunking.md","vault_name":"sample"}
 ```
 
-Each result carries `score`, `file_path`, `chunk_index`,
+Each result carries `score`, `path`, `chunk_index`,
 `heading_path`, `text`, `vault`, and `vault_name` — same shape as
 `/search/semantic`.
 

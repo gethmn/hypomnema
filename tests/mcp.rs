@@ -197,6 +197,8 @@ async fn spawn_live_daemon(fx: Fixture) -> LiveDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -358,8 +360,7 @@ impl McpClient {
 
 fn open_index_rw(data_dir: &Path) -> Connection {
     register_sqlite_vec();
-    let db_path = data_dir.join("index.sqlite");
-    Connection::open(&db_path).expect("open index.sqlite read-write")
+    Connection::open(data_dir.join("index.sqlite")).expect("open index.sqlite read-write")
 }
 
 /// Wipe `chunks_vec` and `chunks` while leaving `files` populated. Mirrors
@@ -429,16 +430,18 @@ async fn mcp_tools_list_advertises_all_tools() {
     // Step 10 added 4 vault tools (vault_list/status/create/terminate) on
     // top of the step-8 search trio. Step 11 added the 5 lifecycle ops
     // (vault_pause/resume/reset/rename/rescan). Step 19 added content_get.
+    // The chunk-debugging surface added debug_chunks as a read-only tool.
     // All write tools — create, terminate, pause, resume, reset, rename,
     // rescan — are advertised even when `[mcp] enable_write_tools = false`;
     // gating short-circuits at call time. See step-10 workplan § Task 10.6 §
     // C and step-11 workplan § Task 11.5.
-    assert_eq!(names.len(), 13, "expected 13 tools, got {names:?}");
+    assert_eq!(names.len(), 14, "expected 14 tools, got {names:?}");
     for expected in [
         "search_filesystem",
         "search_content",
         "search_semantic",
         "content_get",
+        "debug_chunks",
         "vault_list",
         "vault_status",
         "vault_create",
@@ -717,4 +720,151 @@ async fn mcp_call_against_dead_daemon_returns_daemon_unreachable() {
 
     client.shutdown().await;
     drop(fx);
+}
+
+#[tokio::test]
+async fn mcp_search_semantic_schema_includes_granularity_and_chunks_per_document() {
+    let daemon = spawn_live_daemon(fixture()).await;
+    let mut client = McpClient::spawn(&daemon.cfg_path, &daemon.base_url).await;
+    client.handshake().await;
+
+    let resp = client.send_request("tools/list", json!({})).await;
+    let tools = resp["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list missing tools array: {resp}"));
+
+    let semantic_tool = tools
+        .iter()
+        .find(|t| t["name"] == "search_semantic")
+        .unwrap_or_else(|| panic!("search_semantic missing from tools/list: {resp}"));
+
+    let props = &semantic_tool["inputSchema"]["properties"];
+    assert!(
+        !props["granularity"].is_null(),
+        "search_semantic schema missing granularity field: {semantic_tool}"
+    );
+    assert!(
+        !props["granularity"]["description"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty(),
+        "search_semantic.granularity must have a description: {semantic_tool}"
+    );
+    assert!(
+        !props["chunks_per_document"].is_null(),
+        "search_semantic schema missing chunks_per_document field: {semantic_tool}"
+    );
+    assert!(
+        !props["chunks_per_document"]["description"]
+            .as_str()
+            .unwrap_or("")
+            .is_empty(),
+        "search_semantic.chunks_per_document must have a description: {semantic_tool}"
+    );
+
+    // Tool description should mention both document and chunk granularity intent.
+    let tool_desc = semantic_tool["description"].as_str().unwrap_or("");
+    assert!(
+        tool_desc.contains("document"),
+        "search_semantic description should mention document granularity; got {tool_desc:?}"
+    );
+    assert!(
+        tool_desc.contains("chunk"),
+        "search_semantic description should mention chunk granularity; got {tool_desc:?}"
+    );
+
+    client.shutdown().await;
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_search_semantic_chunk_granularity_returns_success() {
+    let daemon = spawn_live_daemon(fixture()).await;
+    let mut client = McpClient::spawn(&daemon.cfg_path, &daemon.base_url).await;
+    client.handshake().await;
+
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": { "query": "anything", "granularity": "chunk" }
+            }),
+        )
+        .await;
+    let result = &resp["result"];
+    assert!(
+        !result["isError"].as_bool().unwrap_or(false),
+        "granularity=chunk should succeed (empty is fine): {result}"
+    );
+    let structured = &result["structuredContent"];
+    assert!(
+        structured["results"].is_array(),
+        "expected results array in structured content: {structured}"
+    );
+
+    client.shutdown().await;
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_search_semantic_document_granularity_returns_success() {
+    let daemon = spawn_live_daemon(fixture()).await;
+    let mut client = McpClient::spawn(&daemon.cfg_path, &daemon.base_url).await;
+    client.handshake().await;
+
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": { "query": "anything", "granularity": "document", "chunks_per_document": 2 }
+            }),
+        )
+        .await;
+    let result = &resp["result"];
+    assert!(
+        !result["isError"].as_bool().unwrap_or(false),
+        "granularity=document should succeed (empty is fine): {result}"
+    );
+    let structured = &result["structuredContent"];
+    assert!(
+        structured["results"].is_array(),
+        "expected results array in structured content: {structured}"
+    );
+
+    client.shutdown().await;
+    daemon.shutdown().await;
+}
+
+#[tokio::test]
+async fn mcp_search_semantic_invalid_granularity_returns_structured_error() {
+    let daemon = spawn_live_daemon(fixture()).await;
+    let mut client = McpClient::spawn(&daemon.cfg_path, &daemon.base_url).await;
+    client.handshake().await;
+
+    let resp = client
+        .send_request(
+            "tools/call",
+            json!({
+                "name": "search_semantic",
+                "arguments": { "query": "anything", "granularity": "sentence" }
+            }),
+        )
+        .await;
+    let result = &resp["result"];
+    assert_eq!(
+        result["isError"],
+        json!(true),
+        "invalid granularity should return isError=true: {result}"
+    );
+    let structured = &result["structuredContent"];
+    assert_eq!(
+        structured["error"]["code"],
+        json!("invalid_request"),
+        "expected error.code = invalid_request: {structured}"
+    );
+
+    client.shutdown().await;
+    daemon.shutdown().await;
 }

@@ -91,6 +91,8 @@ async fn spawn_live_daemon() -> LiveControlPlaneDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -129,6 +131,8 @@ fn make_config(data_dir: PathBuf) -> Config {
         },
         logging: LoggingConfig::default(),
         default_vault_name: "default".to_string(),
+
+        search: hypomnema::config::SearchConfig::default(),
     }
 }
 
@@ -238,6 +242,8 @@ async fn spawn_multi_vault_daemon_with(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -901,8 +907,8 @@ async fn cross_vault_semantic_search_returns_intermingled_score_desc_sorted() {
     let s0 = results[0]["score"].as_f64().unwrap();
     let s1 = results[1]["score"].as_f64().unwrap();
     assert!(s0 >= s1, "expected score-desc but got {s0} then {s1}");
-    assert_eq!(results[0]["file_path"], "bravo.md");
-    assert_eq!(results[1]["file_path"], "alpha.md");
+    assert_eq!(results[0]["path"], "bravo.md");
+    assert_eq!(results[1]["path"], "alpha.md");
 
     daemon.shutdown().await;
 }
@@ -1097,6 +1103,8 @@ async fn spawn_live_daemon_with_errored_row(
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 

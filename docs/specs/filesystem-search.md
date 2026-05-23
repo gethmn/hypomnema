@@ -35,11 +35,11 @@ The consumer issues a filesystem search via HTTP or MCP, specifying zero or more
 Cross-vault execution semantics — vault scoping, ordering, partial-failure handling, paused/errored vault inclusion, fan-out model — are pinned in [vault-management.md § Cross-Vault Search Semantics](./vault-management.md#cross-vault-search-semantics) and apply uniformly across the three search modes. The summary that's filesystem-search-specific:
 
 - **Default scope**: all currently active vaults; per-result `vault` + `vault_name` disambiguate origin.
-- **Ordering**: global path-ascending across vaults (lifted from v0/step-9's per-vault path-asc; the merged list is sorted as a single slice). Identical paths across two vaults break ties by `vault_id` (UUIDv7 → creation-time-stable).
+- **Ordering**: global path-ascending across vaults (lifted from the original single-vault path-asc behavior; the merged list is sorted as a single slice). Identical paths across two vaults break ties by `vault_id` (UUIDv7 → creation-time-stable).
 - **`limit`** (§ A.4): each vault contributes up to `limit` results to the merge pool; the merged list is then truncated to `limit`. `truncated: true` is set if any per-vault search reported truncation **or** the merged list was capped.
 - **`vaults` filter** (§ A.9): `Some([...])` narrows to the named subset; `None` queries all active vaults; `Some([])` is a request validation error.
 
-For N=1 (single-vault deployment) the cross-vault wire shape collapses to v0/step-9 semantics — single slice already path-sorted, `vault` + `vault_name` populated but the `partial_results` field absent.
+For N=1 (single-vault deployment) the cross-vault wire shape collapses to legacy single-vault semantics — single slice already path-sorted, `vault` + `vault_name` populated but the `partial_results` field absent.
 
 ### Empty Vault
 
@@ -97,7 +97,7 @@ truncated: false
 | `size` | integer | yes | File size in bytes |
 | `mtime` | ISO-8601 string | yes | Last modification time (from filesystem) |
 | `content_hash` | string | yes | `sha256:` hash of file content; primary change-detection signal |
-| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active (round 3+); omitted for v0/step-9 single-vault wire shape. |
+| `vault` | string | no | Surrogate vault ID (UUIDv7). Populated when multi-vault is active; omitted only by legacy single-vault wire shapes. |
 | `vault_name` | string | no | Mutable, point-in-time-accurate display name for the source vault. Populated alongside `vault`. Never appears in live change events (see [change-events.md](./change-events.md)). |
 | `truncated` | boolean | yes | True if any per-vault search reported truncation OR the merged list exceeded `limit`. |
 | `partial_results` | object | no | Cross-vault diagnostic; present only when at least one vault was skipped or failed. See § Cross-Vault Partial Results. |
@@ -120,7 +120,7 @@ partial_results:
       message: "index.sqlite: I/O error"
 ```
 
-`partial_results` is omitted entirely when no vault was skipped or failed (additive wire change; v0/step-9 consumers ignoring the field continue to see the same `results` and `truncated` shape).
+`partial_results` is omitted entirely when no vault was skipped or failed (additive wire change; older consumers ignoring the field continue to see the same `results` and `truncated` shape).
 
 ---
 
@@ -128,7 +128,7 @@ partial_results:
 
 ### Symlinks
 
-v0: symlinks within the vault are followed. Symlinks pointing outside the vault are *not* followed (defensive). The walker rejects any entry whose `fs::canonicalize`'d real path is not under the canonicalized vault root. Open question: should symlinks be indexed at all? See Open Questions.
+Current behavior: symlinks within the vault are followed. Symlinks pointing outside the vault are *not* followed (defensive). The walker rejects any entry whose `fs::canonicalize`'d real path is not under the canonicalized vault root. Open question: should symlinks be indexed at all? See Open Questions.
 
 ### Case-sensitivity
 
@@ -155,7 +155,7 @@ A vault in `paused` or `errored` status is silently skipped; one entry per skipp
 ## Open Questions
 
 - [ ] Should symlinks inside the vault be indexed, or just followed for reads?
-- [ ] Do we need a `regex` alternative to `glob`? — v0 ships glob-only; see [step-5 workplan § Deferred decision 5](../roadmap/step-05-workplan.md#5-regex-alternative-to-glob) — no field added, additive when needed.
+- [ ] Do we need a `regex` alternative to `glob`? — current filesystem search ships glob-only; see [step-5 workplan § Deferred decision 5](../roadmap/step-05-workplan.md#5-regex-alternative-to-glob) — no field added, additive when needed.
 - [ ] Should results include a `frontmatter` summary (title, tags) for quick triage?
 - [ ] Pagination / cursor across N independent indexes — deferred to round 4+ per [vault-management.md § Open Questions](./vault-management.md#open-questions). Round 3 ships `truncated: bool` only; no cursor.
 - [ ] Streaming response shapes (chunked HTTP / SSE / NDJSON) for high-vault-count deployments — deferred per [vault-management.md § Open Questions](./vault-management.md#open-questions).

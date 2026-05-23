@@ -1498,3 +1498,35 @@ Step 13 was the expected profile: zero `src/` changes, pure YAML + Markdown, cle
 
 **Shipping gate met. Round 12 closed 2026-05-04. Local-cut release process wired.**
 
+---
+
+## Round 14 Retrospective
+
+**Round scope**: Semantic Document Results. One step: Step 25 changed semantic search to return document-grouped results by default while preserving explicit `granularity: "chunk"` for passage-level callers.
+
+#### Step 25 Retrospective — Semantic Document Results
+
+**Build summary**: 1 coordinator + 1 persistent researcher + 5 builder tasks across 4 batches. 0 needs-human blockers. One intentional offline pause/resume in the final batch. All task todos completed: Task 1 contract/config, Task 2 core candidate-depth rename, Task 3 API document grouping, Task 4 CLI/MCP/docs, Task 5 verification/regression coverage. Final verification: `cargo clippy --all-targets -- -D warnings` clean; final rerun of `cargo test --no-fail-fast` clean. One first-pass full-suite run hit a transient `tests/embedding.rs::chunks_vec_row_per_chunks_row` timing failure; exact rerun and full target rerun passed, then the full suite passed.
+
+**Key outcomes**:
+
+1. *Document granularity is the default semantic result shape.* `SemanticQueryJson` now accepts `granularity` and `chunks_per_document`; omitted granularity resolves through daemon config to built-in `document`. Document results group chunks by `(vault_id, file_path, content_hash)`, score documents by max nested chunk score, and cap evidence with `chunks_per_document`.
+
+2. *Chunk mode remains available and flat.* Explicit `granularity: "chunk"` preserves the pre-step flat chunk result shape and ranking behavior. `chunks_per_document` is accepted and ignored in chunk mode per the workplan decision.
+
+3. *Candidate depth is config-only.* `[search.semantic]` ships with `default_granularity = "document"`, `default_chunks_per_document = 3`, `document_candidate_multiplier = 10`, and `document_candidate_limit = 1000`. Document mode computes a deeper per-vault candidate pool before grouping without exposing candidate-depth knobs on the request.
+
+4. *HTTP, CLI, and MCP surfaces align.* `hmn search semantic` exposes `--granularity document|chunk` and `--chunks-per-document N`; text rendering handles document evidence blocks and flat chunk blocks. MCP stdio and HTTP MCP carry the same schema/structured-content behavior, and `hmnd` wires real semantic config into the in-process MCP backend.
+
+5. *Acceptance coverage is broad.* Tests cover document diversity, score/evidence ordering, text payload modes, request/config precedence, invalid request/config values, multi-vault fields, partial results, MCP schemas/transports, CLI parsing, smoke diversity, and the explicit chunk compatibility path.
+
+**Process insights**:
+
+- The final parallel batch worked, but overlap between Task 4 and Task 5 required careful file ownership. The coordinator-owned split held: Task 4 owned CLI/MCP/docs and Task 5 owned regression coverage and embedding clippy cleanup.
+- Durable Solo state made the intentional offline pause safe. Todo comments plus the Step 25 scratchpad were enough to resume without restarting work or reverting partial edits.
+- Coordinator review caught a real docs mismatch (`document_candidate_limit` default `500` vs source/workplan `1000`). A narrow builder retry fixed it quickly. This reinforces that docs tables need source-default cross-checks at the final gate.
+- Read-only approval prompts for trivial `wc`/inspection commands created avoidable wake-ups. Builders should prefer already-approved inspection commands (`rg`, `sed`) when possible, but the impact was low.
+
+**What changed for the next round?** No playbook changes required. The main carry-forward is a practical review heuristic: when a step adds config defaults, final review should grep source defaults, tests, specs, and reference docs together before accepting docs.
+
+**Shipping gate met. Round 14 closed 2026-05-08. Semantic document results shipped.**

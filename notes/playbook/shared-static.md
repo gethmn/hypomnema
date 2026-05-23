@@ -1,73 +1,68 @@
 # Shared Playbook Instructions
 
-These instructions are shared across all roles: `Orchestrator`, `Coordinator`, `Researcher`, and `Builder`.
+These instructions are shared across all roles: `Orchestrator`, `Coordinator`,
+`Researcher`, and `Builder`. The role model defined here is runtime-agnostic;
+it relies on a capability contract that any orchestration layer can satisfy.
 
-## Use Solo MCP
+## Runtime Binding
 
-You are operating inside Solo MCP. Use Solo tools for process control, todos, scratchpads, timers, and process status.
+Operations are referenced by **capability verb**, never by a concrete tool
+name. The verbs and their semantics live in
+[`notes/playbook/capabilities.md`](./capabilities.md).
 
-- Use `whoami()` early to confirm your process identity.
-- Keep process names explicit and role-scoped.
-- Use todos as the primary durable coordination surface.
-- Use scratchpads for rolling context, not as a replacement for todo state.
+Concrete tool mappings live in **runtime providers** under
+`notes/playbook/runtimes/`. A session uses a **profile**: one complete base
+provider plus zero or more partial overlays. A capability resolves through
+the overlays left-to-right; the first overlay that claims it wins; otherwise
+the base provides it. See [`runtimes/README.md`](./runtimes/README.md) for
+the composition rules and the conflict / dependency rules.
 
-### Pausing and waiting
-
-Solo timers let an agent pause and resume on a signal. When a timer fires, Solo injects its `body` into your PTY as a fresh user turn, so your next action picks up automatically — no polling loop, no burned context.
-
-- `mcp__solo__timer_set` — pause for a fixed duration (one-shot, or repeating via `loop` / `repeat_every_ms`).
-- `mcp__solo__timer_fire_when_idle_any` / `mcp__solo__timer_fire_when_idle_all` — resume when watched processes go idle (i.e., finish their current task). Use for worker quiet periods, not service readiness.
-- `mcp__solo__wait_for_bound_port` — for service readiness (port open), not worker idle.
-
-### Anti-pattern: Do not use `mcp-cli` from bash
-
-❌ **Wrong**: Do not call `mcp-cli solo ...` from bash scripts or Monitor commands.
-
-```bash
-# WRONG — do not do this
-mcp-cli solo get_process_output --process-name orchestrator
-mcp-cli solo spawn_process kind=agent agent_tool_id=3
-```
-
-✅ **Right**: Use the Solo MCP tool interface directly via the tool calls available to you.
+The **default profile** is:
 
 ```
-mcp__solo__get_process_output(process_name="orchestrator")
-mcp__solo__spawn_process(kind="agent", agent_tool_id=3)
+base: solo
+overlays: []
 ```
 
-**Why**: `mcp-cli` is for CLI usage outside of MCP; inside an agent you have direct access to the MCP tools. Calling `mcp-cli` from bash introduces complexity, shell escaping issues, and slower poll loops. Instead:
+A session may override the default in its bootstrap prompt. For example, to
+route `spawn-agent-at-tier` through Duo while keeping Solo for everything
+else:
 
-- **For one-shot queries**: Call the MCP tool directly (e.g., `mcp__solo__get_process_output()`).
-- **For polling/waiting**: Use `Monitor` with a bash loop that checks local conditions (file existence, exit codes from quick commands), not `mcp-cli` calls. Or use `mcp__solo__timer_fire_when_idle_any()` / `mcp__solo__timer_fire_when_idle_all()` for process idle detection.
-- **For coordination**: Use `mcp__solo__kv_set()`, `mcp__solo__todo_*()`, `mcp__solo__scratchpad_*()` instead of bash-based state files.
+```
+base: solo
+overlays: [duo]
+```
 
-### Solo control-plane terminology
+Every role reads, in order:
 
-Use this language consistently in prompts, comments, and playbook updates:
+1. This file.
+2. `capabilities.md`.
+3. The active profile's base, then each overlay in order
+   (default: `runtimes/solo.md`; with overlays, also `runtimes/<overlay>.md`).
+4. The role-specific playbook (`orchestrator.md`, `coordinator.md`,
+   `researcher.md`, `builder.md`).
 
-- `process`: the runtime instance managed by Solo (agent or terminal).
-- `agent process`: a process spawned with `kind=\"agent\"` (used for orchestrator/coordinator/researcher/builder roles).
-- `terminal process`: an interactive shell process (when shell execution is needed).
-- `spawn`: create a new process via Solo MCP.
-- `agent_tool_id`: the runtime/tool selection used when spawning an agent process.
+Confirm own identity (capability `identity`) early. Keep process names
+explicit and role-scoped. Use `coordination/todo` as the primary durable
+coordination surface; use `coordination/scratchpad` for rolling context, not
+as a replacement for todo state. Use `pause-until-signal` instead of polling
+loops.
 
-When in doubt, refer to units as **processes** and then qualify as **agent process** or **terminal process** for clarity.
+## Tiered Spawning
 
-## Tiered Spawn Interface
-
-Use the tiered spawn contract in [`notes/playbook/agent-tool-selection.md`](./agent-tool-selection.md):
-
-- Request capability tier (`small`, `medium`, `large`) instead of hard-coding `agent_tool_id`.
-- Prefer `/spawn-agent <tier>` as the control-plane abstraction.
-- Keep direct `agent_tool_id` usage for exceptional/manual cases only.
+Callers request capability tier (`small`, `medium`, `large`) via the
+`spawn-agent-at-tier` capability — never a runtime-specific tool id. The
+tier/role policy and load-bearing escalation criteria are defined in
+`capabilities.md`. The active runtime binding decides which concrete tools
+satisfy each tier.
 
 ## Role Invariants
 
 - `Orchestrator` and `Coordinator` are never the same process.
 - `Coordinator` and `Researcher` are separate processes.
 - `Builder` processes are ephemeral and scoped to task execution.
-- `Researcher` is long-lived for the lifetime of a step and remains available for consultation during build.
+- `Researcher` is long-lived for the lifetime of a step and remains available
+  for consultation during build.
 
 ## Naming Conventions
 
@@ -105,7 +100,8 @@ Use the tiered spawn contract in [`notes/playbook/agent-tool-selection.md`](./ag
 |---|---|---|
 | (filled by coordinator at setup) | | |
 
-> **Live task status**: query `todo_list(tags=["step-NN"])` rather than maintaining a status table here.
+> **Live task status**: query the `coordination/todo` capability
+> (tag `step-NN`) rather than maintaining a status table here.
 
 ## Decisions made during build
 

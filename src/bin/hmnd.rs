@@ -134,12 +134,16 @@ async fn run_daemon(config: Config) -> Result<()> {
         event_bus: vault_manager.event_bus(),
         started_at,
         embedding_endpoint: Some(config.embedding.endpoint.clone()),
+        semantic_config: config.search.semantic.clone(),
     };
     let mut app = api::router(api_state);
 
     if config.mcp.http.enabled {
         let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
-            Arc::new(InProcessBackend::new(vault_manager.clone()));
+            Arc::new(InProcessBackend::with_semantic_config(
+                vault_manager.clone(),
+                config.search.semantic.clone(),
+            ));
         let mcp_state = McpHttpState {
             backend,
             default_vault_name: config.default_vault_name.clone(),

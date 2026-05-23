@@ -38,6 +38,11 @@ pub enum Command {
         #[command(subcommand)]
         op: ContentOp,
     },
+    /// Developer diagnostics for indexed/chunked content.
+    Debug {
+        #[command(subcommand)]
+        op: DebugOp,
+    },
     /// Report daemon health.
     Status,
     /// Serve the MCP surface over stdio against a running `hmnd` daemon.
@@ -62,6 +67,24 @@ pub enum ContentOp {
         /// Repeatable. Omitting queries all active vaults.
         #[arg(long, value_name = "NAME|ID")]
         vault: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DebugOp {
+    /// Inspect stored and preview semantic chunks for an indexed file.
+    Chunks {
+        /// Vault-relative Markdown path to inspect.
+        path: String,
+        /// Restrict the lookup to one vault (name or id).
+        #[arg(long, value_name = "NAME|ID")]
+        vault: Option<String>,
+        /// Debug mode: indexed, preview, or diff.
+        #[arg(long, value_name = "MODE", value_parser = ["indexed", "preview", "diff"])]
+        mode: Option<String>,
+        /// Chunk text payload: preview, full, or none.
+        #[arg(long, value_name = "SHOW_TEXT", value_parser = ["preview", "full", "none"])]
+        show_text: Option<String>,
     },
 }
 
@@ -180,9 +203,17 @@ pub enum SearchMode {
         /// Restrict results to a vault subdirectory.
         #[arg(long, value_name = "PATH")]
         prefix: Option<String>,
-        /// Max results.
+        /// Max results (documents in document mode; chunks in chunk mode).
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+        /// Result granularity: `document` (default) groups results by parent document with
+        /// evidence chunks; `chunk` returns flat raw chunk results as before.
+        #[arg(long, value_name = "GRANULARITY", value_parser = ["document", "chunk"])]
+        granularity: Option<String>,
+        /// Maximum evidence chunks per document result in document mode (1..=100).
+        /// Ignored in chunk mode. Defaults to the daemon config value (built-in default: 3).
+        #[arg(long, value_name = "N")]
+        chunks_per_document: Option<u32>,
         /// Restrict the search to a subset of vaults (comma-separated names or ids).
         #[arg(long, value_name = "NAME_OR_ID", value_delimiter = ',')]
         vaults: Vec<String>,
@@ -209,6 +240,40 @@ mod tests {
     fn parses_mcp_subcommand() {
         let cli = Cli::try_parse_from(["hmn", "mcp"]).expect("parses");
         assert!(matches!(cli.command, Command::Mcp));
+    }
+
+    #[test]
+    fn parses_debug_chunks() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "debug",
+            "chunks",
+            "notes/foo.md",
+            "--vault",
+            "personal",
+            "--mode",
+            "diff",
+            "--show-text",
+            "none",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Debug {
+                op:
+                    DebugOp::Chunks {
+                        path,
+                        vault,
+                        mode,
+                        show_text,
+                    },
+            } => {
+                assert_eq!(path, "notes/foo.md");
+                assert_eq!(vault.as_deref(), Some("personal"));
+                assert_eq!(mode.as_deref(), Some("diff"));
+                assert_eq!(show_text.as_deref(), Some("none"));
+            }
+            _ => panic!("expected Debug/Chunks"),
+        }
     }
 
     #[test]
@@ -269,6 +334,150 @@ mod tests {
                 mode: SearchMode::Semantic { query, .. },
             } => {
                 assert_eq!(query, "how do indexes work");
+            }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn parses_search_semantic_with_document_granularity() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--granularity",
+            "document",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode:
+                    SearchMode::Semantic {
+                        granularity,
+                        chunks_per_document,
+                        ..
+                    },
+            } => {
+                assert_eq!(granularity.as_deref(), Some("document"));
+                assert!(chunks_per_document.is_none());
+            }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn parses_search_semantic_with_chunk_granularity() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--granularity",
+            "chunk",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode: SearchMode::Semantic { granularity, .. },
+            } => {
+                assert_eq!(granularity.as_deref(), Some("chunk"));
+            }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn parses_search_semantic_with_chunks_per_document() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--chunks-per-document",
+            "5",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode:
+                    SearchMode::Semantic {
+                        chunks_per_document,
+                        granularity,
+                        ..
+                    },
+            } => {
+                assert_eq!(chunks_per_document, Some(5));
+                assert!(granularity.is_none());
+            }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn parses_search_semantic_with_granularity_and_chunks_per_document() {
+        let cli = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--granularity",
+            "document",
+            "--chunks-per-document",
+            "10",
+        ])
+        .expect("parses");
+        match cli.command {
+            Command::Search {
+                mode:
+                    SearchMode::Semantic {
+                        granularity,
+                        chunks_per_document,
+                        ..
+                    },
+            } => {
+                assert_eq!(granularity.as_deref(), Some("document"));
+                assert_eq!(chunks_per_document, Some(10));
+            }
+            _ => panic!("expected Search/Semantic"),
+        }
+    }
+
+    #[test]
+    fn search_semantic_rejects_invalid_granularity() {
+        let err = Cli::try_parse_from([
+            "hmn",
+            "search",
+            "semantic",
+            "topic",
+            "--granularity",
+            "page",
+        ])
+        .expect_err("invalid granularity should fail");
+        assert!(matches!(err.kind(), clap::error::ErrorKind::InvalidValue));
+    }
+
+    #[test]
+    fn search_semantic_defaults_to_no_granularity_or_chunks_per_document() {
+        let cli =
+            Cli::try_parse_from(["hmn", "search", "semantic", "topic"]).expect("bare parse ok");
+        match cli.command {
+            Command::Search {
+                mode:
+                    SearchMode::Semantic {
+                        granularity,
+                        chunks_per_document,
+                        ..
+                    },
+            } => {
+                assert!(
+                    granularity.is_none(),
+                    "granularity should be None by default"
+                );
+                assert!(
+                    chunks_per_document.is_none(),
+                    "chunks_per_document should be None by default"
+                );
             }
             _ => panic!("expected Search/Semantic"),
         }

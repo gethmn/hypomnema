@@ -27,7 +27,13 @@ use crate::store::SqlitePool;
 pub struct SemanticQuery {
     pub query: String,
     pub prefix: Option<String>,
-    pub limit: usize,
+    /// Maximum number of chunk candidates to retrieve from kNN.
+    ///
+    /// Distinct from any final API-level result `limit`. Chunk mode sets this
+    /// equal to the user's `limit`; document mode sets it to
+    /// `min(limit * document_candidate_multiplier, document_candidate_limit)`
+    /// so grouping has enough chunks to draw from.
+    pub candidate_limit: usize,
     pub min_similarity: f32,
 }
 
@@ -106,15 +112,17 @@ pub async fn search_semantic(
     }
 
     let min_similarity = q.min_similarity.clamp(0.0, 1.0);
-    let limit = q.limit;
+    let candidate_limit = q.candidate_limit;
 
-    task::spawn_blocking(move || run_blocking_query(pool, query_vec, prefix, limit, min_similarity))
-        .await
-        .map_err(|e| {
-            SemanticSearchError::Internal(anyhow::anyhow!(
-                "spawn_blocking join error in search_semantic: {e}"
-            ))
-        })?
+    task::spawn_blocking(move || {
+        run_blocking_query(pool, query_vec, prefix, candidate_limit, min_similarity)
+    })
+    .await
+    .map_err(|e| {
+        SemanticSearchError::Internal(anyhow::anyhow!(
+            "spawn_blocking join error in search_semantic: {e}"
+        ))
+    })?
 }
 
 fn classify_embedding_error(e: EmbeddingError) -> SemanticSearchError {
@@ -152,7 +160,7 @@ fn run_blocking_query(
     pool: SqlitePool,
     query_vec: Vec<f32>,
     prefix: String,
-    limit: usize,
+    candidate_limit: usize,
     min_similarity: f32,
 ) -> Result<(Vec<SemanticResult>, Option<String>, bool), SemanticSearchError> {
     let conn = pool.get().map_err(|e| {
@@ -198,22 +206,25 @@ fn run_blocking_query(
         .map_err(SemanticSearchError::Internal)?;
 
     let rows: Vec<SemanticResult> = stmt
-        .query_map(params![blob, limit as i64, &prefix, &upper], |row| {
-            let file_path: String = row.get(0)?;
-            let chunk_index: i64 = row.get(1)?;
-            let heading_path: String = row.get(2)?;
-            let content: String = row.get(3)?;
-            let content_hash: String = row.get(4)?;
-            let distance: f64 = row.get(5)?;
-            Ok(SemanticResult {
-                score: distance_to_score(distance),
-                file_path,
-                chunk_index: chunk_index as u32,
-                heading_path,
-                text: content,
-                content_hash,
-            })
-        })
+        .query_map(
+            params![blob, candidate_limit as i64, &prefix, &upper],
+            |row| {
+                let file_path: String = row.get(0)?;
+                let chunk_index: i64 = row.get(1)?;
+                let heading_path: String = row.get(2)?;
+                let content: String = row.get(3)?;
+                let content_hash: String = row.get(4)?;
+                let distance: f64 = row.get(5)?;
+                Ok(SemanticResult {
+                    score: distance_to_score(distance),
+                    file_path,
+                    chunk_index: chunk_index as u32,
+                    heading_path,
+                    text: content,
+                    content_hash,
+                })
+            },
+        )
         .context("executing semantic kNN query")
         .map_err(SemanticSearchError::Internal)?
         .collect::<Result<Vec<_>, _>>()
@@ -226,7 +237,7 @@ fn run_blocking_query(
         .filter(|r| r.score >= min_similarity)
         .collect();
 
-    let was_capped = rows_count >= limit;
+    let was_capped = rows_count >= candidate_limit;
 
     if filtered.is_empty() {
         let hint = decide_hint(&conn).map_err(SemanticSearchError::Internal)?;
@@ -270,7 +281,7 @@ mod tests {
         SemanticQuery {
             query: query.to_string(),
             prefix: None,
-            limit: 10,
+            candidate_limit: 10,
             min_similarity: 0.0,
         }
     }
@@ -475,7 +486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_semantic_respects_limit() {
+    async fn search_semantic_respects_candidate_limit() {
         let (_dir, store) = open_store().await;
         seed_file(&store, "a.md").await;
         seed_file(&store, "b.md").await;
@@ -486,14 +497,15 @@ mod tests {
 
         let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
         let q = SemanticQuery {
-            limit: 2,
+            candidate_limit: 2,
             ..base_query("alpha")
         };
-        let (results, _, _) = search_semantic(store.pool(), embedder, 768, q)
+        let (results, _, truncated) = search_semantic(store.pool(), embedder, 768, q)
             .await
             .expect("search ok");
 
         assert_eq!(results.len(), 2);
+        assert!(truncated, "candidate cap reached → truncated should be set");
     }
 
     #[tokio::test]
@@ -697,5 +709,90 @@ mod tests {
             }
             other => panic!("expected InvalidPrefix, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn search_semantic_candidate_limit_returns_deeper_set() {
+        // Document-mode style retrieval: a deeper candidate_limit than a
+        // typical user-facing `limit` exposes more chunks for downstream
+        // grouping (Task 3). The core only sees `candidate_limit`.
+        let (_dir, store) = open_store().await;
+        seed_file(&store, "a.md").await;
+        seed_file(&store, "b.md").await;
+        seed_file(&store, "c.md").await;
+        seed_file(&store, "d.md").await;
+        seed_file(&store, "e.md").await;
+        seed_chunk(&store, "a.md", 0, "", "a", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "b.md", 0, "", "b", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "c.md", 0, "", "c", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "d.md", 0, "", "d", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "e.md", 0, "", "e", unit_vec(&[(0, 1.0)])).await;
+
+        let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
+        let q = SemanticQuery {
+            candidate_limit: 50,
+            ..base_query("alpha")
+        };
+        let (results, _, truncated) = search_semantic(store.pool(), embedder, 768, q)
+            .await
+            .expect("search ok");
+
+        assert_eq!(results.len(), 5, "all chunks within candidate cap returned");
+        assert!(
+            !truncated,
+            "candidate cap not reached → truncated should be false"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_semantic_candidate_limit_independent_of_min_similarity() {
+        // Filtering by min_similarity happens after kNN retrieval; the
+        // candidate cap reflects raw kNN rows, not post-filter rows.
+        let (_dir, store) = open_store().await;
+        seed_file(&store, "a.md").await;
+        seed_file(&store, "b.md").await;
+        // Identical → 1.0; orthogonal → 0.5.
+        seed_chunk(&store, "a.md", 0, "", "a", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "b.md", 0, "", "b", unit_vec(&[(1, 1.0)])).await;
+
+        let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
+        let q = SemanticQuery {
+            candidate_limit: 2,
+            min_similarity: 0.9,
+            ..base_query("alpha")
+        };
+        let (results, _, truncated) = search_semantic(store.pool(), embedder, 768, q)
+            .await
+            .expect("search ok");
+
+        assert_eq!(results.len(), 1, "only the identical chunk passes filter");
+        assert_eq!(results[0].file_path, "a.md");
+        assert!(
+            truncated,
+            "raw kNN rows hit candidate cap, even though one was filtered out"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_semantic_orders_by_score_then_path_then_chunk_index() {
+        // Two distance-tied chunks in one file plus a tied chunk in another:
+        // primary score desc, then file_path asc, then chunk_index asc.
+        let (_dir, store) = open_store().await;
+        seed_file(&store, "z.md").await;
+        seed_file(&store, "a.md").await;
+        seed_chunk(&store, "z.md", 0, "", "z0", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "a.md", 1, "", "a1", unit_vec(&[(0, 1.0)])).await;
+        seed_chunk(&store, "a.md", 0, "", "a0", unit_vec(&[(0, 1.0)])).await;
+
+        let embedder = OneShotEmbedder::ok(unit_vec(&[(0, 1.0)]));
+        let (results, _, _) = search_semantic(store.pool(), embedder, 768, base_query("alpha"))
+            .await
+            .expect("search ok");
+
+        let keys: Vec<(&str, u32)> = results
+            .iter()
+            .map(|r| (r.file_path.as_str(), r.chunk_index))
+            .collect();
+        assert_eq!(keys, vec![("a.md", 0), ("a.md", 1), ("z.md", 0)]);
     }
 }

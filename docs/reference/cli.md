@@ -41,24 +41,24 @@ Running `hmnd` with no subcommand starts the daemon in the foreground.
 
 #### (default — no subcommand)
 
-Start the daemon in the foreground. Reads config, opens the SQLite store, starts the watcher and the HTTP server, and mounts Streamable HTTP MCP at `/mcp` when enabled. Stdio MCP still ships as the `hmn mcp` subcommand; the deferred socket transport will land in `hmnd` in a follow-on workplan. See [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) and [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md).
+Start the daemon in the foreground. Reads config, opens the SQLite store, starts the watcher and the HTTP server, and mounts Streamable HTTP MCP at `/mcp` when enabled. Stdio MCP ships as the `hmn mcp` subcommand; the deferred socket transport will land in `hmnd` if a future workplan ships it. See [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md) and [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md).
 
-Implemented in step 3; the watcher runs for the daemon's lifetime, debounces filesystem events, and updates the index in place for files whose content hash changed.
+The watcher runs for the daemon's lifetime, debounces filesystem events, and updates the index in place for files whose content hash changed.
 
-After the watcher applies an indexer outcome, the daemon publishes a live change event for each real indexed change. Subscribe with `hmn vault watch`, HTTP streaming, or MCP; see [the change-events spec](../specs/change-events.md) for envelope shape and live-only semantics.
+After the watcher applies an indexer outcome, the daemon publishes a live change event for each real indexed change. Subscribe with `hmn vault watch` or HTTP streaming; MCP `vault_watch` is deferred pending streaming support. See [the change-events spec](../specs/change-events.md) for envelope shape and live-only semantics.
 
-Step 5 ships the HTTP server alongside the watcher. `/health` returns 200 OK; `/status` returns a JSON snapshot; `/search/filesystem` and `/search/content` accept POST with a JSON body. See the search specs for shapes.
+The HTTP server runs alongside the watcher. `/health` returns 200 OK; `/status` returns a JSON snapshot; `/search/filesystem` and `/search/content` accept POST with a JSON body. See the search specs for shapes.
 
 **Usage**:
 ```
-hmnd [--config PATH] [--rescan]
+hmnd [--config PATH]
 ```
 
 **Options**:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rescan` | Force a full rescan and reconciliation of the vault on startup instead of trusting the existing index | deferred (forces re-hashing every file regardless of stat; not implemented in v0). |
+| `--config PATH` | Path to configuration file | platform config default |
 
 **Examples**:
 
@@ -68,9 +68,6 @@ hmnd
 
 # Explicit config path
 hmnd --config ~/etc/hypomnema/config.toml
-
-# Force full rescan of all active vaults on startup
-hmnd --rescan
 ```
 
 > **Note**: the MCP-over-stdio mode lives on the CLI binary as `hmn mcp` (not `hmnd`). Streamable HTTP MCP lives on `hmnd` at `/mcp`; the deferred Unix-socket transport will also live in `hmnd` when it ships. See the `hmn mcp` subcommand below, [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments), [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md), and [ADR-0013](../decisions/0013-mcp-transport-streamable-http.md).
@@ -143,6 +140,8 @@ hmn search <mode> <query> [options]
 | `--prefix PATH` | Restrict results to a vault subdirectory | — |
 | `--vaults LIST` | Comma-separated names or IDs to restrict the search to | — (search all active vaults) |
 | `--limit N` | Max results | 10 (semantic), 100 (filesystem, content) |
+| `--granularity GRANULARITY` | Result granularity for `semantic` mode: `document` or `chunk` | `document` (daemon default; configurable via `[search.semantic]`) |
+| `--chunks-per-document N` | Max evidence chunks per document result in `document` mode (1..=100) | 3 (daemon default; configurable via `[search.semantic]`) |
 
 **Examples**:
 
@@ -150,15 +149,33 @@ hmn search <mode> <query> [options]
 hmn search filesystem "notes/databases/*.md"
 hmn search content "pgvector"
 hmn search semantic "how do we prevent spurious reindexes"
+hmn search semantic "sync conflicts" --granularity document --chunks-per-document 5
+hmn search semantic "exact passage about debouncing" --granularity chunk
 hmn search content "pgvector" --vaults personal,work
 hmn search content "pgvector" --vaults personal --vaults work   # repeating works too
 ```
 
 As of step 7, all three modes — `hmn search filesystem`, `hmn search content`, and `hmn search semantic` — are functional. Output is human-formatted by default; pass `--json` to render the daemon's JSON response unchanged. When `truncated == true` the text mode prints `(truncated; raise --limit)` after the results. Each filesystem/content result carries a `vault` (id) and `vault_name`; text mode prefixes results with the vault name when more than one vault contributed.
 
+**Canonical path field**: across all search and content-retrieval JSON responses — filesystem, content, semantic (chunk and document), and `content_get` — the vault-relative file path is named `path`. The `content_get` request takes `paths` (a list). This rule holds identically over CLI `--json`, the HTTP API, and stdio/HTTP MCP, since all surfaces serialize the same response types.
+
 **`--vaults` semantics** (step 10): values are matched against vault names first, then surrogate IDs. Unknown values do **not** fail the request — they appear in the response's `partial_results.failed` array with `code: "vault_not_found"` and the search proceeds against the recognized subset. Passing `--vaults` with an empty value list (e.g. `--vaults ""`) is rejected as `invalid_request`. Omitting `--vaults` queries every active vault. Paused or errored vaults that fall in scope are reported in `partial_results.skipped` with their current `status` and `reason` (the registry's `last_error` for `errored`); see [`docs/specs/vault-management.md` § Cross-Vault Search Semantics](../specs/vault-management.md#cross-vault-search-semantics).
 
-`hmn search semantic` text-mode output renders one block per result: a leading `<file_path>  (score: N.NN)` line (cosine similarity in `[0.0, 1.0]`, two decimals), the slash-joined heading path on its own indented `> …` line (omitted when every heading segment is empty), and the chunk text on a final indented line. Example:
+**`hmn search semantic` — document granularity (default, step 25)**: results are grouped by parent file. Text mode renders one block per document: a leading `<path>  (score: N.NN)` line, then each evidence chunk indented below it with its own heading path and text. Example:
+
+```
+notes/tools/hypomnema.md  (score: 0.82)
+  > Pitfalls / Sync conflicts
+  Syncthing and Dropbox write files in bursts…
+  > Background
+  The daemon debounces events from notify…
+
+notes/design/watchers.md  (score: 0.68)
+  > Change detection
+  mtime alone is not enough; compare content hashes…
+```
+
+**`hmn search semantic` — chunk granularity**: text mode renders one block per chunk (pre-step-25 behavior): a leading `<path>  (score: N.NN)` line, the heading path, and the chunk text. Example:
 
 ```
 notes/tools/hypomnema.md  (score: 0.82)
@@ -172,11 +189,22 @@ notes/design/watchers.md  (score: 0.71)
 
 When the daemon's response carries a top-level `hint` (e.g. `"semantic index is building"` — see [`docs/specs/semantic-search.md`](../specs/semantic-search.md) § Edge Cases — Empty index), the CLI prints it on its own line, parenthesized: `(semantic index is building)`. The hint appears after the result blocks if both are present; in the empty-index case the hint stands alone. When the embedding service is unreachable or returns an unexpected dimension at query time, the daemon returns HTTP 503 with envelope code `embedding_unavailable`; the CLI surfaces the message and exits non-zero.
 
+#### `debug chunks`
+
+Inspect how one indexed Markdown file is chunked for semantic search. The work runs in `hmnd`; `hmn` only routes the request and renders the response.
+
+**Usage**:
+```
+hmn debug chunks PATH [--vault NAME|ID] [--mode indexed|preview|diff] [--show-text preview|full|none]
+```
+
+`indexed` (default) shows the chunks currently stored in SQLite. `preview` also re-runs the daemon's current chunker over the indexed file content. `diff` returns both views plus changed/added/removed chunk indexes. Text output includes byte ranges, heading paths, boundary reasons, fenced-code counts/bytes/languages, thematic-break diagnostics, and warnings such as `code-heavy chunk`. Pass `--json` to receive the daemon response unchanged.
+
 #### `vault`
 
 Manage vaults on a running daemon. Each subcommand maps to a control-plane HTTP route ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)). Either a vault name or its surrogate ID may be passed for selectors; the daemon resolves at request entry. When a selector is omitted, `status` resolves to `default_vault_name` from the configuration ([§ `default_vault_name`](./configuration.md#default_vault_name)).
 
-As of step 11, the full nine-operation lifecycle ships: read + create/terminate (`create`, `list`, `status`, `terminate`) plus the five lifecycle ops (`pause`, `resume`, `reset`, `rename`, `rescan`). v0 also exposes `watch` as a live-only event subscription. The full surface is pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md).
+As of step 11, the full nine-operation lifecycle ships: read + create/terminate (`create`, `list`, `status`, `terminate`) plus the five lifecycle ops (`pause`, `resume`, `reset`, `rename`, `rescan`). Hypomnema also exposes `watch` as a live-only event subscription over CLI/HTTP. The full surface is pinned in [`docs/specs/vault-management.md`](../specs/vault-management.md).
 
 **Usage**:
 ```
@@ -321,7 +349,7 @@ Step 11 advertises twelve request/response tools — the three search modes (per
 
 Tool inputs derive their JSON schemas from the same request types the HTTP API uses; tool outputs land in MCP `structured_content` as the same `*SearchResponse` / `VaultRow` / `VaultListResponse` / `RescanResponseJson` / `TerminateVaultResponse` shapes the HTTP API returns. HTTP error envelopes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `vault_not_found`, `vault_path_conflict`, `vault_name_conflict`, `vault_path_invalid`, `vault_errored`, `internal`) flow through unchanged as MCP `structured_error`. The `daemon_unreachable` code is new at the MCP layer for the case where the daemon isn't running.
 
-`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`). The five lifecycle tools (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) each take a required `target` field; `vault_reset` accepts an optional `rebuild` boolean (default `false`); `vault_rename` requires `new_name`. Idempotency guarantees match the HTTP layer (pause-on-paused / resume-on-active return the existing row). `vault_watch` is deferred pending Task 16.6 rmcp streaming verification; if it ships, it will accept `target?: string` or `all?: bool` and stream live events only with no `since` argument in v0.
+`vault_status` accepts an optional `target` field (vault name or surrogate ID); when omitted, the tool resolves to `default_vault_name` from the daemon's config — matching the CLI's `hmn vault status` ergonomics. `vault_create` mirrors `hmn vault create` (an optional `name` defaulting to `default_vault_name`, a required `path`). The five lifecycle tools (`vault_pause` / `vault_resume` / `vault_reset` / `vault_rename` / `vault_rescan`) each take a required `target` field; `vault_reset` accepts an optional `rebuild` boolean (default `false`); `vault_rename` requires `new_name`. Idempotency guarantees match the HTTP layer (pause-on-paused / resume-on-active return the existing row). `vault_watch` is deferred pending Task 16.6 rmcp streaming verification; if it ships, it will accept `target?: string` or `all?: bool` and stream live events only with no `since` argument unless durable replay is designed.
 
 **Write-tool gating**. The seven write tools (`vault_create`, `vault_pause`, `vault_resume`, `vault_reset`, `vault_rename`, `vault_rescan`, `vault_terminate`) are advertised by default and may be disabled via `[mcp] enable_write_tools = false` in the daemon's config (see [configuration.md § `[mcp]`](./configuration.md#mcp)). When the gate is closed, `tools/call` against any of the seven returns a structured `write_tools_disabled` error envelope naming the gated tool and the config knob to flip; the read tools remain available. The gate is single-flag at the daemon level — per-tool gating is round-4+ if a use-case surfaces. See [`docs/specs/vault-management.md` § MCP Tool Surface](../specs/vault-management.md#mcp-tool-surface).
 
@@ -375,5 +403,5 @@ Tool inputs derive their JSON schemas from the same request types the HTTP API u
 
 ## Notes
 
-- Several options marked TBD above are open questions the handoff calls out explicitly; this file is expected to stabilize over steps 1–8 of the v0 plan (see [implementation/tech-stack.md](../implementation/tech-stack.md)).
-- The MCP-over-stdio surface ships in step 8 as the `hmn mcp` subcommand on the CLI binary (not `hmnd --mcp-stdio` as earlier drafts of this file suggested). The Unix-socket MCP transport is deferred to a follow-on workplan and will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md).
+- Several options marked TBD above are historical open questions from the handoff and should be refreshed when that surface is touched.
+- The MCP-over-stdio surface ships as the `hmn mcp` subcommand on the CLI binary (not `hmnd --mcp-stdio` as earlier drafts of this file suggested). The Unix-socket MCP transport is deferred to a follow-on workplan and will live in `hmnd` when it ships. See [ADR-0008 § Amendments](../decisions/0008-two-binary-daemon-plus-cli.md#amendments) and [ADR-0012](../decisions/0012-mcp-transport-stdio-v0.md).

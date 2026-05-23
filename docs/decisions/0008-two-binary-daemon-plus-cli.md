@@ -87,7 +87,7 @@ as a clap subcommand on `hmn`: **`hmn mcp`**. Rationale:
    calling MCP tools is using Hypomnema. The shim that bridges
    agent-stdio to daemon-HTTP is structurally identical to what
    `hmn search …` already does, modulo the input/output transport.
-3. When the deferred socket transport ships (post-v0), it lives in
+3. When the deferred socket transport ships, it lives in
    `hmnd` (long-lived listener — that *is* a daemon feature). Stdio
    on `hmn`, socket on `hmnd`. Each transport's binary matches its
    lifetime.

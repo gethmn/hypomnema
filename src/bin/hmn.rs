@@ -5,12 +5,13 @@ use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use futures_util::StreamExt;
 
-use hypomnema::cli::{Cli, Command, ContentOp, SearchMode, VaultOp};
+use hypomnema::cli::{Cli, Command, ContentOp, DebugOp, SearchMode, VaultOp};
 use hypomnema::client::{
     ContentGetRequest, ContentGetResponse, ContentGetResultItem, ContentQueryJson,
-    ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient,
-    FilesystemQueryJson, FilesystemResultJson, FilesystemSearchResponse, RescanResponseJson,
-    SemanticQueryJson, SemanticResultJson, SemanticSearchResponse, StatusResponse,
+    ContentResultJson, ContentSearchResponse, CreateVaultRequest, DaemonClient, DebugChunkJson,
+    DebugChunksRequest, DebugChunksResponse, FilesystemQueryJson, FilesystemResultJson,
+    FilesystemSearchResponse, RescanResponseJson, SemanticDocumentResultJson, SemanticQueryJson,
+    SemanticResultItem, SemanticResultJson, SemanticSearchResponse, StatusResponse,
     TerminateVaultResponse, VaultListResponse, VaultRowJson, is_connect_error,
 };
 use hypomnema::config::Config;
@@ -87,15 +88,21 @@ async fn main() -> ExitCode {
                 query,
                 prefix,
                 limit,
+                granularity,
+                chunks_per_document,
                 vaults,
             } => {
                 cmd_search_semantic(
                     &config,
                     cli.daemon_url.as_deref(),
                     cli.json,
-                    query,
-                    prefix,
-                    limit,
+                    SemanticSearchParams {
+                        query,
+                        prefix,
+                        limit,
+                        granularity,
+                        chunks_per_document,
+                    },
                     vaults,
                 )
                 .await
@@ -104,6 +111,7 @@ async fn main() -> ExitCode {
         Command::Content { op } => {
             cmd_content(&config, cli.daemon_url.as_deref(), cli.json, op).await
         }
+        Command::Debug { op } => cmd_debug(&config, cli.daemon_url.as_deref(), cli.json, op).await,
         Command::Status => cmd_status(&config, cli.daemon_url.as_deref(), cli.json).await,
         Command::Mcp => cmd_mcp(&config, cli.daemon_url.as_deref()).await,
         Command::Vault { op } => cmd_vault(&config, cli.daemon_url.as_deref(), cli.json, op).await,
@@ -157,6 +165,15 @@ struct ContentSearchParams {
     limit: Option<usize>,
 }
 
+/// Parameters for semantic search command.
+struct SemanticSearchParams {
+    query: String,
+    prefix: Option<String>,
+    limit: Option<usize>,
+    granularity: Option<String>,
+    chunks_per_document: Option<u32>,
+}
+
 async fn cmd_search_content(
     config: &Config,
     override_url: Option<&str>,
@@ -189,20 +206,20 @@ async fn cmd_search_semantic(
     config: &Config,
     override_url: Option<&str>,
     json: bool,
-    query: String,
-    prefix: Option<String>,
-    limit: Option<usize>,
+    params: SemanticSearchParams,
     vaults: Vec<String>,
 ) -> Result<()> {
     let client = DaemonClient::from_config(config, override_url)?;
     let req = SemanticQueryJson {
-        query,
-        prefix,
-        limit,
+        query: params.query,
+        prefix: params.prefix,
+        limit: params.limit,
         min_similarity: None,
         vaults: vaults_or_none(vaults),
         include_text: None,
         preview_bytes: None,
+        granularity: params.granularity,
+        chunks_per_document: params.chunks_per_document,
     };
     let resp = client.search_semantic(&req).await?;
     if json {
@@ -224,6 +241,47 @@ async fn cmd_content(
             cmd_content_get(config, override_url, json, paths, vault).await
         }
     }
+}
+
+async fn cmd_debug(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    op: DebugOp,
+) -> Result<()> {
+    match op {
+        DebugOp::Chunks {
+            path,
+            vault,
+            mode,
+            show_text,
+        } => cmd_debug_chunks(config, override_url, json, path, vault, mode, show_text).await,
+    }
+}
+
+async fn cmd_debug_chunks(
+    config: &Config,
+    override_url: Option<&str>,
+    json: bool,
+    path: String,
+    vault: Option<String>,
+    mode: Option<String>,
+    show_text: Option<String>,
+) -> Result<()> {
+    let client = DaemonClient::from_config(config, override_url)?;
+    let req = DebugChunksRequest {
+        path,
+        vault,
+        mode,
+        show_text,
+    };
+    let response = client.debug_chunks(&req).await?;
+    if json {
+        print_json(&response)?;
+    } else {
+        render_debug_chunks_text(&response);
+    }
+    Ok(())
 }
 
 async fn cmd_content_get(
@@ -290,6 +348,108 @@ fn render_content_get_text(response: &ContentGetResponse) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn render_debug_chunks_text(response: &DebugChunksResponse) {
+    println!(
+        "{}  vault: {}  hash: {}  indexed_at: {}",
+        response.path, response.vault_name, response.content_hash, response.indexed_at
+    );
+    println!(
+        "chunker: {}  target={}B  hard_cap={}B",
+        response.chunker.version, response.chunker.target_bytes, response.chunker.hard_cap_bytes
+    );
+    println!(
+        "summary: {} chunks, min={}B, max={}B, avg={:.1}B, code-heavy={}, thematic-boundaries={}",
+        response.summary.chunk_count,
+        response.summary.min_bytes,
+        response.summary.max_bytes,
+        response.summary.avg_bytes,
+        response.summary.code_heavy_chunks,
+        response.summary.thematic_break_boundaries
+    );
+    println!();
+    println!("indexed:");
+    render_debug_chunk_list(&response.indexed);
+    if let Some(preview) = &response.preview {
+        println!();
+        println!("preview:");
+        render_debug_chunk_list(preview);
+    }
+    if let Some(diff) = &response.diff {
+        println!();
+        println!(
+            "diff: indexed={} preview={} count_changed={}",
+            diff.indexed_chunk_count, diff.preview_chunk_count, diff.chunk_count_changed
+        );
+        if !diff.changed_chunks.is_empty() {
+            println!("  changed: {:?}", diff.changed_chunks);
+        }
+        if !diff.added_preview_chunks.is_empty() {
+            println!("  added_preview: {:?}", diff.added_preview_chunks);
+        }
+        if !diff.removed_indexed_chunks.is_empty() {
+            println!("  removed_indexed: {:?}", diff.removed_indexed_chunks);
+        }
+    }
+}
+
+fn render_debug_chunk_list(chunks: &[DebugChunkJson]) {
+    for chunk in chunks {
+        let heading = chunk
+            .heading_path
+            .iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" / ");
+        println!(
+            "{}  bytes {}..{}  {}B  heading: {}",
+            chunk.chunk_index,
+            chunk.start_byte,
+            chunk.end_byte,
+            chunk.byte_len,
+            if heading.is_empty() {
+                "(none)"
+            } else {
+                &heading
+            }
+        );
+        println!(
+            "   boundary: {} -> {}",
+            chunk.boundary_start, chunk.boundary_end
+        );
+        let languages = if chunk.diagnostics.fenced_code_languages.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", languages: {}",
+                chunk.diagnostics.fenced_code_languages.join(", ")
+            )
+        };
+        println!(
+            "   code: {} blocks, {}B{}, code-heavy={}",
+            chunk.diagnostics.fenced_code_blocks,
+            chunk.diagnostics.fenced_code_bytes,
+            languages,
+            chunk.diagnostics.code_heavy
+        );
+        if chunk.diagnostics.thematic_breaks > 0 {
+            println!(
+                "   thematic_breaks_inside_chunk: {}",
+                chunk.diagnostics.thematic_breaks
+            );
+        }
+        for warning in &chunk.warnings {
+            println!("   warning: {warning}");
+        }
+        if let Some(text) = &chunk.text {
+            println!("   text:");
+            for line in text.lines() {
+                println!("   {line}");
+            }
+        }
+    }
 }
 
 fn vaults_or_none(v: Vec<String>) -> Option<Vec<String>> {
@@ -687,12 +847,15 @@ fn print_content_block(r: &ContentResultJson) {
 fn render_semantic_text(resp: &SemanticSearchResponse) -> String {
     let mut out = String::new();
     let mut first = true;
-    for r in &resp.results {
+    for item in &resp.results {
         if !first {
             out.push('\n');
         }
         first = false;
-        append_semantic_block(&mut out, r);
+        match item {
+            SemanticResultItem::Chunk(r) => append_semantic_chunk_block(&mut out, r),
+            SemanticResultItem::Document(d) => append_semantic_document_block(&mut out, d),
+        }
     }
     if let Some(h) = &resp.hint {
         if !first {
@@ -703,8 +866,8 @@ fn render_semantic_text(resp: &SemanticSearchResponse) -> String {
     out
 }
 
-fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
-    out.push_str(&format!("{}  (score: {:.2})\n", r.file_path, r.score));
+fn append_semantic_chunk_block(out: &mut String, r: &SemanticResultJson) {
+    out.push_str(&format!("{}  (score: {:.2})\n", r.path, r.score));
     let segments: Vec<&str> = r
         .heading_path
         .iter()
@@ -716,6 +879,24 @@ fn append_semantic_block(out: &mut String, r: &SemanticResultJson) {
     }
     if let Some(text) = &r.text {
         out.push_str(&format!("  {text}\n"));
+    }
+}
+
+fn append_semantic_document_block(out: &mut String, d: &SemanticDocumentResultJson) {
+    out.push_str(&format!("{}  (score: {:.2})\n", d.path, d.score));
+    for chunk in &d.chunks {
+        let segments: Vec<&str> = chunk
+            .heading_path
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_str())
+            .collect();
+        if !segments.is_empty() {
+            out.push_str(&format!("  > {}\n", segments.join(" / ")));
+        }
+        if let Some(text) = &chunk.text {
+            out.push_str(&format!("  {text}\n"));
+        }
     }
 }
 
@@ -759,10 +940,10 @@ mod tests {
         score: f32,
         heading_path: Vec<&str>,
         text: &str,
-    ) -> SemanticResultJson {
-        SemanticResultJson {
+    ) -> SemanticResultItem {
+        SemanticResultItem::Chunk(SemanticResultJson {
             score,
-            file_path: file_path.to_string(),
+            path: file_path.to_string(),
             chunk_index: 0,
             heading_path: heading_path.into_iter().map(String::from).collect(),
             text: Some(text.to_string()),
@@ -771,7 +952,7 @@ mod tests {
             content_hash: String::new(),
             vault: None,
             vault_name: None,
-        }
+        })
     }
 
     #[test]

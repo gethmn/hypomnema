@@ -130,6 +130,8 @@ async fn spawn_smoke_daemon() -> SmokeDaemon {
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let backend: Arc<dyn HypomnemaBackend + Send + Sync> =
         Arc::new(InProcessBackend::new(manager.clone()));
@@ -359,7 +361,11 @@ fn parse_sse(bytes: &[u8]) -> Value {
 #[tokio::test]
 async fn smoke_mode1_default_preview() {
     let daemon = spawn_smoke_daemon().await;
-    let (status, body) = post_semantic(&daemon.base_url, json!({ "query": "test" })).await;
+    let (status, body) = post_semantic(
+        &daemon.base_url,
+        json!({ "query": "test", "granularity": "chunk" }),
+    )
+    .await;
     assert_eq!(status, 200, "body: {body}");
 
     let results = body["results"].as_array().expect("results array");
@@ -402,7 +408,7 @@ async fn smoke_mode2_full_text_limited() {
     let daemon = spawn_smoke_daemon().await;
     let (status, body) = post_semantic(
         &daemon.base_url,
-        json!({ "query": "test", "include_text": "full", "limit": 3 }),
+        json!({ "query": "test", "include_text": "full", "limit": 3, "granularity": "chunk" }),
     )
     .await;
     assert_eq!(status, 200, "body: {body}");
@@ -429,14 +435,14 @@ async fn smoke_mode2_full_text_limited() {
 }
 
 // ===== Mode 3: metadata-only =====
-// text, text_kind, text_truncated absent; score, file_path, content_hash, chunk_index present.
+// text, text_kind, text_truncated absent; score, path, content_hash, chunk_index present.
 
 #[tokio::test]
 async fn smoke_mode3_metadata_only() {
     let daemon = spawn_smoke_daemon().await;
     let (status, body) = post_semantic(
         &daemon.base_url,
-        json!({ "query": "test", "include_text": "none", "limit": 20 }),
+        json!({ "query": "test", "include_text": "none", "limit": 20, "granularity": "chunk" }),
     )
     .await;
     assert_eq!(status, 200, "body: {body}");
@@ -460,10 +466,7 @@ async fn smoke_mode3_metadata_only() {
             "text_truncated must be absent for include_text=none"
         );
         assert!(result["score"].as_f64().is_some(), "score must be present");
-        assert!(
-            result["file_path"].as_str().is_some(),
-            "file_path must be present"
-        );
+        assert!(result["path"].as_str().is_some(), "path must be present");
         assert!(
             result["content_hash"].as_str().is_some(),
             "content_hash must be present"
@@ -526,7 +529,7 @@ async fn smoke_mode6_clamped_preview_bytes() {
     let daemon = spawn_smoke_daemon().await;
     let (status, body) = post_semantic(
         &daemon.base_url,
-        json!({ "query": "test", "preview_bytes": 100_000 }),
+        json!({ "query": "test", "preview_bytes": 100_000, "granularity": "chunk" }),
     )
     .await;
     assert_eq!(status, 200, "body: {body}");
@@ -544,6 +547,92 @@ async fn smoke_mode6_clamped_preview_bytes() {
             result["text_truncated"], true,
             "3 000-byte chunk must still be truncated after clamping to 2 000"
         );
+    }
+
+    daemon.shutdown().await;
+}
+
+// ===== Mode 7: document mode diversity =====
+// Default granularity="document" (no explicit field). 12 unique files, 1 chunk
+// each → 10 document results, each from a distinct file, truncated=true.
+// This is the document-diversity regression smoke: one file with many chunks
+// cannot crowd out distinct documents under the default config.
+
+#[tokio::test]
+async fn smoke_mode7_document_mode_diversity() {
+    let daemon = spawn_smoke_daemon().await;
+    // No granularity field → daemon default ("document").
+    let (status, body) = post_semantic(&daemon.base_url, json!({ "query": "test" })).await;
+    assert_eq!(status, 200, "body: {body}");
+
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(
+        results.len(),
+        10,
+        "default limit must return 10 document results, got {}",
+        results.len()
+    );
+    // Every result must be a document (has nested chunks, no top-level chunk_index).
+    for result in results {
+        assert!(
+            result.get("chunks").is_some(),
+            "document mode results must have nested chunks"
+        );
+        assert!(
+            result.get("chunk_index").is_none(),
+            "document mode results must not have top-level chunk_index"
+        );
+    }
+    // All 10 results must be from distinct files.
+    let paths: std::collections::HashSet<&str> = results
+        .iter()
+        .map(|r| r["path"].as_str().expect("path"))
+        .collect();
+    assert_eq!(
+        paths.len(),
+        10,
+        "all 10 results must be from distinct files"
+    );
+    assert_eq!(
+        body["truncated"], true,
+        "12 files > limit 10 → truncated must be true"
+    );
+
+    daemon.shutdown().await;
+}
+
+// ===== Mode 8: document mode with include_text=full =====
+// Explicit granularity="document" + include_text="full": nested chunks must
+// carry the full 3 000-byte chunk text.
+
+#[tokio::test]
+async fn smoke_mode8_document_mode_full_text_nested() {
+    let daemon = spawn_smoke_daemon().await;
+    let (status, body) = post_semantic(
+        &daemon.base_url,
+        json!({ "query": "test", "granularity": "document", "include_text": "full", "limit": 3 }),
+    )
+    .await;
+    assert_eq!(status, 200, "body: {body}");
+
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 3, "limit=3 must return 3 documents");
+    for result in results {
+        let chunks = result["chunks"].as_array().expect("nested chunks");
+        assert!(
+            !chunks.is_empty(),
+            "each document must have at least one nested chunk"
+        );
+        for chunk in chunks {
+            assert_eq!(chunk["text_kind"], "full");
+            assert_eq!(chunk["text_truncated"], false);
+            let text = chunk["text"].as_str().expect("nested chunk text");
+            assert_eq!(
+                text.len(),
+                CHUNK_SIZE,
+                "full text must be the complete {CHUNK_SIZE}-byte chunk"
+            );
+        }
     }
 
     daemon.shutdown().await;

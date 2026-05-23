@@ -6,7 +6,7 @@ Layer 2 of the Layered Documentation System. Defines *what* Hypomnema is and *wh
 
 | Document | Purpose |
 |----------|---------|
-| [vision.md](./vision.md) | Product vision, core concepts, non-goals, success criteria |
+| [vision.md](./vision.md) | Product vision, core concepts, current product boundaries, completion record |
 
 ## Related
 

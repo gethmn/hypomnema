@@ -10,10 +10,11 @@ use crate::api::search::{
 };
 use crate::api::types::{
     ContentGetRequest, ContentGetResponse, ContentQueryJson, ContentSearchResponse,
-    CreateVaultRequest, FilesystemQueryJson, FilesystemSearchResponse, RescanResponseJson,
-    SemanticQueryJson, SemanticSearchResponse, TerminateVaultResponse, VaultListResponse,
-    VaultRowJson,
+    CreateVaultRequest, DebugChunksRequest, DebugChunksResponse, FilesystemQueryJson,
+    FilesystemSearchResponse, RescanResponseJson, SemanticQueryJson, SemanticSearchResponse,
+    TerminateVaultResponse, VaultListResponse, VaultRowJson,
 };
+use crate::config::SemanticSearchConfig;
 use crate::control_plane::{CreateVaultRequest as ControlCreateRequest, VaultManager};
 use crate::mcp::backend::HypomnemaBackend;
 
@@ -24,11 +25,25 @@ use crate::mcp::backend::HypomnemaBackend;
 /// the same vault registry and runner map.
 pub struct InProcessBackend {
     pub vault_manager: Arc<VaultManager>,
+    pub semantic_config: SemanticSearchConfig,
 }
 
 impl InProcessBackend {
     pub fn new(vault_manager: Arc<VaultManager>) -> Self {
-        Self { vault_manager }
+        Self {
+            vault_manager,
+            semantic_config: SemanticSearchConfig::default(),
+        }
+    }
+
+    pub fn with_semantic_config(
+        vault_manager: Arc<VaultManager>,
+        semantic_config: SemanticSearchConfig,
+    ) -> Self {
+        Self {
+            vault_manager,
+            semantic_config,
+        }
     }
 }
 
@@ -47,13 +62,19 @@ impl HypomnemaBackend for InProcessBackend {
     }
 
     async fn search_semantic(&self, q: &SemanticQueryJson) -> Result<SemanticSearchResponse> {
-        run_semantic_search(&self.vault_manager, q)
+        run_semantic_search(&self.vault_manager, q, &self.semantic_config)
             .await
             .map_err(Into::into)
     }
 
     async fn content_get(&self, req: &ContentGetRequest) -> Result<ContentGetResponse> {
         run_content_get(&self.vault_manager, req)
+            .await
+            .map_err(Into::into)
+    }
+
+    async fn debug_chunks(&self, req: &DebugChunksRequest) -> Result<DebugChunksResponse> {
+        crate::api::debug::run_debug_chunks(&self.vault_manager, req)
             .await
             .map_err(Into::into)
     }
@@ -287,10 +308,11 @@ mod tests {
         };
 
         let via_backend = backend.search_semantic(&q).await.expect("backend ok");
-        let via_runner: SemanticSearchResponse = run_semantic_search(&manager, &q)
-            .await
-            .map_err(anyhow::Error::from)
-            .expect("run_* ok");
+        let via_runner: SemanticSearchResponse =
+            run_semantic_search(&manager, &q, &SemanticSearchConfig::default())
+                .await
+                .map_err(anyhow::Error::from)
+                .expect("run_* ok");
 
         let bytes_a = serde_json::to_vec(&via_backend).unwrap();
         let bytes_b = serde_json::to_vec(&via_runner).unwrap();
@@ -310,6 +332,7 @@ mod tests {
             },
             logging: LoggingConfig::default(),
             default_vault_name: "default".to_string(),
+            search: crate::config::SearchConfig::default(),
         }
     }
 

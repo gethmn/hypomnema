@@ -325,6 +325,8 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
         event_bus: manager.event_bus(),
         started_at: std::time::Instant::now(),
         embedding_endpoint: None,
+
+        semantic_config: hypomnema::config::SemanticSearchConfig::default(),
     };
     let app = api::router(state);
 
@@ -466,15 +468,13 @@ async fn chunk_count_matches_chunker_for_known_fixture() {
 async fn chunks_vec_row_per_chunks_row() {
     let stub = StubServer::spawn(StubMode::Ok).await;
     let fx = fixture(&stub.url);
-    let daemon = spawn_live_daemon(fx).await;
-
     fs::write(
-        daemon.vault.join("a.md"),
+        fx.vault.join("a.md"),
         b"## Alpha\n\nFirst.\n\n## Beta\n\nSecond.\n",
     )
     .expect("write a.md");
-    fs::write(daemon.vault.join("b.md"), b"# Title\n\nBody.\n").expect("write b.md");
-    tokio::time::sleep(SETTLE).await;
+    fs::write(fx.vault.join("b.md"), b"# Title\n\nBody.\n").expect("write b.md");
+    let daemon = spawn_live_daemon(fx).await;
 
     let total = count_chunks_total(&daemon.data_dir);
     let vec_total = count_chunks_vec_total(&daemon.data_dir);

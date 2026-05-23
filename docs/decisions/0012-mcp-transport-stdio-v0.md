@@ -32,9 +32,9 @@ A fourth decision surfaced during the build (not pre-flagged in the roadmap):
 
 2. **Socket transport deferred to a follow-on workplan.** The `mcp.transport` config knob continues to parse and validate. Setting `mcp.transport = "socket"` in v0 produces a clear `WARN`-level log at `hmnd` startup but does not crash; the socket file at `mcp.socket` is **not** bound. When socket transport ships, it lives in `hmnd` (long-lived listener) — keeping the binary-placement split clean: stdio = `hmn` (short-lived adapter); socket = `hmnd` (long-lived listener). (Resolution D, socket half — this is a workplan-time rescope of the original step-8 shipping criterion 4; see [step-08 workplan § Shipping criteria (rescoped)](../roadmap/step-08-workplan.md#shipping-criteria-rescoped).)
 
-   **HTTP MCP transport ships in round 4** ([ADR-0013](./0013-mcp-transport-streamable-http.md)). The full v0-deferred MCP transport landscape is now stdio-on-`hmn` (this ADR § Resolution 1, shipped round 2), HTTP-on-`hmnd` (ADR-0013, shipped round 4), socket-on-`hmnd` (this ADR § Resolution 2, deferred). HTTP-MCP mounts on `hmnd`'s existing Axum router at `/mcp`; the v0 stdio-shipped / socket-deferred decision recorded here is unchanged.
+   **HTTP MCP transport ships in round 4** ([ADR-0013](./0013-mcp-transport-streamable-http.md)). The MCP transport landscape is now stdio-on-`hmn` (this ADR § Resolution 1, shipped round 2), HTTP-on-`hmnd` (ADR-0013, shipped round 4), socket-on-`hmnd` (this ADR § Resolution 2, deferred). HTTP-MCP mounts on `hmnd`'s existing Axum router at `/mcp`; the stdio-shipped / socket-deferred decision recorded here is unchanged.
 
-3. **Forward-compat for socket auth: filesystem permissions only.** When the socket transport ships, the socket file is created with mode `0600` (owner read/write only). No token, no challenge-response, no TLS. The trust boundary is the user's home directory: anyone who can read the socket file already has access to the daemon's config (`~/.config/hypomnema/config.toml`, which contains the daemon URL and any embedding-service `api_key`) and the index (`~/.local/share/hypomnema/vaults/<id>/index.sqlite`, which contains every chunk's text). Adding token auth would be theater. (Resolution E, recorded forward-compat — not implemented in v0.)
+3. **Forward-compat for socket auth: filesystem permissions only.** When the socket transport ships, the socket file is created with mode `0600` (owner read/write only). No token, no challenge-response, no TLS. The trust boundary is the user's home directory: anyone who can read the socket file already has access to the daemon's config (`~/.config/hypomnema/config.toml`, which contains the daemon URL and any embedding-service `api_key`) and the index (`~/.local/share/hypomnema/vaults/<id>/index.sqlite`, which contains every chunk's text). Adding token auth would be theater. (Resolution E, recorded forward-compat — not implemented today.)
 
 4. **Brand identity: `serverInfo.name = "hypomnema"`.** The `#[tool_handler(name = "hypomnema")]` attribute on `impl ServerHandler for HypomnemaMcpServer` in `src/mcp/server.rs` overrides rmcp's auto-derived `Implementation::from_build_env()`. The `version` field auto-fills from `env!("CARGO_PKG_VERSION")` via the rmcp 1.5.0 macro's behavior when `name` is provided without an explicit `version` — so the MCP `serverInfo.version` tracks the Hypomnema crate version with no further bookkeeping. (Brand-identity override; recorded here because it directly shapes how MCP hosts label the tool surface.)
 
@@ -60,7 +60,7 @@ This ADR amends [ADR-0008](./0008-two-binary-daemon-plus-cli.md) — see [ADR-00
 
 - **MCP error envelopes mirror HTTP's.** The `daemon_unreachable` code is new at the MCP layer (synthesized when the underlying `reqwest::Error` indicates a connect failure — there is no HTTP analogue because HTTP can't return errors when the daemon isn't running). The other codes (`invalid_glob`, `invalid_regex`, `invalid_prefix`, `invalid_request`, `embedding_unavailable`, `internal`) flow through unchanged via `decode_response` → `envelope_from_anyhow` → `CallToolResult::structured_error`.
 - **Stdout reservation for the MCP transport is load-bearing.** When `hmn mcp` runs, all `tracing` output is redirected to stderr via `BinaryKind::HmnMcp` in `src/logging.rs`. Any byte that lands on stdout outside the rmcp framing is a protocol violation that breaks the MCP session. This is a concrete operational invariant, not a stylistic choice.
-- **Round-2 shipped no MCP write tools, prompts, resources, or sampling.** Step 8 shipped read-only search tools only. Round 3+ pulled up vault-management MCP tools per [ADR-0011](./0011-vault-management-on-hmn.md); other rmcp 1.5.0 protocol features (prompts, resource subscriptions, sampling) remain post-v0 concerns unless specifically amended.
+- **Round-2 shipped no MCP write tools, prompts, resources, or sampling.** Step 8 shipped read-only search tools only. Round 3+ pulled up vault-management MCP tools per [ADR-0011](./0011-vault-management-on-hmn.md); other rmcp 1.5.0 protocol features (prompts, resource subscriptions, sampling) remain future concerns unless specifically amended.
 
 ---
 
@@ -78,7 +78,7 @@ This ADR amends [ADR-0008](./0008-two-binary-daemon-plus-cli.md) — see [ADR-00
 [ADR-0013](./0013-mcp-transport-streamable-http.md) introduces Streamable
 HTTP MCP on `hmnd` as the round-4 shipping gate — the third standard
 MCP transport, mounted on `hmnd`'s existing Axum router at `/mcp`. The
-v0 stdio-shipped / socket-deferred decision recorded in this ADR is
+stdio-shipped / socket-deferred decision recorded in this ADR is
 unchanged; ADR-0013 adds the third transport without superseding the
 present scope. The "each transport's binary matches its lifetime"
 principle applies unchanged: stdio-MCP → `hmn` (short-lived adapter);

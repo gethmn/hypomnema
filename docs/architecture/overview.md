@@ -234,7 +234,7 @@ Each result carries the surrogate `vault` (id) and the point-in-time `vault_name
 
 Each real change (file created, modified, deleted) publishes one live event onto the daemon's in-memory event bus. Envelope: `{type, vault, event_type, path, content_hash, detected_at}` — the `vault` field is the surrogate ID. There is no `vault_name` field on change events because names are mutable; consumers resolve display names from the registry when needed.
 
-The event bus is non-durable in v0. Connected subscribers receive events while they are connected; missed events are recovered by re-querying the current index. A bounded channel may report subscriber lag with a `stream_lagged` control event, after which the consumer must resync.
+The event bus is non-durable today. Connected subscribers receive events while they are connected; missed events are recovered by re-querying the current index. A bounded channel may report subscriber lag with a `stream_lagged` control event, after which the consumer must resync.
 
 Consumers subscribe through `hmn vault watch`, an HTTP streaming route, or the MCP control-plane surface. Durable replay (`subscribe since X`) is deferred and requires a database-backed event store with stream generations, sequence numbers, retention, and reset semantics; see [change-events.md](../specs/change-events.md).
 
@@ -268,7 +268,7 @@ Consumers subscribe through `hmn vault watch`, an HTTP streaming route, or the M
 
 ### Security
 
-Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint beyond that (local-only assumption). The daemon reads the vault; it never writes. There is no upload path, no config-endpoint mutation, no privileged operation.
+Hypomnema binds to localhost by default today. No authentication on the HTTP endpoint beyond that local-only assumption. The daemon reads the vault; it never writes. There is no upload path, no config-endpoint mutation, no privileged operation.
 
 ### Logging & Observability
 
@@ -303,7 +303,7 @@ Hypomnema binds to localhost only in v0. No authentication on the HTTP endpoint 
 | Watcher event storms during sync-tool operations | Spurious reindexes; wasted CPU; sync-loop feedback | Debouncer + content-hash check + conflict-filename filter (see `.claude/skills/filesystem-watching/`) |
 | Blocking the async runtime with rusqlite calls | Daemon deadlocks; search requests hang | All SQL via `spawn_blocking` without exception (see `.claude/skills/rusqlite-in-async/`) |
 | Live-only event delivery | Consumers can miss events while disconnected or lagging | Events are invalidation hints; consumers re-query the index to recover. Durable replay is deferred to a future event-store design. |
-| Model switching is a re-index | Migrating to a different embedding model is an operation, not a config flip | Documented; considered acceptable for v0 scope (see [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
+| Model switching is a re-index | Migrating to a different embedding model is an operation, not a config flip | Documented; considered acceptable for the current local-index design (see [ADR-0007](../decisions/0007-sqlite-vec-over-alternatives.md)) |
 | Concurrent control-plane operations on same vault | Race in registry mutations or per-vault state | Operations on the same vault are serialized at the daemon; operations on different vaults run in parallel ([ADR-0010](../decisions/0010-vault-definitions-as-runtime-state.md)) |
 | Vault registry corruption | `vaults.sqlite` partial write or filesystem damage | Atomic write semantics for control-plane mutations; daemon refuses to serve on read failure until the file is restored |
 | Pagination across N independent indexes | Each per-vault index has its own SQL pagination cursor; combining them across vaults requires either a global cursor (heavy) or a fan-in re-merge per page (state-ful). Step 10 ships unpaginated cross-vault search; large multi-vault result sets must use `--limit`. | Deferred to round 4+ per [`docs/specs/vault-management.md` § Open Questions](../specs/vault-management.md#open-questions); wire shape stays forward-compat (request-side cursor field is reserved). |

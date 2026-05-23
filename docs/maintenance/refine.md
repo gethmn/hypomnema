@@ -345,7 +345,7 @@ For each document, compare against its template:
 | Layer | Template | Required Sections |
 |-------|----------|-------------------|
 | Decisions | MADR | Title, Status, Context, Decision, Consequences |
-| Vision | Lean PRD | Problem, Solution, Success Criteria, Non-Goals |
+| Vision | Lean PRD | Problem, Solution, Completion Record, Current Product Boundaries |
 | Architecture | C4-Lite | Context, Containers, Communication, Cross-Cutting |
 | Specifications | Feature Spec | Overview, Behavior, Edge Cases, Examples |
 | Reference | CLI | Commands, Options, Examples |
