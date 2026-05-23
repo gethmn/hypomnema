@@ -148,13 +148,15 @@ impl<'a> Chunker<'a> {
                         &format!("heading:{}", heading_label(*level)),
                     );
                 }
+                // A heading always opens its chunk with a heading boundary. A
+                // pending thematic break (e.g. `---` immediately before this
+                // heading) is already recorded as the previous chunk's
+                // boundary_end, so clear it rather than mislabeling this chunk.
+                self.pending_boundary_start = None;
                 self.open_chunk = Some(OpenChunk {
                     start: range.start,
                     heading_path: String::new(),
-                    boundary_start: self
-                        .pending_boundary_start
-                        .take()
-                        .unwrap_or_else(|| format!("heading:{}", heading_label(*level))),
+                    boundary_start: format!("heading:{}", heading_label(*level)),
                 });
                 opened_via_heading = true;
             }
@@ -508,6 +510,25 @@ mod tests {
         assert!(!chunks[1].content.contains("---"));
         assert!(!chunks[2].content.contains("---"));
         assert_indices_contiguous(&chunks);
+    }
+
+    #[test]
+    fn thematic_break_immediately_before_heading_keeps_heading_boundary() {
+        // `---` directly before a heading closes the prior chunk (boundary_end
+        // = thematic_break) but the heading-opened chunk must report a heading
+        // boundary_start, not inherit the pending thematic break.
+        let input = "# Doc\n\n## A\n\nFirst.\n\n---\n\n## B\n\nSecond.\n";
+        let chunks = chunk_file(input);
+        let a = chunks
+            .iter()
+            .find(|c| c.content.contains("First"))
+            .expect("chunk with First");
+        let b = chunks
+            .iter()
+            .find(|c| c.content.contains("Second"))
+            .expect("chunk with Second");
+        assert_eq!(a.boundary_end, "thematic_break");
+        assert_eq!(b.boundary_start, "heading:h2");
     }
 
     #[test]

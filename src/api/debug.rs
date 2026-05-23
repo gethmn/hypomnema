@@ -366,7 +366,9 @@ fn build_diff(indexed: &[StoredChunk], preview: &[Chunk]) -> DebugChunksDiff {
             || stored.start_byte != chunk.start_byte
             || stored.end_byte != chunk.end_byte
         {
-            changed_chunks.push(idx as u32);
+            // Report the chunk's index, not the loop position, to stay
+            // consistent with added_preview_chunks / removed_indexed_chunks.
+            changed_chunks.push(stored.chunk_index);
         }
     }
     DebugChunksDiff {
@@ -406,12 +408,20 @@ fn summarize(chunks: &[DebugChunkJson]) -> DebugChunksSummary {
             .iter()
             .filter(|chunk| chunk.diagnostics.code_heavy)
             .count(),
-        thematic_break_boundaries: chunks
-            .iter()
-            .filter(|chunk| {
-                chunk.boundary_start == "thematic_break" || chunk.boundary_end == "thematic_break"
-            })
-            .count(),
+        // Each internal thematic break appears as one chunk's boundary_end and
+        // the next chunk's boundary_start; count boundary_end to avoid
+        // double-counting, plus the leading-break case where the first chunk
+        // starts at a break with no preceding chunk to close.
+        thematic_break_boundaries: {
+            let ended_at_break = chunks
+                .iter()
+                .filter(|chunk| chunk.boundary_end == "thematic_break")
+                .count();
+            let leading_break = chunks
+                .first()
+                .is_some_and(|chunk| chunk.boundary_start == "thematic_break");
+            ended_at_break + usize::from(leading_break)
+        },
     }
 }
 
@@ -453,4 +463,75 @@ fn validate_path(path: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn debug_chunk(chunk_index: u32, boundary_start: &str, boundary_end: &str) -> DebugChunkJson {
+        DebugChunkJson {
+            chunk_index,
+            start_byte: 0,
+            end_byte: 1,
+            byte_len: 1,
+            heading_path: Vec::new(),
+            boundary_start: boundary_start.to_string(),
+            boundary_end: boundary_end.to_string(),
+            content_hash: "sha256:00".to_string(),
+            text: None,
+            text_kind: None,
+            text_truncated: None,
+            diagnostics: DebugChunkDiagnosticsJson {
+                fenced_code_blocks: 0,
+                fenced_code_bytes: 0,
+                fenced_code_languages: Vec::new(),
+                code_heavy: false,
+                thematic_breaks: 0,
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn thematic_break_boundaries_counts_each_internal_break_once() {
+        // One internal break: chunk 0 ends at it, chunk 1 starts at it.
+        let chunks = vec![
+            debug_chunk(0, "document_start", "thematic_break"),
+            debug_chunk(1, "thematic_break", "document_end"),
+        ];
+        assert_eq!(summarize(&chunks).thematic_break_boundaries, 1);
+    }
+
+    #[test]
+    fn thematic_break_boundaries_counts_leading_break() {
+        // Leading break: first chunk starts at a break with nothing to close.
+        let chunks = vec![debug_chunk(0, "thematic_break", "document_end")];
+        assert_eq!(summarize(&chunks).thematic_break_boundaries, 1);
+    }
+
+    #[test]
+    fn changed_chunks_reports_chunk_index_not_position() {
+        // A single stored/preview chunk at position 0 whose chunk_index is 5
+        // and whose content_hash differs must report 5, not 0.
+        let indexed = vec![StoredChunk {
+            chunk_index: 5,
+            heading_path: String::new(),
+            content: "a".to_string(),
+            content_hash: "sha256:a".to_string(),
+            start_byte: 0,
+            end_byte: 1,
+        }];
+        let preview = vec![Chunk {
+            chunk_index: 5,
+            heading_path: String::new(),
+            content: "b".to_string(),
+            content_hash: "sha256:b".to_string(),
+            start_byte: 0,
+            end_byte: 1,
+            boundary_start: "document_start".to_string(),
+            boundary_end: "document_end".to_string(),
+        }];
+        assert_eq!(build_diff(&indexed, &preview).changed_chunks, vec![5]);
+    }
 }
