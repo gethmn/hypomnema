@@ -12,9 +12,11 @@ use crate::api::BootstrapState;
 
 // Step-9 multi-vault behavior:
 //
-// - With **N=1** active vaults the response is byte-identical to v0.1.0
-//   (single vault path + indexed_file_count) at the top level. The new
-//   `vaults` array (Step 24) carries per-vault detail additively.
+// - With **N=1** active vaults the legacy top-level fields (single vault
+//   path + indexed_file_count + last_indexed_at) are unchanged from v0.1.0,
+//   so v0 clients that read only those keep working. The serialized JSON is
+//   no longer byte-identical: Step 24 always emits a non-empty `vaults`
+//   array carrying per-vault detail additively.
 // - With **N=0** active vaults (Resolution E Case 2 — fresh install / zero
 //   registered vaults) we return an empty representative: empty vault path,
 //   zero counts, empty `vaults` array.

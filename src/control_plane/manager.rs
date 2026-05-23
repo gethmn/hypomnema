@@ -1508,6 +1508,19 @@ pub(crate) async fn wait_for_bootstrap(
     rx.wait_for(|done| *done)
         .await
         .map_err(|e| ControlPlaneError::Internal(anyhow::anyhow!(e)))?;
+    // The latch flips for both terminal states; tests that call this expect a
+    // *successful* initial scan, so surface `Errored` here rather than letting
+    // it mask a failure in a later, less actionable assertion.
+    let entry = runner.entry();
+    let state = entry
+        .bootstrap_state
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    if let BootstrapState::Errored(msg) = &*state {
+        return Err(ControlPlaneError::Internal(anyhow::anyhow!(
+            "bootstrap for vault {name_or_id} errored: {msg}"
+        )));
+    }
     Ok(())
 }
 

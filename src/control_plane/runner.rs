@@ -20,12 +20,15 @@ pub struct VaultRunner {
     /// changing the runners-map membership. Step-10's create/terminate take
     /// the outer RwLock instead.
     pub(crate) op_lock: Mutex<()>,
-    /// Background bootstrap (initial-scan) task. `Some` while the scan is
-    /// running or before the lifecycle is installed; the background task
-    /// itself drops the slot to `None` when it finishes (see step 24's
-    /// async-bootstrap path). Held in an `Arc<Mutex<>>` so the spawned task
-    /// can clean its own slot up on completion without going through the
-    /// runner.
+    /// Background bootstrap (initial-scan) task. Holds the bootstrap task's
+    /// shutdown sender + join handle (see step 24's async-bootstrap path).
+    /// `Some` once the manager installs the lifecycle after
+    /// `spawn_runner_parts` returns; the slot is *not* cleared by the
+    /// bootstrap task on completion — it stays `Some` until
+    /// `shutdown_with_timeout` `take`s it (or a resume/reset overwrites it
+    /// with a fresh bootstrap). Held in an `Arc<Mutex<>>` so the manager can
+    /// install it post-spawn and shutdown can drain it without an exclusive
+    /// borrow of the runner.
     pub(crate) bootstrap: Arc<Mutex<Option<BootstrapLifecycle>>>,
     /// Lifecycle handles for the watcher + consumer task. `None` until the
     /// bootstrap task installs them on scan success; remains `None` after

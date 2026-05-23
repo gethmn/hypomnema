@@ -1138,10 +1138,14 @@ async fn spawn_live_daemon_with_errored_row(
 /// initial scan into a background task; integration tests that read post-scan
 /// invariants (chunk counts, search results) need this rendezvous.
 ///
-/// Returns the terminal `state` string. Panics if the wait exceeds 10 s,
-/// which is well above the StubEmbedder + tempdir scan time but tight enough
-/// that a deadlocked bootstrap fails the test rather than the suite-level
-/// timeout.
+/// Returns the terminal `state` string (always `"ready"` on a normal return).
+/// Panics if the wait exceeds 10 s — well above the StubEmbedder + tempdir
+/// scan time but tight enough that a deadlocked bootstrap fails the test
+/// rather than the suite-level timeout. Also panics (surfacing
+/// `bootstrap.message`) if the terminal state is `errored`: every call site
+/// expects a successful initial scan, so a failed bootstrap should fail the
+/// test loudly here rather than mask itself in a later, less actionable
+/// assertion.
 async fn wait_for_bootstrap_http(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> String {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -1162,7 +1166,13 @@ async fn wait_for_bootstrap_http(daemon: &LiveControlPlaneDaemon, vault_name: &s
                         .as_str()
                         .unwrap_or_default()
                         .to_string();
-                    if state == "ready" || state == "errored" {
+                    if state == "errored" {
+                        let message = v["bootstrap"]["message"].as_str().unwrap_or("<none>");
+                        panic!(
+                            "wait_for_bootstrap_http: vault {vault_name} bootstrap errored: {message}"
+                        );
+                    }
+                    if state == "ready" {
                         return state;
                     }
                 }
