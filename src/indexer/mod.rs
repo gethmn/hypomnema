@@ -634,13 +634,14 @@ fn remove_blocking(rel: String, pool: SqlitePool) -> Result<RemoveOutcome> {
         )
         .optional()
         .with_context(|| format!("reading prior content_hash for {rel}"))?;
-    let Some(previous_hash) = prior else {
-        return Ok(RemoveOutcome::NotPresent);
-    };
     // Reuse the full-scan deletion helper so the live watcher path removes every
     // index artifact (chunks_vec, chunks, files_fts, files) — the FTS row was
     // previously left behind here, orphaning inverted-index entries.
     delete_file_in_tx(&tx, &rel)?;
+    let Some(previous_hash) = prior else {
+        tx.commit().context("committing remove transaction")?;
+        return Ok(RemoveOutcome::NotPresent);
+    };
     tx.commit().context("committing remove transaction")?;
     Ok(RemoveOutcome::Removed { previous_hash })
 }
