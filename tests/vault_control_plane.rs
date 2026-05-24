@@ -214,6 +214,7 @@ async fn spawn_multi_vault_daemon_with(
             vault_path: vault_dir.path().to_path_buf(),
             store,
             status: VaultStatus::Active,
+            bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
         };
         pools.push(pool);
         ids.push(vault_id);
@@ -1132,6 +1133,60 @@ async fn spawn_live_daemon_with_errored_row(
     )
 }
 
+/// Poll the daemon's `/status` endpoint until the named vault's bootstrap
+/// block reaches a terminal state (`ready` or `errored`). Step 24 split the
+/// initial scan into a background task; integration tests that read post-scan
+/// invariants (chunk counts, search results) need this rendezvous.
+///
+/// Returns the terminal `state` string (always `"ready"` on a normal return).
+/// Panics if the wait exceeds 10 s — well above the StubEmbedder + tempdir
+/// scan time but tight enough that a deadlocked bootstrap fails the test
+/// rather than the suite-level timeout. Also panics (surfacing
+/// `bootstrap.message`) if the terminal state is `errored`: every call site
+/// expects a successful initial scan, so a failed bootstrap should fail the
+/// test loudly here rather than mask itself in a later, less actionable
+/// assertion.
+async fn wait_for_bootstrap_http(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let body: Value = http_client()
+            .get(format!("{}/status", daemon.base_url))
+            .send()
+            .await
+            .expect("GET /status")
+            .error_for_status()
+            .expect("status 2xx")
+            .json()
+            .await
+            .expect("status JSON");
+        if let Some(vaults) = body.get("vaults").and_then(|v| v.as_array()) {
+            for v in vaults {
+                if v.get("name").and_then(|n| n.as_str()) == Some(vault_name) {
+                    let state = v["bootstrap"]["state"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    if state == "errored" {
+                        let message = v["bootstrap"]["message"].as_str().unwrap_or("<none>");
+                        panic!(
+                            "wait_for_bootstrap_http: vault {vault_name} bootstrap errored: {message}"
+                        );
+                    }
+                    if state == "ready" {
+                        return state;
+                    }
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "wait_for_bootstrap_http: vault {vault_name} did not finish bootstrap within 10s"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 async fn count_chunks_for_vault(daemon: &LiveControlPlaneDaemon, vault_name: &str) -> i64 {
     // Drive the SQL through the public HTTP semantic-search endpoint? No —
     // we want a direct chunk count. Re-open the per-vault store read-only
@@ -1186,6 +1241,7 @@ async fn http_pause_then_resume_round_trip() {
         .await
         .expect("create JSON");
     assert_eq!(create["status"], "active");
+    wait_for_bootstrap_http(&daemon, "round-trip").await;
 
     // Pause — assert returned row carries status=paused.
     let paused: Value = http_client()
@@ -1316,6 +1372,7 @@ async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
         .expect("create")
         .error_for_status()
         .expect("create 2xx");
+    wait_for_bootstrap_http(&daemon, "rebuild-target").await;
 
     let chunks_before = count_chunks_for_vault(&daemon, "rebuild-target").await;
     assert!(
@@ -1337,6 +1394,7 @@ async fn http_reset_with_rebuild_clears_chunks_chunks_vec_and_content_hash() {
         .await
         .expect("reset JSON");
     assert_eq!(body["status"], "active");
+    wait_for_bootstrap_http(&daemon, "rebuild-target").await;
 
     let chunks_after = count_chunks_for_vault(&daemon, "rebuild-target").await;
     assert_eq!(chunks_after, 0, "rebuild should clear chunks");
@@ -1393,6 +1451,7 @@ async fn http_rename_updates_search_response_vault_name() {
         .await
         .expect("create JSON");
     let vault_id_before = create["id"].as_str().unwrap().to_string();
+    wait_for_bootstrap_http(&daemon, "oldname").await;
 
     // Pre-rename search carries vault_name=oldname.
     let body: Value = http_client()
@@ -1468,6 +1527,7 @@ async fn http_rescan_re_indexes_all_files_after_rebuild() {
         .expect("create")
         .error_for_status()
         .expect("create 2xx");
+    wait_for_bootstrap_http(&daemon, "rescanned").await;
 
     let vault_id = resolve_vault_id(&daemon, "rescanned").await;
 
@@ -1480,6 +1540,7 @@ async fn http_rescan_re_indexes_all_files_after_rebuild() {
         .expect("reset")
         .error_for_status()
         .expect("reset 2xx");
+    wait_for_bootstrap_http(&daemon, "rescanned").await;
 
     // Verify content_hash is empty after rebuild.
     let index_path = daemon

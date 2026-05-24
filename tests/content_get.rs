@@ -147,6 +147,7 @@ async fn content_get_single_file_retrieval() {
         vault_path: vault_dir.path().to_path_buf(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     let daemon = spawn_daemon_with_entries(vec![entry], root, vec![vault_dir]).await;
@@ -213,6 +214,7 @@ async fn content_get_multi_file_with_missing() {
         vault_path: vault_dir.path().to_path_buf(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     let daemon = spawn_daemon_with_entries(vec![entry], root, vec![vault_dir]).await;
@@ -323,6 +325,7 @@ async fn content_get_multi_vault_fanout() {
         vault_path: vault_dir_a.path().to_path_buf(),
         store: Arc::new(store_a),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let entry_b = VaultEntry {
         id: vault_id_b.clone(),
@@ -330,6 +333,7 @@ async fn content_get_multi_vault_fanout() {
         vault_path: vault_dir_b.path().to_path_buf(),
         store: Arc::new(store_b),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(DIM as usize));
@@ -448,6 +452,7 @@ async fn content_get_explicit_vault_scoping() {
         vault_path: vault_dir_1.path().to_path_buf(),
         store: Arc::new(store_1),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let entry_2 = VaultEntry {
         id: vault_id_2.clone(),
@@ -455,6 +460,7 @@ async fn content_get_explicit_vault_scoping() {
         vault_path: vault_dir_2.path().to_path_buf(),
         store: Arc::new(store_2),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(DIM as usize));
@@ -545,6 +551,7 @@ async fn content_get_paused_vault_behavior() {
         vault_path: vault_dir_active.path().to_path_buf(),
         store: Arc::new(store_active),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     // Paused vault row — no runner, no store
@@ -673,6 +680,7 @@ async fn content_get_transport_parity_http_vs_mcp_backend() {
         vault_path: vault_dir.path().to_path_buf(),
         store: store.clone(),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
 
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder::new(DIM as usize));

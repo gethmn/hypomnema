@@ -14,7 +14,7 @@ use crate::config::{
     Config, ConfigPath, EmbeddingConfig, HttpConfig, LoggingConfig, McpConfig, StorageConfig,
     WatcherConfig,
 };
-use crate::control_plane::VaultManager;
+use crate::control_plane::{VaultManager, wait_for_bootstrap};
 use crate::embedding::{EmbedFuture, Embedder, EmbeddingError, StubEmbedder};
 use crate::store::{SqlitePool, Store};
 use crate::vault_registry::{VaultId, VaultRegistry, VaultRow, VaultStatus};
@@ -63,6 +63,7 @@ async fn harness_with_embedder(embedder: Arc<dyn Embedder>) -> Harness {
         vault_path: vault.path().to_path_buf(),
         store,
         status: VaultStatus::Active,
+        bootstrap_state: crate::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, 768));
     let state = ApiState {
@@ -814,6 +815,17 @@ async fn create_vault_via_api(
     let resp = app.oneshot(req).await.unwrap();
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK, "create returned {body}");
+    // Step 24 made create return as soon as the store is open (bootstrap
+    // runs in a background task). Existing tests that read post-scan
+    // invariants (chunk counts, file counts, semantic search) need a
+    // rendezvous with the in-flight scan; do it here so each call site
+    // doesn't need to repeat the wait.
+    let vault_name = body["name"].as_str().unwrap_or_default().to_string();
+    if !vault_name.is_empty() {
+        wait_for_bootstrap(&state.vault_manager, &vault_name)
+            .await
+            .expect("wait_for_bootstrap after create");
+    }
     body
 }
 
@@ -1098,6 +1110,7 @@ async fn multi_vault_harness_with(
             vault_path: vault_dir.path().to_path_buf(),
             store,
             status: VaultStatus::Active,
+            bootstrap_state: crate::api::BootstrapState::ready_state(),
         };
         pools.push(pool);
         ids.push(vault_id);
@@ -1837,6 +1850,9 @@ async fn post_vaults_reset_with_rebuild_true_returns_200_and_clears_chunks() {
     let (status, body) = body_json(resp).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "active");
+    wait_for_bootstrap(&h.state.vault_manager, "rebuild-target")
+        .await
+        .unwrap();
 
     let chunks_after = count_chunks_via_manager(&h.state).await;
     assert_eq!(
@@ -1983,6 +1999,7 @@ async fn watch_harness() -> WatchHarness {
         vault_path: vault.path().to_path_buf(),
         store,
         status: VaultStatus::Active,
+        bootstrap_state: crate::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],
@@ -2146,6 +2163,7 @@ async fn watch_all_streams_events_from_all_active_vaults() {
             vault_path: vault_dir.path().to_path_buf(),
             store,
             status: VaultStatus::Active,
+            bootstrap_state: crate::api::BootstrapState::ready_state(),
         });
         pools.push(pool);
         ids.push(vault_id);
@@ -2215,6 +2233,7 @@ async fn watch_all_filters_out_inactive_vault_events() {
         vault_path: vault_dir.path().to_path_buf(),
         store,
         status: VaultStatus::Active,
+        bootstrap_state: crate::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],

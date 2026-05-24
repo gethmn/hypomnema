@@ -99,6 +99,7 @@ async fn build_vault_entry(
         vault_path: row.path.clone(),
         store: Arc::new(store),
         status: row.status,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     }
 }
 

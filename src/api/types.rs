@@ -456,6 +456,37 @@ pub struct StatusResponse {
     pub vault: String,
     pub indexed_file_count: u64,
     pub last_indexed_at: Option<String>,
+    /// Per-vault entries with bootstrap (initial-scan) state. Additive in
+    /// Step 24; v0 clients ignoring unknown fields continue to work. Top-level
+    /// `vault` / `indexed_file_count` / `last_indexed_at` remain populated for
+    /// back-compat.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vaults: Vec<VaultStatusEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultStatusEntry {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub indexed_file_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_indexed_at: Option<String>,
+    pub bootstrap: BootstrapBlock,
+}
+
+/// In-memory bootstrap (initial-scan) state for a vault. Pulled from the
+/// vault manager at /status query time; never persisted. `state` is
+/// `"indexing"` | `"ready"` | `"errored"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapBlock {
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    pub files_seen: u64,
+    pub files_indexed: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

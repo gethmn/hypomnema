@@ -122,6 +122,7 @@ async fn spawn_smoke_daemon() -> SmokeDaemon {
         vault_path: vault_dir,
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(vec![entry], embedder, DIM as u32));
     let api_state = ApiState {

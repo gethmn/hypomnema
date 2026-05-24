@@ -116,6 +116,7 @@ async fn spawn_seeded_daemon_with_embedder(
             vault_path: vault_dir.path().to_path_buf(),
             store,
             status: VaultStatus::Active,
+            bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
         });
         pools.push(pool);
         names.push((*name).to_string());

@@ -42,7 +42,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 const DEBOUNCE_MS: u64 = 50;
-const SETTLE: Duration = Duration::from_millis(4 * DEBOUNCE_MS);
+const SETTLE: Duration = Duration::from_millis(6 * DEBOUNCE_MS);
 const SCHEMA_DIM: usize = 768;
 
 // ===== Stub embedding service =====
@@ -313,6 +313,7 @@ async fn spawn_live_daemon_with_embedder(fx: Fixture, embedder: Arc<dyn Embedder
         vault_path: fx.vault.clone(),
         store: Arc::new(store),
         status: VaultStatus::Active,
+        bootstrap_state: hypomnema::api::BootstrapState::ready_state(),
     };
     let manager = Arc::new(VaultManager::for_tests(
         vec![entry],
