@@ -623,6 +623,9 @@ fn remove_blocking(rel: String, pool: SqlitePool) -> Result<RemoveOutcome> {
         .get()
         .context("acquiring connection from pool for remove_path")?;
     let tx = conn.transaction().context("beginning remove transaction")?;
+    // `files.content_hash` is NOT NULL, so a `Some` here means the row exists and
+    // doubles as the prior hash for `RemoveOutcome::Removed`; `None` means nothing
+    // is indexed at this path.
     let prior: Option<String> = tx
         .query_row(
             "SELECT content_hash FROM files WHERE path = ?1",
@@ -631,22 +634,15 @@ fn remove_blocking(rel: String, pool: SqlitePool) -> Result<RemoveOutcome> {
         )
         .optional()
         .with_context(|| format!("reading prior content_hash for {rel}"))?;
-    tx.execute(
-        "DELETE FROM chunks_vec WHERE chunk_id IN (SELECT id FROM chunks WHERE file_path = ?1)",
-        params![rel],
-    )
-    .with_context(|| format!("deleting chunks_vec rows for {rel}"))?;
-    tx.execute("DELETE FROM chunks WHERE file_path = ?1", params![rel])
-        .with_context(|| format!("deleting chunks rows for {rel}"))?;
-    let n = tx
-        .execute("DELETE FROM files WHERE path = ?1", params![rel])
-        .with_context(|| format!("deleting files row for {rel}"))?;
+    let Some(previous_hash) = prior else {
+        return Ok(RemoveOutcome::NotPresent);
+    };
+    // Reuse the full-scan deletion helper so the live watcher path removes every
+    // index artifact (chunks_vec, chunks, files_fts, files) — the FTS row was
+    // previously left behind here, orphaning inverted-index entries.
+    delete_file_in_tx(&tx, &rel)?;
     tx.commit().context("committing remove transaction")?;
-    Ok(match (n, prior) {
-        (0, _) => RemoveOutcome::NotPresent,
-        (_, Some(h)) => RemoveOutcome::Removed { previous_hash: h },
-        (_, None) => RemoveOutcome::NotPresent,
-    })
+    Ok(RemoveOutcome::Removed { previous_hash })
 }
 
 #[cfg(test)]
@@ -808,6 +804,26 @@ mod tests {
             let conn = pool.get().unwrap();
             conn.query_row("SELECT COUNT(*) FROM chunks_vec", [], |r| r.get(0))
                 .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Count `files_fts` index entries that match `term`. Because `files_fts` is
+    /// an external-content FTS5 table, an orphaned inverted-index entry (one whose
+    /// backing `files` row was deleted without a matching FTS delete) still matches
+    /// here — which is exactly the cleanup gap a delete path must close.
+    async fn count_fts_match(store: &Store, term: &str) -> i64 {
+        let pool = store.pool();
+        let term = term.to_string();
+        task::spawn_blocking(move || -> i64 {
+            let conn = pool.get().unwrap();
+            conn.query_row(
+                "SELECT COUNT(*) FROM files_fts WHERE files_fts MATCH ?1",
+                params![term],
+                |r| r.get(0),
+            )
+            .unwrap()
         })
         .await
         .unwrap()
@@ -1230,6 +1246,38 @@ mod tests {
         let outcome = scanner.remove_path("ghost.md").await.unwrap();
         assert_eq!(outcome, RemoveOutcome::NotPresent);
         assert_eq!(count_files(&store).await, 0);
+    }
+
+    #[tokio::test]
+    async fn remove_path_clears_files_fts_entry() {
+        // Regression: the live `remove_path` cleanup once deleted chunks_vec,
+        // chunks, and the `files` row but left the `files_fts` entry behind,
+        // orphaning inverted-index entries in the external-content FTS5 table.
+        let vault_dir = tempdir().unwrap();
+        let data_dir = tempdir().unwrap();
+        let path = vault_dir.path().join("hello.md");
+        fs::write(&path, b"# hi\n\nzorptfindme body text").unwrap();
+
+        let config = smoke_config(vault_dir.path());
+        let store = Store::open(
+            &VaultId::new(),
+            data_dir.path(),
+            "index.sqlite",
+            &config.embedding,
+        )
+        .await
+        .unwrap();
+        let scanner = stub_scanner(&config, &store);
+        scanner.reindex_path("hello.md").await.unwrap();
+        assert_eq!(count_fts_match(&store, "zorptfindme").await, 1);
+
+        scanner.remove_path("hello.md").await.unwrap();
+
+        // Backing row, chunks, vectors, and the FTS entry must all be gone.
+        assert_eq!(count_files(&store).await, 0);
+        assert_eq!(count_chunks_for(&store, "hello.md").await, 0);
+        assert_eq!(count_chunks_vec(&store).await, 0);
+        assert_eq!(count_fts_match(&store, "zorptfindme").await, 0);
     }
 
     #[tokio::test]
