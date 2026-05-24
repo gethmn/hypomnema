@@ -228,8 +228,9 @@ pub struct SemanticDocumentResultJson {
 /// Deliberately omits `path` and `content_hash`: the parent
 /// [`SemanticDocumentResultJson`] carries the canonical source reference, and
 /// every evidence chunk in a document shares the parent's exact `path` and
-/// `content_hash` — they are the document grouping key
-/// (`(vault_id, file_path, content_hash)`; see `api::search`). Repeating them on
+/// `content_hash` — they are the document grouping key `(vault, path,
+/// content_hash)` (keyed internally on the `file_path` store column in
+/// `api::search`). Repeating them on
 /// each chunk would be pure duplication, so the source reference lives only on
 /// the parent. Flat chunk-mode results ([`SemanticResultJson`]) carry both
 /// because they have no parent. See `docs/specs/semantic-search.md`
