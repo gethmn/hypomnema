@@ -485,24 +485,6 @@ async fn spawn_vault_daemon() -> VaultDaemon {
     }
 }
 
-/// Poll `hmn --json vault status <name>` until the vault reports `active`, so
-/// the parity snapshots are taken against a settled (not mid-bootstrap) state.
-async fn wait_for_active(daemon: &VaultDaemon, name: &str) {
-    for _ in 0..100 {
-        let status = run_hmn_json(
-            &daemon.cfg_path,
-            &daemon.base_url,
-            &["vault", "status", name],
-        )
-        .await;
-        if status["status"].as_str() == Some("active") {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("vault `{name}` did not reach `active` within timeout");
-}
-
 // ===== Tests =====
 
 #[tokio::test]
@@ -753,8 +735,12 @@ async fn cli_mcp_parity_content_get() {
 async fn cli_mcp_parity_vault_list_and_status() {
     let daemon = spawn_vault_daemon().await;
 
-    // Register one (empty) vault via the CLI so list/status have a subject;
-    // an empty vault settles immediately, keeping the parity snapshots stable.
+    // Register one vault via the CLI so list/status have a subject. No
+    // settle-wait is needed: `vault_list`/`vault_status` return `VaultRowJson`
+    // (id, name, path, status, created_at, last_error) — none of which are
+    // index-derived or time-varying once `create` returns `active`, so the
+    // back-to-back CLI and MCP snapshots are deterministically identical. (The
+    // bootstrap/indexing progress block lives on `/status`, not the vault row.)
     let vault_dir = daemon.root.path().join("parity-vault");
     std::fs::create_dir_all(&vault_dir).expect("create vault dir");
     let created = run_hmn_json(
@@ -774,7 +760,6 @@ async fn cli_mcp_parity_vault_list_and_status() {
         Some("active"),
         "create: {created:#}"
     );
-    wait_for_active(&daemon, "parity").await;
 
     // The registry-backed daemon mounts only the HTTP api router, so reach MCP
     // through `hmn mcp` (stdio), which proxies to the same daemon over HTTP.
