@@ -355,7 +355,7 @@ Expect `"active"`. The full nine-operation lifecycle is exercised in
 [`05-vault-management.md`](./05-vault-management.md); the MCP tool
 shapes mirror the CLI surface 1:1.
 
-### H. Invalid glob → `structured_error`
+### H. Invalid glob → `structuredError`
 
 ```bash
 /tmp/mcp-drive.py '{"method":"tools/call","params":{
@@ -423,7 +423,7 @@ The configured daemon URL is embedded verbatim in the error message
 the wrong port). The `hmn mcp` process **does not** exit with code 4
 when the daemon is unreachable — that exit-code-4 mapping is for
 `hmn search …` mode. In MCP mode the connect error is reported via
-`structured_error` and the process keeps serving (it exits only on
+`structuredError` and the process keeps serving (it exits only on
 stdin close).
 
 Restart `hmnd` in terminal A before continuing.
