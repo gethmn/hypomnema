@@ -224,6 +224,16 @@ pub struct SemanticDocumentResultJson {
 }
 
 /// One evidence chunk nested inside a document-granularity result.
+///
+/// Deliberately omits `path` and `content_hash`: the parent
+/// [`SemanticDocumentResultJson`] carries the canonical source reference, and
+/// every evidence chunk in a document shares the parent's exact `path` and
+/// `content_hash` — they are the document grouping key
+/// (`(vault_id, file_path, content_hash)`; see `api::search`). Repeating them on
+/// each chunk would be pure duplication, so the source reference lives only on
+/// the parent. Flat chunk-mode results ([`SemanticResultJson`]) carry both
+/// because they have no parent. See `docs/specs/semantic-search.md`
+/// § "Evidence chunk fields".
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct SemanticEvidenceChunkJson {
@@ -902,5 +912,22 @@ mod tests {
         );
         assert_eq!(chunk["chunk_index"].as_u64(), Some(1));
         assert_eq!(chunk["text"].as_str(), Some("evidence text"));
+        // Evidence chunks deliberately omit the source reference: the parent
+        // document carries `path`/`content_hash` and every chunk shares the
+        // parent's values (the grouping key). This is an intentional contract,
+        // not accidental drift — see SemanticEvidenceChunkJson docs and
+        // docs/specs/semantic-search.md § "Evidence chunk fields".
+        assert!(
+            chunk.get("path").is_none(),
+            "evidence chunk must not emit `path` (lives on parent document)"
+        );
+        assert!(
+            chunk.get("file_path").is_none(),
+            "evidence chunk must not emit `file_path` (no path synonyms)"
+        );
+        assert!(
+            chunk.get("content_hash").is_none(),
+            "evidence chunk must not emit `content_hash` (lives on parent document)"
+        );
     }
 }

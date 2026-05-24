@@ -632,6 +632,21 @@ async fn smoke_mode8_document_mode_full_text_nested() {
                 CHUNK_SIZE,
                 "full text must be the complete {CHUNK_SIZE}-byte chunk"
             );
+            // Evidence chunks deliberately omit the source reference; the parent
+            // document carries `path`/`content_hash` (the grouping key). This is
+            // an intentional contract over the live daemon, not accidental drift.
+            assert!(
+                chunk.get("path").is_none(),
+                "evidence chunk must not emit `path`"
+            );
+            assert!(
+                chunk.get("file_path").is_none(),
+                "evidence chunk must not emit `file_path`"
+            );
+            assert!(
+                chunk.get("content_hash").is_none(),
+                "evidence chunk must not emit `content_hash`"
+            );
         }
     }
 
