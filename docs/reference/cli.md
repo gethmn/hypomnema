@@ -179,6 +179,8 @@ notes/design/watchers.md  (score: 0.68)
   mtime alone is not enough; compare content hashes…
 ```
 
+In `--json`, the document object carries the source reference (`path`, `content_hash`); its nested evidence chunks carry only `score`, `chunk_index`, `heading_path`, and (unless `--include-text none`) the text fields. Evidence chunks deliberately omit `path`/`content_hash` because every chunk in a document shares the parent's values — read the source reference from the enclosing document. See [`docs/specs/semantic-search.md` § Evidence chunk fields](../specs/semantic-search.md).
+
 **`hmn search semantic` — chunk granularity**: text mode renders one block per chunk (pre-step-25 behavior): a leading `<path>  (score: N.NN)` line, the heading path, and the chunk text. Example:
 
 ```
