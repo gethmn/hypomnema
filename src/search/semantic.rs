@@ -149,6 +149,9 @@ fn classify_embedding_error(e: EmbeddingError) -> SemanticSearchError {
         EmbeddingError::BodyParse(err) => SemanticSearchError::Internal(anyhow::anyhow!(
             "embedding service response could not be parsed: {err}"
         )),
+        EmbeddingError::CountMismatch { expected, actual } => SemanticSearchError::Internal(
+            anyhow::anyhow!("embedding service returned {actual} vectors for {expected} inputs"),
+        ),
     }
 }
 

@@ -370,52 +370,43 @@ impl Scanner {
             UpsertDecision::Reindex { body, new_hash } => (body, new_hash),
         };
 
-        // Phase B (async runtime): chunk synchronously, then embed sequentially.
-        // Plain for-loop per pre-build directive 2 (futures::stream is not in
-        // tree and at v0 batch_size = 1 the stream is one-element anyway).
+        // Phase B (async runtime): chunk synchronously, then embed the whole
+        // file in one batched call. The embedder splits into requests of at
+        // most `embedding.batch_size` inputs and shrinks adaptively if the
+        // service rejects an over-large batch.
         let chunks = chunk::chunk_file(&body);
         let chunk_count = chunks.len();
-        let mut chunks_with_vecs: Vec<(chunk::Chunk, Vec<f32>)> = Vec::with_capacity(chunk_count);
-        for chunk in &chunks {
-            debug!(
-                path = %rel,
-                chunk_index = chunk.chunk_index,
-                chunk_count,
-                bytes = chunk.content.len(),
-                "embedding: starting"
-            );
-            let started = Instant::now();
-            let result = self.embedder.embed_text(&chunk.content).await;
-            match result {
-                Ok(v) => {
-                    debug!(
-                        path = %rel,
-                        chunk_index = chunk.chunk_index,
-                        chunk_count,
-                        elapsed_ms = started.elapsed().as_millis() as u64,
-                        "embedding: complete"
-                    );
-                    chunks_with_vecs.push((chunk.clone(), v));
-                }
-                Err(EmbeddingError::Transport(_))
-                | Err(EmbeddingError::Status {
-                    code: 500..=599, ..
-                })
-                | Err(EmbeddingError::DimensionMismatch { .. }) => {
-                    error!(
-                        path = %rel,
-                        chunk_index = chunk.chunk_index,
-                        "embedding service failure, skipping file"
-                    );
-                    return Ok(ProcessEffect::EmbeddingSkipped);
-                }
-                Err(e) => {
-                    return Err(anyhow::Error::new(e)).with_context(|| {
-                        format!("embedding chunk {} for {}", chunk.chunk_index, rel)
-                    });
-                }
+        let texts: Vec<String> = chunks.iter().map(|c| c.content.clone()).collect();
+        debug!(path = %rel, chunk_count, "embedding: starting batch");
+        let started = Instant::now();
+        let vectors = match self.embedder.embed_batch(&texts).await {
+            Ok(vecs) => {
+                debug!(
+                    path = %rel,
+                    chunk_count,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "embedding: batch complete"
+                );
+                vecs
             }
-        }
+            Err(EmbeddingError::Transport(_))
+            | Err(EmbeddingError::Status {
+                code: 500..=599, ..
+            })
+            | Err(EmbeddingError::DimensionMismatch { .. }) => {
+                error!(
+                    path = %rel,
+                    "embedding service failure, skipping file"
+                );
+                return Ok(ProcessEffect::EmbeddingSkipped);
+            }
+            Err(e) => {
+                return Err(anyhow::Error::new(e))
+                    .with_context(|| format!("embedding {chunk_count} chunks for {rel}"));
+            }
+        };
+        let chunks_with_vecs: Vec<(chunk::Chunk, Vec<f32>)> =
+            chunks.into_iter().zip(vectors).collect();
 
         // Phase C (sync): files row + chunks rewrite in one transaction.
         let pool = self.pool.clone();

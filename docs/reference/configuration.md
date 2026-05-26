@@ -64,7 +64,7 @@ dimension = 768
 api_key = ""   # empty for local services that don't require one
 timeout_ms = 30000   # per-request embed timeout
 max_retries = 1      # retry once on transport error or HTTP 5xx; 250ms backoff
-batch_size = 1       # chunks per embed request (currently always 1)
+batch_size = 16      # max chunks per embed request; shrinks adaptively if rejected
 
 # Watcher tuning
 # The watcher only considers .md files; ignore_patterns further excludes matches within that set.
@@ -188,7 +188,7 @@ The migration is **idempotent and crash-safe**. Each rename is per-file atomic o
 | `api_key` | string | no | `""` | Sent as `Authorization: Bearer` if non-empty |
 | `timeout_ms` | integer | no | `30000` | Per-request timeout for the embed HTTP call, in milliseconds. |
 | `max_retries` | integer | no | `1` | Maximum retries on transport-level failures or HTTP `5xx`. Backoff before retry is 250ms. `4xx` responses are never retried (those are the daemon's bug, not the service's). Set to `0` to disable retries. |
-| `batch_size` | integer | no | `1` | Number of chunks per embed request. Hypomnema currently ships at `1`; future work may promote to batching when chunk volume justifies the coordination cost. |
+| `batch_size` | integer | no | `16` | Maximum number of chunks sent per embed request. A file's chunks are split into requests of this size and concatenated in order. If the service rejects an over-large batch (HTTP `400`/`413`/`422`), the client halves the batch size (floor `1`) and retries, then keeps the learned ceiling for the rest of the daemon's lifetime — so a value above the service's limit self-corrects after a few probe requests. Set at or below the service's max client batch size (e.g. TEI's `max_client_batch_size`, default `32`) to skip the probe entirely. A rejection at size `1` is a hard error (e.g. a single chunk exceeds the model's max input length). |
 
 Changing `dimension` after the index is built is not supported — the vec0 virtual table's dimension is fixed at creation time. A different embedding model with a different dimension requires a re-index (drop + rebuild).
 
