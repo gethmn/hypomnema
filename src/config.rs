@@ -249,6 +249,11 @@ pub struct EmbeddingConfig {
     pub timeout_ms: u64,
     #[serde(default = "default_embedding_max_retries")]
     pub max_retries: u8,
+    /// Maximum chunks sent per embedding request. The client splits a file's
+    /// chunks into requests of this size and shrinks adaptively (halving) if
+    /// the service rejects an over-large batch, so a value above the service's
+    /// limit self-corrects at the cost of a few probe requests. Set at or
+    /// below the service's max client batch size to avoid the probe.
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: u8,
 }
@@ -288,7 +293,7 @@ fn default_embedding_max_retries() -> u8 {
 }
 
 fn default_embedding_batch_size() -> u8 {
-    1
+    16
 }
 
 #[derive(Debug, Clone, Deserialize)]

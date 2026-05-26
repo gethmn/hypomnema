@@ -112,11 +112,17 @@ impl StubServer {
 }
 
 async fn handle_request(mut stream: TcpStream, mode: StubMode) {
-    drain_request(&mut stream).await;
+    let body_bytes = drain_request(&mut stream).await;
+    // Mirror the OpenAI/TEI batch contract: one embedding per `input` element.
+    let input_count = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        .ok()
+        .and_then(|v| v.get("input").and_then(|i| i.as_array().map(|a| a.len())))
+        .unwrap_or(1)
+        .max(1);
     let (status, status_text, body) = match mode {
-        StubMode::Ok => (200u16, "OK", vector_response(SCHEMA_DIM)),
+        StubMode::Ok => (200u16, "OK", vector_response(SCHEMA_DIM, input_count)),
         StubMode::Err503 => (503u16, "Service Unavailable", "service down".to_string()),
-        StubMode::WrongDim(n) => (200u16, "OK", vector_response(n)),
+        StubMode::WrongDim(n) => (200u16, "OK", vector_response(n, input_count)),
     };
     let resp = format!(
         "HTTP/1.1 {status} {status_text}\r\n\
@@ -131,32 +137,39 @@ async fn handle_request(mut stream: TcpStream, mode: StubMode) {
     let _ = stream.shutdown().await;
 }
 
-async fn drain_request(stream: &mut TcpStream) {
+/// Reads the full request and returns the body bytes so the stub can echo back
+/// one embedding per `input` element.
+async fn drain_request(stream: &mut TcpStream) -> Vec<u8> {
     let mut buf = [0u8; 4096];
     let mut accum: Vec<u8> = Vec::new();
     let header_end = loop {
         match stream.read(&mut buf).await {
-            Ok(0) => return,
+            Ok(0) => return Vec::new(),
             Ok(n) => {
                 accum.extend_from_slice(&buf[..n]);
                 if let Some(idx) = accum.windows(4).position(|w| w == b"\r\n\r\n") {
                     break idx;
                 }
             }
-            Err(_) => return,
+            Err(_) => return Vec::new(),
         }
     };
     let header_str = String::from_utf8_lossy(&accum[..header_end]).to_string();
     let cl = parse_content_length(&header_str).unwrap_or(0);
-    let body_so_far = accum.len().saturating_sub(header_end + 4);
-    let mut remaining = cl.saturating_sub(body_so_far);
+    let body_start = header_end + 4;
+    let mut body: Vec<u8> = accum[body_start..].to_vec();
+    let mut remaining = cl.saturating_sub(body.len());
     while remaining > 0 {
         match stream.read(&mut buf).await {
             Ok(0) => break,
-            Ok(n) => remaining = remaining.saturating_sub(n),
+            Ok(n) => {
+                body.extend_from_slice(&buf[..n]);
+                remaining = remaining.saturating_sub(n);
+            }
             Err(_) => break,
         }
     }
+    body
 }
 
 fn parse_content_length(headers: &str) -> Option<usize> {
@@ -171,9 +184,14 @@ fn parse_content_length(headers: &str) -> Option<usize> {
     None
 }
 
-fn vector_response(dim: usize) -> String {
-    let v: Vec<f32> = (0..dim).map(|i| (i as f32) * 0.001).collect();
-    json!({ "data": [{ "embedding": v }] }).to_string()
+fn vector_response(dim: usize, count: usize) -> String {
+    let data: Vec<_> = (0..count)
+        .map(|i| {
+            let v: Vec<f32> = (0..dim).map(|j| (j as f32) * 0.001).collect();
+            json!({ "embedding": v, "index": i })
+        })
+        .collect();
+    json!({ "data": data }).to_string()
 }
 
 // ===== Test fixture =====
