@@ -278,19 +278,26 @@ impl EmbeddingClient {
         }
         // The OpenAI contract returns each item with its input `index`; reorder
         // by it so vectors line up with chunks even if the service returns them
-        // out of order. A service that omits `index` deserializes every item to
-        // `0` (the serde default); in that case we trust array order, which is
-        // also the contract. When indices *are* present we require them to be a
-        // contiguous `0..len` permutation — anything else (gaps, duplicates,
-        // out-of-range) would silently misalign vectors, so fail fast instead.
-        let indices_omitted = parsed.data.iter().all(|d| d.index == 0);
-        if !indices_omitted {
+        // out of order. `index` is `Option<usize>`, so a service that omits the
+        // field gives `None` and is distinguishable from one that explicitly
+        // sends `0`. If every item omits `index` we trust array order (also the
+        // contract). If any item carries an index we require them all to and to
+        // form a contiguous `0..len` permutation — gaps, duplicates, mixed
+        // presence, or out-of-range values would silently misalign vectors, so
+        // fail fast instead.
+        let any_index = parsed.data.iter().any(|d| d.index.is_some());
+        if any_index {
+            if parsed.data.iter().any(|d| d.index.is_none()) {
+                return Err(EmbeddingError::ResponseShape(
+                    "response mixes items with and without `index`".to_string(),
+                ));
+            }
             parsed.data.sort_by_key(|d| d.index);
             for (pos, item) in parsed.data.iter().enumerate() {
-                if item.index != pos {
+                if item.index != Some(pos) {
                     return Err(EmbeddingError::ResponseShape(format!(
                         "response indices are not a contiguous 0..{} permutation \
-                         (position {pos} has index {})",
+                         (position {pos} has index {:?})",
                         texts.len(),
                         item.index
                     )));
@@ -465,10 +472,10 @@ struct ApiResponse {
 struct EmbeddingItem {
     embedding: Vec<f32>,
     /// Position of this vector's input in the request. Always present in the
-    /// OpenAI contract; defaulted so a service that omits it degrades to
-    /// array order rather than failing to parse.
-    #[serde(default)]
-    index: usize,
+    /// OpenAI contract; `Option` so a service that omits it deserializes to
+    /// `None` (distinct from an explicit `0`) and the client can tell "index
+    /// omitted" apart from "index present-but-wrong".
+    index: Option<usize>,
 }
 
 #[cfg(test)]
@@ -930,6 +937,33 @@ mod tests {
             .embed_many(&texts)
             .await
             .expect_err("noncontiguous indices");
+        assert!(
+            matches!(err, EmbeddingError::ResponseShape(_)),
+            "expected ResponseShape, got {err:?}"
+        );
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embed_many_rejects_explicit_all_zero_indices() {
+        // Every item explicitly carries `index: 0`. This is now distinguishable
+        // from an omitted index (Option::None) and must fail validation rather
+        // than be mistaken for "trust array order".
+        let stub = StubServer::spawn(vec![StubAction::Respond {
+            status: 200,
+            body: body_with_indices(4, &[0, 0]),
+        }])
+        .await;
+        let cfg = EmbeddingConfig {
+            batch_size: 4,
+            ..test_config(&stub.url)
+        };
+        let client = EmbeddingClient::new(&cfg).unwrap();
+        let texts: Vec<&str> = vec!["a", "b"];
+        let err = client
+            .embed_many(&texts)
+            .await
+            .expect_err("explicit duplicate index 0");
         assert!(
             matches!(err, EmbeddingError::ResponseShape(_)),
             "expected ResponseShape, got {err:?}"
