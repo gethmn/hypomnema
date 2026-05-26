@@ -53,7 +53,11 @@ impl std::fmt::Display for EmbeddingError {
         match self {
             Self::Transport(e) => write!(f, "embedding transport error: {e}"),
             Self::Status { code, body } => {
-                write!(f, "embedding service returned HTTP {code}: {body}")
+                write!(
+                    f,
+                    "embedding service returned HTTP {code}: {}",
+                    truncate_for_display(body)
+                )
             }
             Self::BodyParse(e) => write!(f, "embedding response body parse error: {e}"),
             Self::DimensionMismatch { expected, actual } => write!(
@@ -197,17 +201,30 @@ impl EmbeddingClient {
     pub async fn embed_many(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         let mut i = 0;
+        // `size` is local to this call. Shrink decisions stay local until a
+        // *multi-input* request actually succeeds at the reduced size — only
+        // then do we lower the shared, daemon-wide ceiling. This prevents a
+        // single pathological chunk (one input that fails at every batch size)
+        // from permanently disabling batching for all other files: it would
+        // shrink `size` to 1 here and hard-error, but the shared ceiling is
+        // never lowered without positive batch-size evidence. `fetch_min` only
+        // ever lowers the ceiling — once a server reveals a limit we stay
+        // conservative for the daemon's lifetime.
+        let mut size = self.max_batch.load(Ordering::Relaxed).max(1);
         while i < texts.len() {
-            let size = self.max_batch.load(Ordering::Relaxed).max(1);
             let end = (i + size).min(texts.len());
+            let span = end - i;
             match self.send_batch_with_retry(&texts[i..end]).await {
                 Ok(vecs) => {
+                    if span > 1 {
+                        self.max_batch.fetch_min(size, Ordering::Relaxed);
+                    }
                     out.extend(vecs);
                     i = end;
                 }
-                Err(e) if end - i > 1 && should_shrink(&e) => {
+                Err(e) if span > 1 && should_shrink(&e) => {
                     let new = (size / 2).max(1);
-                    self.max_batch.store(new, Ordering::Relaxed);
+                    size = new;
                     // Log only the structured status code, never the response
                     // body: it can be large and may echo input content.
                     let status_code = match &e {
@@ -215,7 +232,6 @@ impl EmbeddingClient {
                         _ => 0,
                     };
                     tracing::warn!(
-                        previous_batch_size = size,
                         new_batch_size = new,
                         status_code,
                         "embedding service rejected a batch request; shrinking client \
@@ -296,9 +312,9 @@ impl EmbeddingClient {
             for (pos, item) in parsed.data.iter().enumerate() {
                 if item.index != Some(pos) {
                     return Err(EmbeddingError::ResponseShape(format!(
-                        "response indices are not a contiguous 0..{} permutation \
-                         (position {pos} has index {:?})",
-                        texts.len(),
+                        "response indices are not a contiguous permutation of \
+                         0..={} (position {pos} has index {:?})",
+                        texts.len().saturating_sub(1),
                         item.index
                     )));
                 }
@@ -316,6 +332,23 @@ impl EmbeddingClient {
         }
         Ok(out)
     }
+}
+
+/// Cap an embedding-service response body when rendering it in an error
+/// message. Bodies can be large and some services echo part of the input in
+/// 4xx responses, so error `Display` (which flows into logs via `anyhow`
+/// chains) shows only a bounded prefix. The structured `body` field on
+/// [`EmbeddingError::Status`] remains available for explicit inspection.
+fn truncate_for_display(body: &str) -> std::borrow::Cow<'_, str> {
+    const MAX: usize = 256;
+    if body.len() <= MAX {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let mut end = MAX;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    std::borrow::Cow::Owned(format!("{}… ({} bytes total)", &body[..end], body.len()))
 }
 
 fn is_retryable(e: &EmbeddingError) -> bool {
@@ -841,6 +874,38 @@ mod tests {
             .expect("shrink then succeed");
         assert_eq!(out.len(), 4);
         assert_eq!(stub.count(), 3, "one rejected + two halved-span requests");
+        // A size-2 multi-input request succeeded, so the shared ceiling is
+        // lowered to the working size and persists for later files.
+        assert_eq!(client.max_batch.load(Ordering::Relaxed), 2);
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embed_many_single_input_rejection_does_not_lower_ceiling() {
+        // One input rejected (size 1, no shrink possible) is a hard error and
+        // must NOT lower the shared ceiling — a single bad chunk should not
+        // disable batching daemon-wide for every other file.
+        let stub = StubServer::spawn(vec![StubAction::Respond {
+            status: 413,
+            body: "input too long".into(),
+        }])
+        .await;
+        let cfg = EmbeddingConfig {
+            batch_size: 8,
+            ..test_config(&stub.url)
+        };
+        let client = EmbeddingClient::new(&cfg).unwrap();
+        let texts: Vec<&str> = vec!["a"];
+        let err = client
+            .embed_many(&texts)
+            .await
+            .expect_err("single-input rejection");
+        assert!(matches!(err, EmbeddingError::Status { code: 413, .. }));
+        assert_eq!(
+            client.max_batch.load(Ordering::Relaxed),
+            8,
+            "ceiling unchanged by a single-input rejection"
+        );
         stub.shutdown().await;
     }
 
@@ -996,6 +1061,18 @@ mod tests {
         assert_eq!(out[0][0], 1.0);
         assert_eq!(out[1][0], 2.0);
         stub.shutdown().await;
+    }
+
+    #[test]
+    fn truncate_for_display_bounds_long_bodies() {
+        let short = "small error";
+        assert_eq!(truncate_for_display(short), short);
+
+        let long = "x".repeat(1000);
+        let rendered = truncate_for_display(&long);
+        assert!(rendered.len() < long.len());
+        assert!(rendered.contains("1000 bytes total"));
+        assert!(rendered.starts_with("xxx"));
     }
 
     #[tokio::test]
