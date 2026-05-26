@@ -985,7 +985,7 @@ mod tests {
 
     #[tokio::test]
     async fn embed_many_rejects_noncontiguous_indices() {
-        // Indices {0, 2} for two inputs: not all-zero (so not the omitted case),
+        // Indices {0, 2} for two inputs: both present (so not the omitted case),
         // and not a 0..len permutation -> hard ResponseShape error.
         let stub = StubServer::spawn(vec![StubAction::Respond {
             status: 200,
@@ -1038,8 +1038,8 @@ mod tests {
 
     #[tokio::test]
     async fn embed_many_trusts_array_order_when_index_omitted() {
-        // A response that omits `index` deserializes all-zero; the client must
-        // fall back to array order rather than erroring on the "duplicate" 0s.
+        // A response that omits `index` deserializes every item to `None`; the
+        // client must fall back to array order rather than requiring indices.
         let body = serde_json::json!({
             "data": [
                 { "embedding": vec![1.0_f32, 0.0, 0.0, 0.0] },

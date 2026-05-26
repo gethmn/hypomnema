@@ -143,8 +143,10 @@ fn classify_embedding_error(e: EmbeddingError) -> SemanticSearchError {
                 ),
             }
         }
-        EmbeddingError::Status { code, body } => SemanticSearchError::Internal(anyhow::anyhow!(
-            "embedding service returned unexpected HTTP {code}: {body}"
+        // Report only the status code: the response body can be large and may
+        // echo request content, and this error is surfaced to API callers.
+        EmbeddingError::Status { code, .. } => SemanticSearchError::Internal(anyhow::anyhow!(
+            "embedding service returned unexpected HTTP {code}"
         )),
         EmbeddingError::BodyParse(err) => SemanticSearchError::Internal(anyhow::anyhow!(
             "embedding service response could not be parsed: {err}"
