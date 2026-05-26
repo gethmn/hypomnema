@@ -42,6 +42,10 @@ pub enum EmbeddingError {
         expected: usize,
         actual: usize,
     },
+    /// The batch response carried `index` values that are not a contiguous
+    /// `0..len` permutation of the inputs, so vectors cannot be reliably
+    /// aligned to the chunks we sent. Non-retryable contract violation.
+    ResponseShape(String),
 }
 
 impl std::fmt::Display for EmbeddingError {
@@ -60,6 +64,9 @@ impl std::fmt::Display for EmbeddingError {
                 f,
                 "embedding count mismatch: sent {expected} inputs, got {actual} vectors"
             ),
+            Self::ResponseShape(detail) => {
+                write!(f, "embedding response shape error: {detail}")
+            }
         }
     }
 }
@@ -187,7 +194,7 @@ impl EmbeddingClient {
     /// the cost is at most a few wasted requests once per daemon lifetime
     /// rather than per file. A rejection of a single-input request is a real
     /// error (e.g. a chunk exceeds the model's max input) and propagates.
-    pub async fn embed_many(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    pub async fn embed_many(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
         let mut i = 0;
         while i < texts.len() {
@@ -201,10 +208,16 @@ impl EmbeddingClient {
                 Err(e) if end - i > 1 && should_shrink(&e) => {
                     let new = (size / 2).max(1);
                     self.max_batch.store(new, Ordering::Relaxed);
+                    // Log only the structured status code, never the response
+                    // body: it can be large and may echo input content.
+                    let status_code = match &e {
+                        EmbeddingError::Status { code, .. } => *code,
+                        _ => 0,
+                    };
                     tracing::warn!(
                         previous_batch_size = size,
                         new_batch_size = new,
-                        status = %e,
+                        status_code,
                         "embedding service rejected a batch request; shrinking client \
                          batch size and retrying. Set `embedding.batch_size` at or below \
                          the service's limit to avoid this probe."
@@ -219,10 +232,7 @@ impl EmbeddingClient {
 
     /// One batch request wrapped in the same transport/5xx retry policy as
     /// [`EmbeddingClient::embed`].
-    async fn send_batch_with_retry(
-        &self,
-        texts: &[String],
-    ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    async fn send_batch_with_retry(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let max_attempts = self.max_retries.saturating_add(1);
         let mut attempt: u8 = 0;
         loop {
@@ -239,7 +249,7 @@ impl EmbeddingClient {
         }
     }
 
-    async fn send_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+    async fn send_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
         let body = serde_json::json!({
             "model": self.model,
             "input": texts,
@@ -266,9 +276,27 @@ impl EmbeddingClient {
                 actual: parsed.data.len(),
             });
         }
-        // The OpenAI contract returns each item with its input `index`; sort by
-        // it rather than trusting array order so vectors line up with chunks.
-        parsed.data.sort_by_key(|d| d.index);
+        // The OpenAI contract returns each item with its input `index`; reorder
+        // by it so vectors line up with chunks even if the service returns them
+        // out of order. A service that omits `index` deserializes every item to
+        // `0` (the serde default); in that case we trust array order, which is
+        // also the contract. When indices *are* present we require them to be a
+        // contiguous `0..len` permutation — anything else (gaps, duplicates,
+        // out-of-range) would silently misalign vectors, so fail fast instead.
+        let indices_omitted = parsed.data.iter().all(|d| d.index == 0);
+        if !indices_omitted {
+            parsed.data.sort_by_key(|d| d.index);
+            for (pos, item) in parsed.data.iter().enumerate() {
+                if item.index != pos {
+                    return Err(EmbeddingError::ResponseShape(format!(
+                        "response indices are not a contiguous 0..{} permutation \
+                         (position {pos} has index {})",
+                        texts.len(),
+                        item.index
+                    )));
+                }
+            }
+        }
         let mut out = Vec::with_capacity(parsed.data.len());
         for item in parsed.data {
             if item.embedding.len() != self.dimension as usize {
@@ -289,7 +317,8 @@ fn is_retryable(e: &EmbeddingError) -> bool {
         EmbeddingError::Status { code, .. } => *code >= 500,
         EmbeddingError::BodyParse(_)
         | EmbeddingError::DimensionMismatch { .. }
-        | EmbeddingError::CountMismatch { .. } => false,
+        | EmbeddingError::CountMismatch { .. }
+        | EmbeddingError::ResponseShape(_) => false,
     }
 }
 
@@ -335,10 +364,10 @@ pub trait Embedder: Send + Sync + 'static {
     /// The default implementation embeds sequentially via [`Self::embed_text`],
     /// so test doubles get a working batch path for free. [`EmbeddingClient`]
     /// overrides it to send real multi-input requests with adaptive shrink.
-    fn embed_batch<'a>(&'a self, texts: &'a [String]) -> BatchFuture<'a> {
+    fn embed_batch<'a>(&'a self, texts: &'a [&'a str]) -> BatchFuture<'a> {
         Box::pin(async move {
             let mut out = Vec::with_capacity(texts.len());
-            for text in texts {
+            for &text in texts {
                 out.push(self.embed_text(text).await?);
             }
             Ok(out)
@@ -351,7 +380,7 @@ impl Embedder for EmbeddingClient {
         Box::pin(self.embed(text))
     }
 
-    fn embed_batch<'a>(&'a self, texts: &'a [String]) -> BatchFuture<'a> {
+    fn embed_batch<'a>(&'a self, texts: &'a [&'a str]) -> BatchFuture<'a> {
         Box::pin(self.embed_many(texts))
     }
 }
@@ -466,6 +495,21 @@ mod tests {
             .map(|i| {
                 let vec: Vec<f32> = (0..dim).map(|j| (j as f32) * 0.001).collect();
                 serde_json::json!({ "embedding": vec, "index": i })
+            })
+            .collect();
+        serde_json::json!({ "data": data }).to_string()
+    }
+
+    /// One item per entry in `indices`, in that array order, each carrying the
+    /// given `index` and an embedding whose first element equals that index so
+    /// a test can assert how the client reordered them.
+    fn body_with_indices(dim: usize, indices: &[usize]) -> String {
+        let data: Vec<_> = indices
+            .iter()
+            .map(|&idx| {
+                let mut v = vec![0.0_f32; dim];
+                v[0] = idx as f32;
+                serde_json::json!({ "embedding": v, "index": idx })
             })
             .collect();
         serde_json::json!({ "data": data }).to_string()
@@ -724,7 +768,7 @@ mod tests {
             ..test_config(&stub.url)
         };
         let client = EmbeddingClient::new(&cfg).unwrap();
-        let texts: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let texts: Vec<&str> = vec!["a", "b", "c"];
         let out = client.embed_many(&texts).await.expect("batch succeeds");
         assert_eq!(out.len(), 3);
         assert_eq!(stub.count(), 1, "three inputs fit one request at ceiling 4");
@@ -749,7 +793,7 @@ mod tests {
             ..test_config(&stub.url)
         };
         let client = EmbeddingClient::new(&cfg).unwrap();
-        let texts: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let texts: Vec<&str> = vec!["a", "b", "c"];
         let out = client
             .embed_many(&texts)
             .await
@@ -783,7 +827,7 @@ mod tests {
             ..test_config(&stub.url)
         };
         let client = EmbeddingClient::new(&cfg).unwrap();
-        let texts: Vec<String> = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let texts: Vec<&str> = vec!["a", "b", "c", "d"];
         let out = client
             .embed_many(&texts)
             .await
@@ -806,7 +850,7 @@ mod tests {
             ..test_config(&stub.url)
         };
         let client = EmbeddingClient::new(&cfg).unwrap();
-        let texts: Vec<String> = vec!["a".into()];
+        let texts: Vec<&str> = vec!["a"];
         let err = client
             .embed_many(&texts)
             .await
@@ -832,7 +876,7 @@ mod tests {
             ..test_config(&stub.url)
         };
         let client = EmbeddingClient::new(&cfg).unwrap();
-        let texts: Vec<String> = vec!["a".into(), "b".into()];
+        let texts: Vec<&str> = vec!["a", "b"];
         let err = client.embed_many(&texts).await.expect_err("count mismatch");
         match err {
             EmbeddingError::CountMismatch { expected, actual } => {
@@ -841,6 +885,82 @@ mod tests {
             }
             other => panic!("expected CountMismatch; got {other:?}"),
         }
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embed_many_reorders_by_response_index() {
+        // Service returns items out of order; the client must realign by `index`.
+        let stub = StubServer::spawn(vec![StubAction::Respond {
+            status: 200,
+            body: body_with_indices(4, &[2, 0, 1]),
+        }])
+        .await;
+        let cfg = EmbeddingConfig {
+            batch_size: 4,
+            ..test_config(&stub.url)
+        };
+        let client = EmbeddingClient::new(&cfg).unwrap();
+        let texts: Vec<&str> = vec!["a", "b", "c"];
+        let out = client.embed_many(&texts).await.expect("reordered batch");
+        // body_with_indices encodes the index in element 0, so a correct
+        // realignment yields ascending first elements.
+        assert_eq!(out[0][0], 0.0);
+        assert_eq!(out[1][0], 1.0);
+        assert_eq!(out[2][0], 2.0);
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embed_many_rejects_noncontiguous_indices() {
+        // Indices {0, 2} for two inputs: not all-zero (so not the omitted case),
+        // and not a 0..len permutation -> hard ResponseShape error.
+        let stub = StubServer::spawn(vec![StubAction::Respond {
+            status: 200,
+            body: body_with_indices(4, &[0, 2]),
+        }])
+        .await;
+        let cfg = EmbeddingConfig {
+            batch_size: 4,
+            ..test_config(&stub.url)
+        };
+        let client = EmbeddingClient::new(&cfg).unwrap();
+        let texts: Vec<&str> = vec!["a", "b"];
+        let err = client
+            .embed_many(&texts)
+            .await
+            .expect_err("noncontiguous indices");
+        assert!(
+            matches!(err, EmbeddingError::ResponseShape(_)),
+            "expected ResponseShape, got {err:?}"
+        );
+        stub.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn embed_many_trusts_array_order_when_index_omitted() {
+        // A response that omits `index` deserializes all-zero; the client must
+        // fall back to array order rather than erroring on the "duplicate" 0s.
+        let body = serde_json::json!({
+            "data": [
+                { "embedding": vec![1.0_f32, 0.0, 0.0, 0.0] },
+                { "embedding": vec![2.0_f32, 0.0, 0.0, 0.0] },
+            ]
+        })
+        .to_string();
+        let stub = StubServer::spawn(vec![StubAction::Respond { status: 200, body }]).await;
+        let cfg = EmbeddingConfig {
+            batch_size: 4,
+            ..test_config(&stub.url)
+        };
+        let client = EmbeddingClient::new(&cfg).unwrap();
+        let texts: Vec<&str> = vec!["a", "b"];
+        let out = client
+            .embed_many(&texts)
+            .await
+            .expect("array order trusted");
+        assert_eq!(out[0][0], 1.0);
+        assert_eq!(out[1][0], 2.0);
         stub.shutdown().await;
     }
 

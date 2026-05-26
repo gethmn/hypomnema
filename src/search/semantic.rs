@@ -152,6 +152,9 @@ fn classify_embedding_error(e: EmbeddingError) -> SemanticSearchError {
         EmbeddingError::CountMismatch { expected, actual } => SemanticSearchError::Internal(
             anyhow::anyhow!("embedding service returned {actual} vectors for {expected} inputs"),
         ),
+        EmbeddingError::ResponseShape(detail) => SemanticSearchError::Internal(anyhow::anyhow!(
+            "embedding service returned a malformed batch response: {detail}"
+        )),
     }
 }
 
