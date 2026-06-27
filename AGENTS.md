@@ -119,3 +119,12 @@ Ask: scope changes (adding a dependency, splitting a module, introducing an abst
 ## Related design docs
 
 - `docs/hypomnema-handoff.md` — consolidated orientation and scope; lists the historical `iris-vault-bridge-*` documents that live in the Iris project as design groundwork.
+
+## Linear
+
+This project is tracked in Linear as **Hypomnema** (team `beausimensen` / `BDS`).
+Associate any issues, status updates, or work logged from this repo with that
+project.
+
+- Project ID: `b4b3bcf5-ceae-4749-83f5-5614384be1cf`
+- URL: https://linear.app/beausimensen/project/hypomnema-e1cc17a80261
